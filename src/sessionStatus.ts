@@ -19,6 +19,25 @@ export function ensureSessionStatusDir(): void {
 }
 
 /**
+ * Removes a session's status file directly — for when Session Deck itself
+ * notices the underlying process is gone (its terminal closed) without Claude
+ * Code necessarily getting a chance to fire its own `SessionEnd` hook first
+ * (e.g. the terminal was force-closed while a task was running: VS Code kills
+ * the process tree outright, no graceful shutdown). Mirrors exactly what
+ * `reportStatus.ts`'s `SessionEnd` handler does, so a status dot never gets
+ * stuck showing "running" forever for a process that's actually dead.
+ * Idempotent — a no-op if there was nothing to clear (e.g. it already exited
+ * gracefully and the hook beat this to it).
+ */
+export function clearSessionStatus(sessionId: string): void {
+  try {
+    fs.rmSync(path.join(getSessionStatusDir(), `${sessionId}.json`), { force: true });
+  } catch {
+    // Best-effort.
+  }
+}
+
+/**
  * `undefined` means "no status" — either tracking isn't enabled, this session
  * predates it, or `reportStatus.ts` just cleared the file on `SessionEnd`
  * (the `claude` process actually exited, so there's no live state left to show).

@@ -3,9 +3,9 @@ import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { getClaudeProjectsDir, readSessionMeta } from './claudeStorage';
-import { normalizeFsPath } from './pathUtils';
+import { getClaudeProjectsDir, listProjectDirNames, listSessionFiles } from './claudeStorage';
 import { SessionNode } from './sessionProvider';
+import { clearSessionStatus } from './sessionStatus';
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -13,8 +13,20 @@ const execAsync = promisify(exec);
 /** Time to wait for shell integration before falling back to sendText. */
 const SHELL_INTEGRATION_TIMEOUT_MS = 500;
 
-/** How long to wait for a brand-new session's transcript file to appear before giving up on correlating it to its terminal. */
-const NEW_SESSION_DISCOVERY_TIMEOUT_MS = 15_000;
+/**
+ * How long to wait for a brand-new session's transcript file to appear
+ * before giving up on correlating it to its terminal. Generous on purpose:
+ * shell integration never activates in some environments (a slow-loading
+ * shell profile, or shell integration disabled/unsupported), which means
+ * `claude` is only started via a blind `sendText` 500ms after the terminal
+ * is created — if the shell itself is still initializing at that point, the
+ * actual `claude` process (and thus its `.jsonl` file) can start noticeably
+ * later than a plain terminal launch would suggest.
+ */
+const NEW_SESSION_DISCOVERY_TIMEOUT_MS = 60_000;
+
+/** How often to re-scan `~/.claude/projects` while waiting for a new session file — see `correlateNewSession`. */
+const NEW_SESSION_POLL_INTERVAL_MS = 500;
 
 export interface OpenSessionTerminalOptions {
   readonly dangerouslySkipPermissions?: boolean;
@@ -42,6 +54,8 @@ export interface OpenSessionTerminalOptions {
  */
 export class ClaudeTerminalService implements vscode.Disposable {
   private readonly sessionTerminals = new Map<string, vscode.Terminal>();
+  /** Session ids already claimed by a pending `correlateNewSession` call, so two "New Session" clicks in quick succession can't both grab the same newly-created file. */
+  private readonly claimedByCorrelation = new Set<string>();
   private readonly closeListener: vscode.Disposable;
 
   public constructor(private readonly outputChannel: vscode.OutputChannel) {
@@ -49,6 +63,14 @@ export class ClaudeTerminalService implements vscode.Disposable {
       for (const [sessionId, tracked] of this.sessionTerminals) {
         if (tracked === terminal) {
           this.sessionTerminals.delete(sessionId);
+          // Closing the terminal kills the process tree outright (no graceful
+          // shutdown on Windows without WSL/tmux), so Claude Code may never get
+          // to fire its own SessionEnd hook — clear the status ourselves so the
+          // dot doesn't get stuck showing "running"/"waiting" forever for a
+          // session that's actually dead. Idempotent if it already exited
+          // cleanly and the hook beat us to it.
+          clearSessionStatus(sessionId);
+          this.outputChannel.appendLine(`[terminal] Terminal for session ${sessionId} closed; status cleared.`);
           break;
         }
       }
@@ -62,9 +84,16 @@ export class ClaudeTerminalService implements vscode.Disposable {
   /** The default action: reuses (just `.show()`s) this session's own terminal if it's still alive, otherwise opens a new one. */
   public async openSession(session: SessionNode, options: OpenSessionTerminalOptions = {}): Promise<void> {
     const existing = this.sessionTerminals.get(session.sessionId);
-    if (existing && existing.exitStatus === undefined) {
-      existing.show();
-      return;
+    if (existing) {
+      this.outputChannel.appendLine(
+        `[terminal] openSession(${session.sessionId}): tracked terminal found, exitStatus=${JSON.stringify(existing.exitStatus)}.`
+      );
+      if (existing.exitStatus === undefined) {
+        existing.show();
+        return;
+      }
+    } else {
+      this.outputChannel.appendLine(`[terminal] openSession(${session.sessionId}): no tracked terminal, opening a new one.`);
     }
     await this.launch(session, options);
   }
@@ -90,14 +119,11 @@ export class ClaudeTerminalService implements vscode.Disposable {
    * There's no CLI flag to pre-assign a session id (checked: `claude --help`
    * has no `--session-id`; `--name` is a separate alias on top of the
    * auto-generated id, not a replacement for it, so it doesn't help here
-   * either), so the real id can only be learned after the fact. Claude Code
-   * writes its startup metadata records to the new transcript file almost
-   * immediately — before you've typed anything — so `correlateNewSession`
-   * watches `~/.claude/projects` for that file to appear and registers this
-   * terminal against its real session id the moment it does. Once that
-   * happens, clicking the session's tree entry (once it shows up) reuses this
-   * same terminal via `openSession`, exactly like any other tracked session,
-   * instead of opening a redundant second one.
+   * either), so the real id can only be learned after the fact via
+   * `correlateNewSession`. Once that resolves, clicking the session's tree
+   * entry (once it shows up) reuses this same terminal via `openSession`,
+   * exactly like any other tracked session, instead of opening a redundant
+   * second one.
    */
   public async startNewSession(cwd: string, projectName: string, options: OpenSessionTerminalOptions = {}): Promise<void> {
     const dangerouslySkipPermissions = options.dangerouslySkipPermissions === true;
@@ -114,7 +140,7 @@ export class ClaudeTerminalService implements vscode.Disposable {
       location: { viewColumn: vscode.ViewColumn.Active },
     });
     terminal.show(true);
-    void this.correlateNewSession(cwd, terminal);
+    void this.correlateNewSession(terminal, projectName);
 
     const command = buildClaudeNewSessionCommand(dangerouslySkipPermissions);
     this.outputChannel.appendLine(
@@ -128,58 +154,121 @@ export class ClaudeTerminalService implements vscode.Disposable {
   }
 
   /**
-   * Watches `~/.claude/projects` for a new `.jsonl` file whose recorded `cwd`
-   * matches, then registers `terminal` under that file's session id (the same
-   * map `openSession` checks). Fire-and-forget from the caller's perspective —
-   * gives up silently after {@link NEW_SESSION_DISCOVERY_TIMEOUT_MS}, in which
-   * case a later click on that session just falls back to today's behavior
-   * (a second terminal), no worse than before this existed.
+   * Polls `~/.claude/projects` for the next brand-new session file to appear,
+   * then registers `terminal` under that file's session id (the same map
+   * `openSession` checks).
+   *
+   * Deliberately does **not** wait for that file to record a `cwd` and match
+   * it against the cwd this terminal started at: a session's `cwd` is only
+   * written on its first actual user turn (confirmed against real transcript
+   * data), not on the startup metadata records Claude Code writes
+   * immediately — so if you click the session's tree entry before typing
+   * anything into the fresh terminal, that cwd-matching approach would still
+   * be waiting and never correlate in time, which was exactly the bug this
+   * replaced.
+   *
+   * This used to watch for `fs.watch`'s `rename` event instead of polling —
+   * fires exactly once, specifically when a path is created (confirmed
+   * empirically: appending to an existing file fires `change`, not
+   * `rename`), so in principle a lighter-weight signal than polling. In
+   * practice, on a real `~/.claude/projects` tree (dozens of projects, one of
+   * them potentially *this very Claude Code conversation* being actively
+   * appended to while the user works), that recursive watch reliably dropped
+   * the new file's `rename` event outright — confirmed via output-channel
+   * logging showing only `change` events for an unrelated, already-existing
+   * file, then a full timeout, twice in a row, even though the new session's
+   * file did exist by the time the tree was manually refreshed. This is a
+   * known reliability limitation of Windows' `ReadDirectoryChangesW`-backed
+   * recursive watching under a large/busy tree (its notification buffer can
+   * silently overflow), made worse here by `SessionTreeProvider.watch()`
+   * already running its own independent recursive watcher on the same
+   * directory. Polling sidesteps OS notification delivery entirely: each tick
+   * just re-reads the actual directory structure directly.
+   *
+   * `claimedByCorrelation` guards against two "New Session" clicks in quick
+   * succession both grabbing the same file were one to appear while both
+   * pollers are still active.
+   *
+   * Fire-and-forget from the caller's perspective — gives up silently after
+   * {@link NEW_SESSION_DISCOVERY_TIMEOUT_MS}, in which case a later click on
+   * that session just falls back to a second terminal, no worse than before
+   * this existed.
    */
-  private correlateNewSession(cwd: string, terminal: vscode.Terminal): Promise<void> {
+  private correlateNewSession(terminal: vscode.Terminal, projectName: string): Promise<void> {
     const root = getClaudeProjectsDir();
     if (!fs.existsSync(root)) {
+      this.outputChannel.appendLine(`[terminal] correlateNewSession: ${root} doesn't exist, cannot poll for the new session.`);
       return Promise.resolve();
     }
 
+    const before = snapshotSessionFilePaths(root);
+
     return new Promise<void>((resolve) => {
       let settled = false;
-      const finish = () => {
+      const finish = (correlated: boolean) => {
         if (settled) {
           return;
         }
         settled = true;
+        clearInterval(interval);
         clearTimeout(timeout);
-        watcher.close();
+        if (!correlated) {
+          this.outputChannel.appendLine(
+            `[terminal] correlateNewSession: gave up after ${NEW_SESSION_DISCOVERY_TIMEOUT_MS}ms without seeing a new session file.`
+          );
+        }
         resolve();
       };
 
-      let watcher: fs.FSWatcher;
-      try {
-        watcher = fs.watch(root, { recursive: true }, (_eventType, filename) => {
-          if (settled || !filename || !filename.toString().endsWith('.jsonl')) {
-            return;
+      const poll = () => {
+        if (settled) {
+          return;
+        }
+        const current = snapshotSessionFilePaths(root);
+        for (const filePath of current) {
+          if (before.has(filePath)) {
+            continue;
           }
-          const filePath = path.join(root, filename.toString());
-          readSessionMeta(filePath)
-            .then((meta) => {
-              if (settled || !meta.cwd || normalizeFsPath(meta.cwd) !== normalizeFsPath(cwd)) {
-                return;
-              }
-              const sessionId = path.basename(filePath, '.jsonl');
-              this.sessionTerminals.set(sessionId, terminal);
-              this.outputChannel.appendLine(`[terminal] New session ${sessionId} correlated with its terminal.`);
-              finish();
-            })
-            .catch(() => {
-              // A file mid-write when we stat it isn't necessarily ours; the next change event will retry.
-            });
-        });
-      } catch {
-        return resolve();
-      }
+          const sessionId = path.basename(filePath, '.jsonl');
+          if (this.claimedByCorrelation.has(sessionId)) {
+            continue;
+          }
+          this.claimedByCorrelation.add(sessionId);
+          this.sessionTerminals.set(sessionId, terminal);
+          this.outputChannel.appendLine(`[terminal] New session ${sessionId} correlated with its terminal.`);
+          this.renameIfStillActive(terminal, projectName);
+          finish(true);
+          return;
+        }
+      };
 
-      const timeout = setTimeout(finish, NEW_SESSION_DISCOVERY_TIMEOUT_MS);
+      const interval = setInterval(poll, NEW_SESSION_POLL_INTERVAL_MS);
+      const timeout = setTimeout(() => finish(false), NEW_SESSION_DISCOVERY_TIMEOUT_MS);
     });
+  }
+
+  /**
+   * Drops the "New: " prefix from the tab name once a session is actually
+   * correlated, so it stops looking like a not-yet-real session. There's no
+   * API to rename a `vscode.Terminal` directly — the only way is the
+   * `workbench.action.terminal.renameWithArg` command, which also switches
+   * the *visible* terminal tab to whichever one it renames (a `show()` side
+   * effect that `preserveFocus` doesn't prevent — it only affects keyboard
+   * focus, not which tab is displayed). Correlation can take several seconds
+   * (a slow-starting shell profile has been observed pushing it past 10s), so
+   * by the time it resolves the user may well have switched to a different
+   * tab; forcibly yanking that back just to fix a label would be a worse
+   * surprise than leaving the stale name. Only renames when nothing would
+   * visibly move.
+   */
+  private renameIfStillActive(terminal: vscode.Terminal, projectName: string): void {
+    if (vscode.window.activeTerminal !== terminal) {
+      return;
+    }
+    vscode.commands.executeCommand('workbench.action.terminal.renameWithArg', { name: truncate(projectName, 35) }).then(
+      undefined,
+      (error) => this.outputChannel.appendLine(`[terminal] renameIfStillActive: rename command failed: ${String(error)}`)
+    );
   }
 
   private async launch(session: SessionNode, options: OpenSessionTerminalOptions): Promise<void> {
@@ -265,6 +354,17 @@ export function buildClaudeResumeCommand(sessionId: string, dangerouslySkipPermi
 
 export function buildClaudeNewSessionCommand(dangerouslySkipPermissions: boolean): string {
   return dangerouslySkipPermissions ? 'claude --dangerously-skip-permissions' : 'claude';
+}
+
+/** Every `.jsonl` session file path currently under `root`, for `correlateNewSession`'s before/after diff. */
+function snapshotSessionFilePaths(root: string): Set<string> {
+  const result = new Set<string>();
+  for (const dirName of listProjectDirNames()) {
+    for (const file of listSessionFiles(dirName)) {
+      result.add(path.join(root, dirName, file));
+    }
+  }
+  return result;
 }
 
 function shellQuote(value: string): string {
