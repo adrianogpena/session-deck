@@ -10,7 +10,7 @@ import {
 } from '../discovery/claudeStorage';
 import { CopilotSessionRow, getCopilotHomeDir, listCopilotSessions } from '../discovery/copilotStorage';
 import { resolveProjectRoot } from '../discovery/gitProject';
-import { normalizeFsPath } from '../discovery/pathUtils';
+import { normalizeFsPath, isInside } from '../discovery/pathUtils';
 import { mapWithConcurrency } from '../concurrency';
 import { ensureSessionStatusDir, getSessionStatusDir, readEffectiveSessionStatus, SessionStatusRecord } from '../status/sessionStatus';
 import { sessionStatusUri } from '../status/sessionStatusDecorationProvider';
@@ -331,10 +331,21 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
     return groups;
   }
 
-  /** Every discovered project with a default display name, for the "Add Project" picker and to seed a fresh `session-deck.json`. */
+  /**
+   * Every discovered project with a default display name, for the "Add Project" picker and to seed a fresh `session-deck.json`.
+   *
+   * `SESSION_DECK_DISCOVERY_ROOT`, if set, narrows this to projects under that one root — a dev-only
+   * escape hatch (never a real setting, undocumented outside this comment) for demoing/screenshotting
+   * the picker without every real project on the machine showing up alongside a couple of fixture
+   * ones. Deliberately scoped to just this method: `getProjectGroups()` (what the tree actually
+   * renders) reads `discoverGroups()` directly and is untouched, so real, already-configured sessions
+   * keep showing normally regardless of this variable.
+   */
   async listKnownProjects(): Promise<{ rootPath: string; displayName: string }[]> {
     const groups = await this.discoverGroups();
+    const discoveryRoot = process.env.SESSION_DECK_DISCOVERY_ROOT;
     return [...groups.values()]
+      .filter((g) => !discoveryRoot || isInside(discoveryRoot, g.canonicalRoot))
       .map((g) => ({ rootPath: g.canonicalRoot, displayName: path.basename(g.canonicalRoot) || g.canonicalRoot }))
       .sort((a, b) => a.displayName.localeCompare(b.displayName));
   }

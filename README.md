@@ -18,6 +18,12 @@ terminal, running the real CLI, with live status at a glance.
 <p align="center">
   <img src="resources/Overview-status-example.png" alt="The Session Deck tree in the Activity Bar, showing Claude and Copilot sessions grouped by project with live status dots" width="420">
 </p>
+<p align="center"><em>The Session Deck tree in the Activity Bar — Claude and Copilot sessions grouped by project, with live status dots.</em></p>
+
+<p align="center">
+  <img src="resources/Open-sessions-status-example.png" alt="The Open Sessions panel in the Explorer sidebar, listing currently open sessions with live status dots" width="420">
+</p>
+<p align="center"><em>The "Open Sessions" panel in the built-in Explorer sidebar — a flat, cross-project list of your currently open sessions.</em></p>
 
 ## Features
 
@@ -28,7 +34,8 @@ terminal, running the real CLI, with live status at a glance.
 - **Resume in a real terminal** — the actual `claude`/`copilot` CLI, not an embedded chat panel.
   One terminal per session, reused when you click it again.
 - **Live status, zero setup** — running / waiting / done / error, for both agents, with nothing to
-  enable or configure.
+  enable or configure. Done and error are one-time notifications: the dot clears as soon as you
+  select the session, the same way a notification badge clears once you've seen it.
 - **Desktop notifications** the moment a session needs your input.
 - **Fuzzy search** across every session's full content, ranked by match quality.
 - **Fork a session** (Claude Code) — branch a new session off an existing one's full history
@@ -44,13 +51,6 @@ terminal, running the real CLI, with live status at a glance.
   with live status, right in the built-in Explorer sidebar.
 - Works natively on Windows, macOS, and Linux — no WSL, no tmux.
 
-<p align="center">
-  <img src="resources/Open-sessions-status-example.png" alt="The Open Sessions panel in the Explorer sidebar, listing currently open sessions with live status dots" width="420">
-</p>
-
-> 📷 **Placeholder for image** — the Search Sessions QuickPick open, mid-query, showing ranked
-> fuzzy-matched results with a status-prefix filter (e.g. `!` for running) in the placeholder text.
-
 ## Requirements
 
 - [Claude Code CLI](https://code.claude.com) and/or [GitHub Copilot CLI](https://github.com/github/copilot-cli), installed and on your `PATH`. Session Deck launches the real CLI — it doesn't reimplement either one.
@@ -60,12 +60,14 @@ terminal, running the real CLI, with live status at a glance.
 
 1. Open a project folder (or a multi-root workspace) in VS Code.
 2. Open the **Session Deck** icon in the Activity Bar.
-3. Click **+ Add Project** and pick a project — either one Session Deck already found under
-   `~/.claude/projects`, or any folder you browse to.
+3. Click **+ Add Project** and pick a project — either one Session Deck already found from your
+   Claude Code or Copilot CLI session history, or any folder you browse to.
 4. Click any session to resume it in a terminal, or hover a project for **+ New Session**.
 
-> 📷 **Placeholder for image** — the "Add Project" QuickPick, showing a list of discovered
-> projects plus the "Add a project folder not listed here…" entry.
+<p align="center">
+  <img src="resources/Add-project-example.png" alt="The Add Project QuickPick, listing discovered projects plus an option to browse to a folder not listed" width="840">
+</p>
+<p align="center"><em>The "Add Project" QuickPick — pick from projects Session Deck already found, or browse to any folder.</em></p>
 
 ## Configuration
 
@@ -102,8 +104,10 @@ union of all of them.
 |---|---|---|
 | `sessionDeck.confirmDangerousSkipPermissions` | `true` | Show a confirmation dialog before resuming or starting a session with elevated (skip-permissions) mode. |
 
-> 📷 **Placeholder for image** — a session row's live status dot and right-click context menu
-> (View Transcript, Rename, Archive, Fork Session, Copy Last Response, Copy Session Info).
+<p align="center">
+  <img src="resources/Context-menu-example.png" alt="A session row's right-click context menu, with View Transcript, Rename, Archive, Copy Last Response, Copy Session Info, and Fork Session" width="840">
+</p>
+<p align="center"><em>A session row's right-click context menu — the full set of session actions.</em></p>
 
 ## Known Limitations
 

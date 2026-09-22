@@ -11,6 +11,18 @@
       ],
       "outFiles": ["${workspaceFolder}/out/**/*.js"],
       "preLaunchTask": "${defaultBuildTask}"
+    },
+    {
+      "name": "Run Session Deck (Add Project: demo projects only)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "X:\\demo-projects\\acme-storefront"
+      ],
+      "env": { "SESSION_DECK_DISCOVERY_ROOT": "X:\\demo-projects" },
+      "outFiles": ["${workspaceFolder}/out/**/*.js"],
+      "preLaunchTask": "${defaultBuildTask}"
     }
   ]
 }

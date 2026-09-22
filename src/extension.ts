@@ -457,9 +457,9 @@ async function pickTargetWorkspaceFolder(promptContext: string): Promise<vscode.
 
 /**
  * Lets the user build up this workspace's `.vscode/session-deck.json` list:
- * pick from every project Session Deck has discovered under `~/.claude/projects`,
- * or browse to a folder that isn't in that list yet (e.g. a project not yet used
- * with Claude Code).
+ * pick from every project Session Deck has discovered from Claude Code's or
+ * Copilot CLI's session history, or browse to a folder that isn't in that list
+ * yet (e.g. a project with no sessions from either agent yet).
  */
 async function addProject(tree: SessionTreeProvider): Promise<void> {
   if (!vscode.workspace.workspaceFolders?.length) {
@@ -477,7 +477,7 @@ async function addProject(tree: SessionTreeProvider): Promise<void> {
   ];
 
   const picked = await vscode.window.showQuickPick(items, {
-    placeHolder: 'Select a Claude Code project to show in this workspace',
+    placeHolder: 'Select a project to show in this workspace',
   });
   if (!picked) {
     return;
