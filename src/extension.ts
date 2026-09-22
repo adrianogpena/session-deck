@@ -73,6 +73,10 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('sessionDeck.search', () => searchSessions(treeProvider, terminalService)),
     vscode.commands.registerCommand('sessionDeck.addProject', () => addProject(treeProvider)),
     vscode.commands.registerCommand('sessionDeck.editProjectList', () => editProjectList()),
+    vscode.commands.registerCommand('sessionDeck.newSession', (node: ProjectGroupNode) => newSession(node, terminalService)),
+    vscode.commands.registerCommand('sessionDeck.newSessionDangerously', (node: ProjectGroupNode) =>
+      newSessionDangerously(node, terminalService)
+    ),
     vscode.commands.registerCommand('sessionDeck.renameProject', (node: ProjectGroupNode) =>
       renameProject(node, treeProvider)
     ),
@@ -311,6 +315,33 @@ async function editProjectList(): Promise<void> {
     return;
   }
   await vscode.window.showTextDocument(vscode.Uri.file(configPath));
+}
+
+/** Starts a brand-new Claude Code session rooted at the project's own root path — not any particular worktree/subfolder member. */
+async function newSession(node: ProjectGroupNode, terminalService: ClaudeTerminalService): Promise<void> {
+  if (!node) {
+    return;
+  }
+  await terminalService.startNewSession(node.rootPath, node.displayName);
+}
+
+/** Same reasoning as `openSessionDangerously`: always a fresh terminal, gated behind an explicit confirmation. */
+async function newSessionDangerously(node: ProjectGroupNode, terminalService: ClaudeTerminalService): Promise<void> {
+  if (!node) {
+    return;
+  }
+  const confirm = await vscode.window.showWarningMessage(
+    `Start a new session in "${node.displayName}" with --dangerously-skip-permissions?`,
+    {
+      modal: true,
+      detail: 'Claude will not ask for approval before running tools in this session. Only do this if you trust what it will be doing.',
+    },
+    'Start'
+  );
+  if (confirm !== 'Start') {
+    return;
+  }
+  await terminalService.startNewSession(node.rootPath, node.displayName, { dangerouslySkipPermissions: true });
 }
 
 /** A project only ever appears in the tree because it's on this workspace's list, so renaming always writes its `name` field there. */

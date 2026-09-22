@@ -1,6 +1,10 @@
 import { execFile, exec } from 'child_process';
 import { promisify } from 'util';
+import * as fs from 'fs';
+import * as path from 'path';
 import * as vscode from 'vscode';
+import { getClaudeProjectsDir, readSessionMeta } from './claudeStorage';
+import { normalizeFsPath } from './pathUtils';
 import { SessionNode } from './sessionProvider';
 
 const execFileAsync = promisify(execFile);
@@ -8,6 +12,9 @@ const execAsync = promisify(exec);
 
 /** Time to wait for shell integration before falling back to sendText. */
 const SHELL_INTEGRATION_TIMEOUT_MS = 500;
+
+/** How long to wait for a brand-new session's transcript file to appear before giving up on correlating it to its terminal. */
+const NEW_SESSION_DISCOVERY_TIMEOUT_MS = 15_000;
 
 export interface OpenSessionTerminalOptions {
   readonly dangerouslySkipPermissions?: boolean;
@@ -73,6 +80,106 @@ export class ClaudeTerminalService implements vscode.Disposable {
    */
   public async openSessionInNewTerminal(session: SessionNode, options: OpenSessionTerminalOptions = {}): Promise<void> {
     await this.launch(session, options);
+  }
+
+  /**
+   * Starts a brand-new Claude Code session (plain `claude`, no `--resume`)
+   * rooted at `cwd` — always a fresh terminal, since there's no existing
+   * session id to reuse by yet.
+   *
+   * There's no CLI flag to pre-assign a session id (checked: `claude --help`
+   * has no `--session-id`; `--name` is a separate alias on top of the
+   * auto-generated id, not a replacement for it, so it doesn't help here
+   * either), so the real id can only be learned after the fact. Claude Code
+   * writes its startup metadata records to the new transcript file almost
+   * immediately — before you've typed anything — so `correlateNewSession`
+   * watches `~/.claude/projects` for that file to appear and registers this
+   * terminal against its real session id the moment it does. Once that
+   * happens, clicking the session's tree entry (once it shows up) reuses this
+   * same terminal via `openSession`, exactly like any other tracked session,
+   * instead of opening a redundant second one.
+   */
+  public async startNewSession(cwd: string, projectName: string, options: OpenSessionTerminalOptions = {}): Promise<void> {
+    const dangerouslySkipPermissions = options.dangerouslySkipPermissions === true;
+
+    const hasClaude = await this.hasClaudeBinary();
+    if (!hasClaude) {
+      this.reportClaudeNotFound();
+      return;
+    }
+
+    const terminal = vscode.window.createTerminal({
+      name: truncate(`New: ${projectName}`, 35),
+      cwd,
+      location: { viewColumn: vscode.ViewColumn.Active },
+    });
+    terminal.show(true);
+    void this.correlateNewSession(cwd, terminal);
+
+    const command = buildClaudeNewSessionCommand(dangerouslySkipPermissions);
+    this.outputChannel.appendLine(
+      `[terminal] Starting a new session in ${cwd} (skipPermissions=${String(dangerouslySkipPermissions)}).`
+    );
+
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: 'Waiting for terminal to be ready…' },
+      () => executeInTerminal(terminal, command, this.terminalDeps())
+    );
+  }
+
+  /**
+   * Watches `~/.claude/projects` for a new `.jsonl` file whose recorded `cwd`
+   * matches, then registers `terminal` under that file's session id (the same
+   * map `openSession` checks). Fire-and-forget from the caller's perspective —
+   * gives up silently after {@link NEW_SESSION_DISCOVERY_TIMEOUT_MS}, in which
+   * case a later click on that session just falls back to today's behavior
+   * (a second terminal), no worse than before this existed.
+   */
+  private correlateNewSession(cwd: string, terminal: vscode.Terminal): Promise<void> {
+    const root = getClaudeProjectsDir();
+    if (!fs.existsSync(root)) {
+      return Promise.resolve();
+    }
+
+    return new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        watcher.close();
+        resolve();
+      };
+
+      let watcher: fs.FSWatcher;
+      try {
+        watcher = fs.watch(root, { recursive: true }, (_eventType, filename) => {
+          if (settled || !filename || !filename.toString().endsWith('.jsonl')) {
+            return;
+          }
+          const filePath = path.join(root, filename.toString());
+          readSessionMeta(filePath)
+            .then((meta) => {
+              if (settled || !meta.cwd || normalizeFsPath(meta.cwd) !== normalizeFsPath(cwd)) {
+                return;
+              }
+              const sessionId = path.basename(filePath, '.jsonl');
+              this.sessionTerminals.set(sessionId, terminal);
+              this.outputChannel.appendLine(`[terminal] New session ${sessionId} correlated with its terminal.`);
+              finish();
+            })
+            .catch(() => {
+              // A file mid-write when we stat it isn't necessarily ours; the next change event will retry.
+            });
+        });
+      } catch {
+        return resolve();
+      }
+
+      const timeout = setTimeout(finish, NEW_SESSION_DISCOVERY_TIMEOUT_MS);
+    });
   }
 
   private async launch(session: SessionNode, options: OpenSessionTerminalOptions): Promise<void> {
@@ -154,6 +261,10 @@ export function buildClaudeResumeCommand(sessionId: string, dangerouslySkipPermi
   }
   args.push('--resume', shellQuote(sessionId));
   return args.join(' ');
+}
+
+export function buildClaudeNewSessionCommand(dangerouslySkipPermissions: boolean): string {
+  return dangerouslySkipPermissions ? 'claude --dangerously-skip-permissions' : 'claude';
 }
 
 function shellQuote(value: string): string {

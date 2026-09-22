@@ -81,6 +81,15 @@
         "icon": "$(add)"
       },
       {
+        "command": "sessionDeck.newSession",
+        "title": "Session Deck: New Session",
+        "icon": "$(add)"
+      },
+      {
+        "command": "sessionDeck.newSessionDangerously",
+        "title": "Session Deck: New Session (Skip Permissions)"
+      },
+      {
         "command": "sessionDeck.editProjectList",
         "title": "Session Deck: Edit Project List (session-deck.json)",
         "icon": "$(edit)"
@@ -139,24 +148,39 @@
       ],
       "view/item/context": [
         {
-          "command": "sessionDeck.renameProject",
+          "command": "sessionDeck.newSession",
           "when": "view == sessionDeck.sessions && viewItem == sessionDeckProject",
           "group": "inline@1"
         },
         {
-          "command": "sessionDeck.removeProject",
+          "command": "sessionDeck.renameProject",
           "when": "view == sessionDeck.sessions && viewItem == sessionDeckProject",
           "group": "inline@2"
         },
         {
+          "command": "sessionDeck.removeProject",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckProject",
+          "group": "inline@3"
+        },
+        {
+          "command": "sessionDeck.newSession",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckProject",
+          "group": "1_session"
+        },
+        {
           "command": "sessionDeck.renameProject",
           "when": "view == sessionDeck.sessions && viewItem == sessionDeckProject",
-          "group": "1_modification"
+          "group": "2_modification"
         },
         {
           "command": "sessionDeck.removeProject",
           "when": "view == sessionDeck.sessions && viewItem == sessionDeckProject",
-          "group": "1_modification"
+          "group": "2_modification"
+        },
+        {
+          "command": "sessionDeck.newSessionDangerously",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckProject",
+          "group": "3_danger"
         },
         {
           "command": "sessionDeck.viewTranscript",
