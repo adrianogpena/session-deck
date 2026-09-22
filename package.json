@@ -44,7 +44,7 @@
       "explorer": [
         {
           "id": "sessionDeck.activeSession",
-          "name": "Open Claude Sessions",
+          "name": "Open Sessions",
           "visibility": "collapsed"
         }
       ]
@@ -56,7 +56,7 @@
       },
       {
         "view": "sessionDeck.activeSession",
-        "contents": "No Claude sessions open right now.\n[Enable Live Status Tracking](command:sessionDeck.enableStatusTracking) to see running/waiting/done here too."
+        "contents": "No sessions open right now.\n[Enable Live Status Tracking](command:sessionDeck.enableStatusTracking) to see running/waiting/done here too (Claude Code sessions only, for now)."
       }
     ],
     "commands": [

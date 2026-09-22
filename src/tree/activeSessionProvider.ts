@@ -2,7 +2,8 @@ import * as vscode from 'vscode';
 import { SessionTreeProvider, SessionWithProject } from './sessionProvider';
 import { readEffectiveSessionStatus, SessionStatus } from '../status/sessionStatus';
 import { sessionStatusUri } from '../status/sessionStatusDecorationProvider';
-import { ClaudeTerminalService } from '../terminal/terminalService';
+import { AgentTerminalService } from '../terminal/terminalService';
+import { agentIconPath } from './agentIcons';
 
 const STATUS_LABELS: Record<SessionStatus, string> = {
   running: 'running',
@@ -16,7 +17,7 @@ const STATUS_LABELS: Record<SessionStatus, string> = {
  * extension (`ShahadIshraq/claude-session-vs-code-extension`) does the same
  * thing, contributing into `views.explorer` alongside its own dedicated
  * container. Shows exactly the sessions that currently have an open terminal
- * in *this* window (`ClaudeTerminalService.openSessionIds()`), each with its
+ * in *this* window (`AgentTerminalService.openSessionIds()`), each with its
  * live status if tracking is enabled — not "every running/waiting session on
  * the machine", which could include ones from another window entirely.
  * Deliberately not the full project/session tree — Explorer already shares
@@ -30,7 +31,7 @@ export class ActiveSessionProvider implements vscode.TreeDataProvider<SessionWit
 
   constructor(
     private readonly sessionTree: SessionTreeProvider,
-    private readonly terminalService: ClaudeTerminalService,
+    private readonly terminalService: AgentTerminalService,
     private readonly extensionUri: vscode.Uri
   ) {}
 
@@ -46,13 +47,13 @@ export class ActiveSessionProvider implements vscode.TreeDataProvider<SessionWit
     const item = new vscode.TreeItem(session.displayName, vscode.TreeItemCollapsibleState.None);
     item.description = `${projectDisplayName} · ${statusLabel}`;
     item.tooltip = `${session.cwd}\n${session.sessionId}`;
-    item.iconPath = vscode.Uri.joinPath(this.extensionUri, 'resources', 'claude-mark.svg');
+    item.iconPath = agentIconPath(this.extensionUri, session.agent);
     // Same decoration-based coloring as the main tree — see sessionStatusDecorationProvider.ts.
     item.resourceUri = sessionStatusUri(session.sessionId);
     item.contextValue = 'sessionDeckActiveSession';
     item.command = {
       command: 'sessionDeck.openSession',
-      title: 'Open Claude Session',
+      title: 'Open Session',
       arguments: [session],
     };
     return item;

@@ -9,6 +9,7 @@ import {
   readLastAssistantResponse,
   readSessionSearchText,
 } from './discovery/claudeStorage';
+import { copilotSessionSearchText, lastCopilotAssistantResponse } from './discovery/copilotStorage';
 import {
   disableStatusTracking,
   enableStatusTracking,
@@ -21,7 +22,7 @@ import { acknowledgeSessionStatus, readEffectiveSessionStatus, SessionStatus } f
 import { SessionStatusDecorationProvider } from './status/sessionStatusDecorationProvider';
 import { WaitingNotifier } from './status/waitingNotifier';
 import { DeckState } from './config/state';
-import { ClaudeTerminalService } from './terminal/terminalService';
+import { AgentTerminalService } from './terminal/terminalService';
 import {
   addProjectToWorkspaceList,
   getConfigFsPath,
@@ -39,7 +40,7 @@ export function activate(context: vscode.ExtensionContext) {
   const contentProvider = new SessionContentProvider();
   const statusDecorationProvider = new SessionStatusDecorationProvider();
   const outputChannel = vscode.window.createOutputChannel('Session Deck');
-  const terminalService = new ClaudeTerminalService(outputChannel, context.extensionUri);
+  const terminalService = new AgentTerminalService(outputChannel, context.extensionUri);
   // The cap-eviction callback: a session auto-archived because a project went over
   // MAX_SESSIONS_PER_PROJECT_VIEW shouldn't be left running in a now-hidden tab.
   const treeProvider = new SessionTreeProvider(state, context.extensionUri, (sessionIds) => {
@@ -80,7 +81,7 @@ export function activate(context: vscode.ExtensionContext) {
       clearProjectRootCache();
       clearSessionMetaCache();
       clearSearchTextCache();
-      terminalService.clearClaudeBinaryCache();
+      terminalService.clearBinaryCaches();
       treeProvider.refresh();
       activeSessionProvider.refresh();
     }),
@@ -167,9 +168,10 @@ async function viewTranscript(session: SessionNode): Promise<void> {
     return;
   }
 
-  const uri = vscode.Uri.parse(
-    `${SESSION_SCHEME}:/${encodeURIComponent(session.projectDirName)}/${session.sessionId}.md`
-  );
+  const uri =
+    session.agent === 'claude'
+      ? vscode.Uri.parse(`${SESSION_SCHEME}:/claude/${encodeURIComponent(session.projectDirName ?? '')}/${session.sessionId}.md`)
+      : vscode.Uri.parse(`${SESSION_SCHEME}:/copilot/${session.sessionId}.md`);
 
   const doc = await vscode.workspace.openTextDocument(uri);
   await vscode.languages.setTextDocumentLanguage(doc, 'markdown');
@@ -185,7 +187,7 @@ async function openSessionDangerously(
   session: SessionNode,
   state: DeckState,
   tree: SessionTreeProvider,
-  terminalService: ClaudeTerminalService
+  terminalService: AgentTerminalService
 ): Promise<void> {
   if (!session) {
     return;
@@ -237,7 +239,7 @@ async function archiveSession(
   node: SessionNode,
   state: DeckState,
   tree: SessionTreeProvider,
-  terminalService: ClaudeTerminalService
+  terminalService: AgentTerminalService
 ): Promise<void> {
   if (!node) {
     return;
@@ -261,7 +263,10 @@ async function copyLastResponse(session: SessionNode): Promise<void> {
   if (!session) {
     return;
   }
-  const text = await readLastAssistantResponse(session.filePath);
+  const text =
+    session.agent === 'claude'
+      ? await readLastAssistantResponse(session.filePath as string)
+      : lastCopilotAssistantResponse(session.sessionId);
   if (!text) {
     vscode.window.showInformationMessage('No assistant response found in this session yet.');
     return;
@@ -270,20 +275,23 @@ async function copyLastResponse(session: SessionNode): Promise<void> {
   vscode.window.showInformationMessage('Copied last response to the clipboard.');
 }
 
-/** Copies a plain-text summary — handy for pasting into an issue, a chat with a teammate, or another Claude session. */
+/** Copies a plain-text summary — handy for pasting into an issue, a chat with a teammate, or another session. */
 async function copySessionInfo(session: SessionNode): Promise<void> {
   if (!session) {
     return;
   }
+  // Copilot sessions aren't status-tracked yet (see the "does NOT do yet" list), so this is
+  // always blank for one today — reads live from the shared status files either way.
   const status = readEffectiveSessionStatus(session.sessionId);
   const lines = [
     session.displayName,
+    `Agent: ${session.agent === 'claude' ? 'Claude Code' : 'GitHub Copilot'}`,
     `Project: ${path.basename(session.projectRoot)} (${session.projectRoot})`,
     `Working directory: ${session.cwd}`,
     `Session ID: ${session.sessionId}`,
     `Last modified: ${session.lastModified.toISOString()}`,
     status ? `Status: ${status.status}` : undefined,
-    `Transcript: ${session.filePath}`,
+    session.agent === 'claude' ? `Transcript: ${session.filePath}` : 'Transcript: ~/.copilot/session-store.db',
   ].filter((line): line is string => Boolean(line));
   await vscode.env.clipboard.writeText(lines.join('\n'));
   vscode.window.showInformationMessage('Copied session info to the clipboard.');
@@ -309,7 +317,7 @@ const SEARCH_STATUS_PREFIXES: Record<string, SessionStatus> = {
   '~': 'error',
 };
 
-async function searchSessions(tree: SessionTreeProvider, state: DeckState, terminalService: ClaudeTerminalService): Promise<void> {
+async function searchSessions(tree: SessionTreeProvider, state: DeckState, terminalService: AgentTerminalService): Promise<void> {
   const all = await tree.listAllSessions();
   if (all.length === 0) {
     vscode.window.showInformationMessage('No sessions to search — add a project first.');
@@ -344,7 +352,9 @@ async function searchSessions(tree: SessionTreeProvider, state: DeckState, termi
       const pairs = await Promise.all(
         all.map(async (entry): Promise<[string, string]> => [
           entry.session.sessionId,
-          await readSessionSearchText(entry.session.filePath),
+          entry.session.agent === 'claude'
+            ? await readSessionSearchText(entry.session.filePath as string)
+            : copilotSessionSearchText(entry.session.sessionId),
         ])
       );
       searchTextBySessionId = new Map(pairs);
@@ -461,16 +471,24 @@ async function editProjectList(): Promise<void> {
 }
 
 /** Starts a brand-new Claude Code session rooted at the project's own root path — not any particular worktree/subfolder member. */
-async function newSession(node: ProjectGroupNode, terminalService: ClaudeTerminalService): Promise<void> {
+async function newSession(node: ProjectGroupNode, terminalService: AgentTerminalService): Promise<void> {
   if (!node) {
+    return;
+  }
+  if (node.agent === 'copilot') {
+    await vscode.window.showInformationMessage('Starting a new Copilot CLI session from here is not supported yet — resuming existing Copilot sessions works today.');
     return;
   }
   await terminalService.startNewSession(node.rootPath, node.displayName);
 }
 
 /** Same reasoning as `openSessionDangerously`: always a fresh terminal, gated behind an explicit confirmation. */
-async function newSessionDangerously(node: ProjectGroupNode, terminalService: ClaudeTerminalService): Promise<void> {
+async function newSessionDangerously(node: ProjectGroupNode, terminalService: AgentTerminalService): Promise<void> {
   if (!node) {
+    return;
+  }
+  if (node.agent === 'copilot') {
+    await vscode.window.showInformationMessage('Starting a new Copilot CLI session from here is not supported yet — resuming existing Copilot sessions works today.');
     return;
   }
   if (shouldConfirmDangerousSkipPermissions(node.rootPath)) {

@@ -5,8 +5,10 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { getClaudeProjectsDir, listProjectDirNames, listSessionFiles } from '../discovery/claudeStorage';
 import { SessionNode } from '../tree/sessionProvider';
+import { agentIconPath } from '../tree/agentIcons';
 import { clearSessionStatus, markSessionError } from '../status/sessionStatus';
 import { buildClaudeNewSessionCommand, buildClaudeResumeCommand } from './claudeCommand';
+import { buildCopilotResumeCommand } from './copilotCommand';
 
 const execFileAsync = promisify(execFile);
 
@@ -52,15 +54,15 @@ export interface OpenSessionTerminalOptions {
  * same shape: a `Map<id, ptyProcess>` of concurrently-alive processes, never
  * one shared pty for every session.
  */
-export class ClaudeTerminalService implements vscode.Disposable {
+export class AgentTerminalService implements vscode.Disposable {
   private readonly sessionTerminals = new Map<string, vscode.Terminal>();
   /** Display label per tracked session id — `session.displayName` for a resume, the project name for a just-started new session (its real title isn't known yet). Used only for `WaitingNotifier`'s notification text. */
   private readonly sessionLabels = new Map<string, string>();
   /** Session ids already claimed by a pending `correlateNewSession` call, so two "New Session" clicks in quick succession can't both grab the same newly-created file. */
   private readonly claimedByCorrelation = new Set<string>();
   private readonly closeListener: vscode.Disposable;
-  /** Memoized `hasClaudeBinary` result — PATH doesn't change mid-session, so there's no need to re-probe it (up to 3 sequential subprocess spawns) on every single session launch. Cleared on manual refresh, same as `gitProject.ts`'s and `claudeStorage.ts`'s caches. */
-  private claudeBinaryCheck: Promise<boolean> | undefined;
+  /** Memoized PATH check per CLI command ("claude", "copilot") — PATH doesn't change mid-session, so there's no need to re-probe it (up to 3 sequential subprocess spawns) on every single session launch. Cleared on manual refresh, same as `gitProject.ts`'s and `claudeStorage.ts`'s caches. */
+  private readonly binaryCheckCache = new Map<string, Promise<boolean>>();
   private readonly _onDidChangeOpenSessions = new vscode.EventEmitter<void>();
   /** Fires whenever a session gains or loses a tracked open terminal — what `activeSessionProvider.ts`'s Explorer view refreshes on. */
   public readonly onDidChangeOpenSessions = this._onDidChangeOpenSessions.event;
@@ -87,13 +89,14 @@ export class ClaudeTerminalService implements vscode.Disposable {
     });
 
     /**
-     * Claude Code's hooks don't expose a distinct failure signal (confirmed: `Stop` fires the same way
-     * on a clean turn end or a fatal error) — this infers "error" instead from the exit code of the
-     * `claude` command itself, via shell integration's per-command completion event. Deliberately only
-     * acts on a real, positive exit code: `exitCode` comes back `undefined` for a Ctrl+C cancel, a
-     * sub-shell being opened, or a shell integration script that isn't reporting properly (documented
-     * on `TerminalShellExecutionEndEvent.exitCode`), so those are correctly left alone rather than
-     * misread as a crash.
+     * Neither agent's hooks expose a distinct failure signal (confirmed for Claude Code: `Stop` fires
+     * the same way on a clean turn end or a fatal error; Copilot has no hook mechanism wired up at all
+     * yet) — this infers "error" instead from the exit code of the `claude`/`copilot` command itself,
+     * via shell integration's per-command completion event, agent-agnostic. Deliberately only acts on a
+     * real, positive exit code: `exitCode` comes back `undefined` for a Ctrl+C cancel, a sub-shell being
+     * opened, or a shell integration script that isn't reporting properly (documented on
+     * `TerminalShellExecutionEndEvent.exitCode`), so those are correctly left alone rather than misread
+     * as a crash.
      */
     this.executionEndListener = vscode.window.onDidEndTerminalShellExecution((event) => {
       const sessionId = this.sessionIdByExecution.get(event.execution);
@@ -161,11 +164,6 @@ export class ClaudeTerminalService implements vscode.Disposable {
     this.sessionTerminals.get(sessionId)?.dispose();
   }
 
-  /** Same mark used for a session's tree row — set as the terminal tab's icon too, so it doesn't default to whatever the shell profile's own icon is (Git Bash's icon, on this machine) and read as unrelated to Claude Code. */
-  private claudeMarkIconPath(): vscode.Uri {
-    return vscode.Uri.joinPath(this.extensionUri, 'resources', 'claude-mark.svg');
-  }
-
   private trackTerminal(sessionId: string, terminal: vscode.Terminal, label: string): void {
     this.sessionTerminals.set(sessionId, terminal);
     this.sessionLabels.set(sessionId, label);
@@ -225,9 +223,9 @@ export class ClaudeTerminalService implements vscode.Disposable {
   public async startNewSession(cwd: string, projectName: string, options: OpenSessionTerminalOptions = {}): Promise<void> {
     const dangerouslySkipPermissions = options.dangerouslySkipPermissions === true;
 
-    const hasClaude = await this.hasClaudeBinary();
+    const hasClaude = await this.hasBinaryOnPath('claude');
     if (!hasClaude) {
-      this.reportClaudeNotFound();
+      this.reportBinaryNotFound('claude');
       return;
     }
 
@@ -235,7 +233,7 @@ export class ClaudeTerminalService implements vscode.Disposable {
       name: truncate(`New: ${projectName}`, 35),
       cwd,
       location: { viewColumn: vscode.ViewColumn.Active },
-      iconPath: this.claudeMarkIconPath(),
+      iconPath: agentIconPath(this.extensionUri, 'claude'),
       isTransient: true,
     });
     terminal.show(true);
@@ -372,16 +370,20 @@ export class ClaudeTerminalService implements vscode.Disposable {
 
   private async launch(session: SessionNode, options: OpenSessionTerminalOptions): Promise<void> {
     const dangerouslySkipPermissions = options.dangerouslySkipPermissions === true;
+    const command = session.agent === 'claude' ? 'claude' : 'copilot';
 
-    const hasClaude = await this.hasClaudeBinary();
-    if (!hasClaude) {
-      this.reportClaudeNotFound();
+    const hasBinary = await this.hasBinaryOnPath(command);
+    if (!hasBinary) {
+      this.reportBinaryNotFound(command);
       return;
     }
 
     let resumeCommand: string;
     try {
-      resumeCommand = buildClaudeResumeCommand(session.sessionId, dangerouslySkipPermissions);
+      resumeCommand =
+        session.agent === 'claude'
+          ? buildClaudeResumeCommand(session.sessionId, dangerouslySkipPermissions)
+          : buildCopilotResumeCommand(session.sessionId, dangerouslySkipPermissions);
     } catch (error) {
       vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
       return;
@@ -391,7 +393,7 @@ export class ClaudeTerminalService implements vscode.Disposable {
       name: truncate(session.displayName, 35),
       cwd: session.cwd,
       location: { viewColumn: vscode.ViewColumn.Active },
-      iconPath: this.claudeMarkIconPath(),
+      iconPath: agentIconPath(this.extensionUri, session.agent),
       isTransient: true,
     });
     this.trackTerminal(session.sessionId, terminal, session.displayName);
@@ -422,39 +424,42 @@ export class ClaudeTerminalService implements vscode.Disposable {
     };
   }
 
-  private reportClaudeNotFound(): void {
-    vscode.window.showErrorMessage('Could not find `claude` in PATH. Install Claude Code CLI to resume sessions.');
-    this.outputChannel.appendLine('[terminal] `claude` executable not found in PATH.');
+  private reportBinaryNotFound(command: string): void {
+    const label = command === 'claude' ? 'Claude Code' : 'Copilot';
+    vscode.window.showErrorMessage(`Could not find \`${command}\` in PATH. Install the ${label} CLI to resume sessions.`);
+    this.outputChannel.appendLine(`[terminal] \`${command}\` executable not found in PATH.`);
   }
 
-  /** Call on a manual refresh so a `claude` install that happened mid-session is picked up without a window reload. */
-  public clearClaudeBinaryCache(): void {
-    this.claudeBinaryCheck = undefined;
+  /** Call on a manual refresh so a CLI install that happened mid-session is picked up without a window reload. */
+  public clearBinaryCaches(): void {
+    this.binaryCheckCache.clear();
   }
 
-  private hasClaudeBinary(): Promise<boolean> {
-    if (!this.claudeBinaryCheck) {
-      this.claudeBinaryCheck = this.probeClaudeBinary();
+  private hasBinaryOnPath(command: string): Promise<boolean> {
+    let check = this.binaryCheckCache.get(command);
+    if (!check) {
+      check = this.probeBinaryOnPath(command);
+      this.binaryCheckCache.set(command, check);
     }
-    return this.claudeBinaryCheck;
+    return check;
   }
 
   /**
    * VS Code's extension host often has a trimmed PATH that excludes what a
    * user's interactive shell profile (~/.zshrc, ~/.bashrc, PowerShell $PROFILE)
    * adds — falls back to checking through the user's actual configured shell
-   * before concluding `claude` really isn't installed.
+   * before concluding the CLI really isn't installed.
    */
-  private async probeClaudeBinary(): Promise<boolean> {
+  private async probeBinaryOnPath(command: string): Promise<boolean> {
     const checker = process.platform === 'win32' ? 'where' : 'which';
 
     try {
-      await execFileAsync(checker, ['claude']);
+      await execFileAsync(checker, [command]);
       return true;
     } catch {
       try {
         const shell = vscode.env.shell || '/bin/sh';
-        await execFileAsync(checker, ['claude'], { env: { ...process.env, SHELL: shell } });
+        await execFileAsync(checker, [command], { env: { ...process.env, SHELL: shell } });
         return true;
       } catch {
         try {
@@ -462,7 +467,7 @@ export class ClaudeTerminalService implements vscode.Disposable {
           // an intermediate shell — only its `-c` argument (a fixed, non-interpolated string) is
           // ever shell-interpreted.
           const shell = vscode.env.shell || '/bin/sh';
-          await execFileAsync(shell, ['-l', '-c', `${checker} claude`]);
+          await execFileAsync(shell, ['-l', '-c', `${checker} ${command}`]);
           return true;
         } catch {
           return false;
