@@ -1,4 +1,5 @@
 import { execFile } from 'child_process';
+import { randomUUID } from 'crypto';
 import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -9,7 +10,7 @@ import { agentIconPath } from '../tree/agentIcons';
 import { clearSessionStatus, markSessionError } from '../status/sessionStatus';
 import { CopilotStatusWatcher } from '../status/copilotStatusWatcher';
 import { buildClaudeNewSessionCommand, buildClaudeResumeCommand } from './claudeCommand';
-import { buildCopilotResumeCommand } from './copilotCommand';
+import { buildCopilotNewSessionCommand, buildCopilotResumeCommand } from './copilotCommand';
 
 const execFileAsync = promisify(execFile);
 
@@ -225,10 +226,21 @@ export class AgentTerminalService implements vscode.Disposable {
     await this.launch(session, options);
   }
 
+  /** Starts a brand-new session for the given agent, rooted at `cwd` — always a fresh terminal, since there's no existing session id to reuse by yet. Dispatches to the two very differently-shaped implementations below. */
+  public async startNewSession(
+    agent: AgentType,
+    cwd: string,
+    projectName: string,
+    options: OpenSessionTerminalOptions = {}
+  ): Promise<void> {
+    if (agent === 'claude') {
+      return this.startNewClaudeSession(cwd, projectName, options);
+    }
+    return this.startNewCopilotSession(cwd, projectName, options);
+  }
+
   /**
-   * Starts a brand-new Claude Code session (plain `claude`, no `--resume`)
-   * rooted at `cwd` — always a fresh terminal, since there's no existing
-   * session id to reuse by yet.
+   * Plain `claude` (no `--resume`).
    *
    * There's no CLI flag to pre-assign a session id (checked: `claude --help`
    * has no `--session-id`; `--name` is a separate alias on top of the
@@ -239,7 +251,7 @@ export class AgentTerminalService implements vscode.Disposable {
    * exactly like any other tracked session, instead of opening a redundant
    * second one.
    */
-  public async startNewSession(cwd: string, projectName: string, options: OpenSessionTerminalOptions = {}): Promise<void> {
+  private async startNewClaudeSession(cwd: string, projectName: string, options: OpenSessionTerminalOptions): Promise<void> {
     const dangerouslySkipPermissions = options.dangerouslySkipPermissions === true;
 
     const hasClaude = await this.hasBinaryOnPath('claude');
@@ -260,12 +272,55 @@ export class AgentTerminalService implements vscode.Disposable {
 
     const command = buildClaudeNewSessionCommand(dangerouslySkipPermissions);
     this.outputChannel.appendLine(
-      `[terminal] Starting a new session in ${cwd} (skipPermissions=${String(dangerouslySkipPermissions)}).`
+      `[terminal] Starting a new Claude session in ${cwd} (skipPermissions=${String(dangerouslySkipPermissions)}).`
     );
 
     await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: 'Waiting for terminal to be ready…' },
       () => executeInTerminal(terminal, command, this.terminalDeps())
+    );
+  }
+
+  /**
+   * Unlike `startNewClaudeSession`, this needs no `correlateNewSession`-style polling at all:
+   * Copilot CLI's `--session-id` flag (confirmed via `copilot --help`'s own examples) lets a
+   * brand-new session's UUID be chosen upfront, generated here with `crypto.randomUUID()`, so
+   * the terminal can be tracked under its real session id — and given its real project name,
+   * with no "New: " placeholder or rename-after-correlation dance — from the moment it's created.
+   */
+  private async startNewCopilotSession(cwd: string, projectName: string, options: OpenSessionTerminalOptions): Promise<void> {
+    const dangerouslySkipPermissions = options.dangerouslySkipPermissions === true;
+
+    const hasCopilot = await this.hasBinaryOnPath('copilot');
+    if (!hasCopilot) {
+      this.reportBinaryNotFound('copilot');
+      return;
+    }
+
+    const sessionId = randomUUID();
+    const terminal = vscode.window.createTerminal({
+      name: truncate(projectName, 35),
+      cwd,
+      location: { viewColumn: vscode.ViewColumn.Active },
+      iconPath: agentIconPath(this.extensionUri, 'copilot'),
+      isTransient: true,
+    });
+    this.trackTerminal(sessionId, terminal, projectName, 'copilot');
+    terminal.show(true);
+
+    const command = buildCopilotNewSessionCommand(sessionId, dangerouslySkipPermissions);
+    this.outputChannel.appendLine(
+      `[terminal] Starting a new Copilot session ${sessionId} in ${cwd} (skipPermissions=${String(dangerouslySkipPermissions)}).`
+    );
+
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: 'Waiting for terminal to be ready…' },
+      () =>
+        executeInTerminal(
+          terminal,
+          command,
+          this.terminalDeps((execution) => this.sessionIdByExecution.set(execution, sessionId))
+        )
     );
   }
 

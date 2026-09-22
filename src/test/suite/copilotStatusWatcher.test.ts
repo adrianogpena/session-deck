@@ -3,36 +3,53 @@ import assert from 'node:assert/strict';
 import { classifyCopilotEvent, splitLines } from '../../status/copilotStatusWatcher';
 
 test('classifyCopilotEvent maps a turn start to running', () => {
-  assert.deepEqual(classifyCopilotEvent('assistant.turn_start'), { kind: 'status', status: 'running' });
+  assert.deepEqual(classifyCopilotEvent({ type: 'assistant.turn_start' }), { kind: 'status', status: 'running' });
 });
 
 test('classifyCopilotEvent maps a resolved permission/elicitation/input request to running too', () => {
-  assert.deepEqual(classifyCopilotEvent('permission.completed'), { kind: 'status', status: 'running' });
-  assert.deepEqual(classifyCopilotEvent('elicitation.completed'), { kind: 'status', status: 'running' });
-  assert.deepEqual(classifyCopilotEvent('user_input.completed'), { kind: 'status', status: 'running' });
+  assert.deepEqual(classifyCopilotEvent({ type: 'permission.completed' }), { kind: 'status', status: 'running' });
+  assert.deepEqual(classifyCopilotEvent({ type: 'elicitation.completed' }), { kind: 'status', status: 'running' });
+  assert.deepEqual(classifyCopilotEvent({ type: 'user_input.completed' }), { kind: 'status', status: 'running' });
 });
 
 test('classifyCopilotEvent maps a pending permission/elicitation/input request to waiting', () => {
-  assert.deepEqual(classifyCopilotEvent('permission.requested'), { kind: 'status', status: 'waiting' });
-  assert.deepEqual(classifyCopilotEvent('elicitation.requested'), { kind: 'status', status: 'waiting' });
-  assert.deepEqual(classifyCopilotEvent('user_input.requested'), { kind: 'status', status: 'waiting' });
+  assert.deepEqual(classifyCopilotEvent({ type: 'permission.requested' }), { kind: 'status', status: 'waiting' });
+  assert.deepEqual(classifyCopilotEvent({ type: 'elicitation.requested' }), { kind: 'status', status: 'waiting' });
+  assert.deepEqual(classifyCopilotEvent({ type: 'user_input.requested' }), { kind: 'status', status: 'waiting' });
 });
 
 test('classifyCopilotEvent maps a turn end to done', () => {
-  assert.deepEqual(classifyCopilotEvent('assistant.turn_end'), { kind: 'status', status: 'done' });
+  assert.deepEqual(classifyCopilotEvent({ type: 'assistant.turn_end' }), { kind: 'status', status: 'done' });
 });
 
 test('classifyCopilotEvent maps a session error to error', () => {
-  assert.deepEqual(classifyCopilotEvent('session.error'), { kind: 'status', status: 'error' });
+  assert.deepEqual(classifyCopilotEvent({ type: 'session.error' }), { kind: 'status', status: 'error' });
 });
 
 test('classifyCopilotEvent maps session shutdown to clear', () => {
-  assert.deepEqual(classifyCopilotEvent('session.shutdown'), { kind: 'clear' });
+  assert.deepEqual(classifyCopilotEvent({ type: 'session.shutdown' }), { kind: 'clear' });
 });
 
 test('classifyCopilotEvent ignores an event type it does not recognize', () => {
-  assert.equal(classifyCopilotEvent('session.model_change'), undefined);
-  assert.equal(classifyCopilotEvent('assistant.message_delta'), undefined);
+  assert.equal(classifyCopilotEvent({ type: 'session.model_change' }), undefined);
+  assert.equal(classifyCopilotEvent({ type: 'assistant.message_delta' }), undefined);
+});
+
+test('classifyCopilotEvent maps the ask_user tool starting to waiting, but leaves any other tool call alone', () => {
+  assert.deepEqual(classifyCopilotEvent({ type: 'tool.execution_start', data: { toolName: 'ask_user' } }), {
+    kind: 'status',
+    status: 'waiting',
+  });
+  assert.equal(classifyCopilotEvent({ type: 'tool.execution_start', data: { toolName: 'view' } }), undefined);
+  assert.equal(classifyCopilotEvent({ type: 'tool.execution_start' }), undefined);
+});
+
+test('classifyCopilotEvent maps the ask_user tool completing back to running, but leaves any other tool call alone', () => {
+  assert.deepEqual(classifyCopilotEvent({ type: 'tool.execution_complete', data: { toolName: 'ask_user' } }), {
+    kind: 'status',
+    status: 'running',
+  });
+  assert.equal(classifyCopilotEvent({ type: 'tool.execution_complete', data: { toolName: 'grep' } }), undefined);
 });
 
 test('splitLines returns complete lines and carries a trailing partial line forward', () => {

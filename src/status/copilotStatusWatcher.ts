@@ -10,7 +10,17 @@ import { clearSessionStatus, writeSessionStatus, SessionStatus } from './session
  * "running" (work resumes right after a permission/elicitation/input request is resolved) rather
  * than being ignored — a distinction Claude's own hook set can't make at all, since it has no
  * "resumed after approval" signal of its own.
+ *
+ * `permission.requested`/`elicitation.requested`/`user_input.requested` are what the schema
+ * documents for "the agent needs you" — but a real interactive session's own built-in
+ * clarifying-question tool (`ask_user`) turned out NOT to fire any of these: confirmed against a
+ * real transcript, it goes through the perfectly generic `tool.execution_start`/
+ * `tool.execution_complete` pair every other tool uses, distinguished only by
+ * `data.toolName === "ask_user"` — so that pair is special-cased below too. The schema events are
+ * kept as a fallback in case a different flow (a real permission prompt without `--allow-all`, or
+ * a genuine MCP elicitation) does use them; this hasn't been observed directly.
  */
+const ASK_USER_TOOL_NAME = 'ask_user';
 const RUNNING_EVENTS = new Set(['assistant.turn_start', 'permission.completed', 'elicitation.completed', 'user_input.completed']);
 const WAITING_EVENTS = new Set(['permission.requested', 'elicitation.requested', 'user_input.requested']);
 const DONE_EVENTS = new Set(['assistant.turn_end']);
@@ -19,21 +29,34 @@ const SHUTDOWN_EVENTS = new Set(['session.shutdown']);
 
 export type CopilotStatusAction = { kind: 'status'; status: SessionStatus } | { kind: 'clear' } | undefined;
 
+/** The subset of a parsed `events.jsonl` line `classifyCopilotEvent` actually looks at. */
+export interface CopilotEventLike {
+  type: string;
+  data?: { toolName?: unknown };
+}
+
 /** Pure decision logic — see `CopilotStatusWatcher` for how it's actually applied. Unit-tested directly (`test/suite/copilotStatusWatcher.test.ts`) without touching the filesystem. */
-export function classifyCopilotEvent(eventType: string): CopilotStatusAction {
-  if (SHUTDOWN_EVENTS.has(eventType)) {
+export function classifyCopilotEvent(event: CopilotEventLike): CopilotStatusAction {
+  const { type } = event;
+  if (SHUTDOWN_EVENTS.has(type)) {
     return { kind: 'clear' };
   }
-  if (ERROR_EVENTS.has(eventType)) {
+  if (ERROR_EVENTS.has(type)) {
     return { kind: 'status', status: 'error' };
   }
-  if (WAITING_EVENTS.has(eventType)) {
+  if (type === 'tool.execution_start' && event.data?.toolName === ASK_USER_TOOL_NAME) {
     return { kind: 'status', status: 'waiting' };
   }
-  if (DONE_EVENTS.has(eventType)) {
+  if (type === 'tool.execution_complete' && event.data?.toolName === ASK_USER_TOOL_NAME) {
+    return { kind: 'status', status: 'running' };
+  }
+  if (WAITING_EVENTS.has(type)) {
+    return { kind: 'status', status: 'waiting' };
+  }
+  if (DONE_EVENTS.has(type)) {
     return { kind: 'status', status: 'done' };
   }
-  if (RUNNING_EVENTS.has(eventType)) {
+  if (RUNNING_EVENTS.has(type)) {
     return { kind: 'status', status: 'running' };
   }
   return undefined;
@@ -182,16 +205,17 @@ export class CopilotStatusWatcher {
     if (!trimmed) {
       return;
     }
-    let type: unknown;
+    let parsed: { type?: unknown; data?: unknown };
     try {
-      type = (JSON.parse(trimmed) as { type?: unknown }).type;
+      parsed = JSON.parse(trimmed);
     } catch {
       return; // Tolerate a malformed/partial line — best-effort, matching this feature's informational (not load-bearing) role.
     }
-    if (typeof type !== 'string') {
+    if (typeof parsed.type !== 'string') {
       return;
     }
-    const action = classifyCopilotEvent(type);
+    const data = parsed.data && typeof parsed.data === 'object' ? (parsed.data as { toolName?: unknown }) : undefined;
+    const action = classifyCopilotEvent({ type: parsed.type, data });
     if (!action) {
       return;
     }

@@ -1,6 +1,6 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { SessionTreeProvider, ProjectGroupNode, SessionNode, SessionWithProject } from './tree/sessionProvider';
+import { AgentType, SessionTreeProvider, ProjectGroupNode, SessionNode, SessionWithProject } from './tree/sessionProvider';
 import { ActiveSessionProvider } from './tree/activeSessionProvider';
 import { SessionContentProvider, SESSION_SCHEME } from './content/sessionContentProvider';
 import {
@@ -88,16 +88,18 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('sessionDeck.openSession', async (session: SessionNode) => {
       await ensureSessionActive(session, state, treeProvider);
       await terminalService.openSession(session);
+      acknowledgeAndRefresh(session, treeProvider, statusDecorationProvider, activeSessionProvider);
     }),
     vscode.commands.registerCommand('sessionDeck.openSessionDangerously', (session: SessionNode) =>
-      openSessionDangerously(session, state, treeProvider, terminalService)
+      openSessionDangerously(session, state, treeProvider, statusDecorationProvider, activeSessionProvider, terminalService)
     ),
     vscode.commands.registerCommand('sessionDeck.openSessionInNewTerminal', async (session: SessionNode) => {
       await ensureSessionActive(session, state, treeProvider);
       await terminalService.openSessionInNewTerminal(session);
+      acknowledgeAndRefresh(session, treeProvider, statusDecorationProvider, activeSessionProvider);
     }),
     vscode.commands.registerCommand('sessionDeck.viewTranscript', (session: SessionNode) => viewTranscript(session)),
-    vscode.commands.registerCommand('sessionDeck.search', () => searchSessions(treeProvider, state, terminalService)),
+    vscode.commands.registerCommand('sessionDeck.search', () => searchSessions(treeProvider)),
     vscode.commands.registerCommand('sessionDeck.archiveSession', (node: SessionNode) =>
       archiveSession(node, state, treeProvider, terminalService)
     ),
@@ -182,11 +184,13 @@ async function viewTranscript(session: SessionNode): Promise<void> {
   });
 }
 
-/** `claude --resume --dangerously-skip-permissions`, gated behind an explicit confirmation. */
+/** `claude --resume --dangerously-skip-permissions` / `copilot --resume --allow-all`, gated behind an explicit confirmation. */
 async function openSessionDangerously(
   session: SessionNode,
   state: DeckState,
   tree: SessionTreeProvider,
+  statusDecorationProvider: SessionStatusDecorationProvider,
+  activeSessionProvider: ActiveSessionProvider,
   terminalService: AgentTerminalService
 ): Promise<void> {
   if (!session) {
@@ -194,10 +198,10 @@ async function openSessionDangerously(
   }
   if (shouldConfirmDangerousSkipPermissions(session.projectRoot)) {
     const confirm = await vscode.window.showWarningMessage(
-      `Resume "${session.displayName}" with --dangerously-skip-permissions?`,
+      `Resume "${session.displayName}" with ${dangerousModeFlag(session.agent)}?`,
       {
         modal: true,
-        detail: 'Claude will not ask for approval before running tools in this session. Only do this if you trust what it will be doing.',
+        detail: dangerousModeDetail(session.agent),
       },
       'Resume'
     );
@@ -209,6 +213,29 @@ async function openSessionDangerously(
   // Always a fresh terminal (never reuses this session's existing terminal, if any) — silently
   // reusing a non-dangerous terminal here would ignore the flag the user just confirmed.
   await terminalService.openSessionInNewTerminal(session, { dangerouslySkipPermissions: true });
+  acknowledgeAndRefresh(session, tree, statusDecorationProvider, activeSessionProvider);
+}
+
+/**
+ * Opening/resuming a session is "looking at it" — a "done"/"error" dot only means "something
+ * happened, you haven't looked yet" (see `sessionStatus.ts`), so this clears it the same way
+ * selecting the row in the main tree already does (`treeView.onDidChangeSelection` below). Needed
+ * as its own step because opening a session doesn't always go through that listener: the Explorer
+ * "Open Sessions" view and Search's QuickPick both resume a session without ever selecting its row
+ * in the main tree, so relying on tree selection alone left their session's status stuck showing
+ * "done"/"error" after you'd already reopened it — reported live against a Copilot session that
+ * stayed green after being reopened from the Explorer view.
+ */
+function acknowledgeAndRefresh(
+  session: SessionNode,
+  tree: SessionTreeProvider,
+  statusDecorationProvider: SessionStatusDecorationProvider,
+  activeSessionProvider: ActiveSessionProvider
+): void {
+  acknowledgeSessionStatus(session.sessionId);
+  tree.refresh();
+  statusDecorationProvider.refresh();
+  activeSessionProvider.refresh();
 }
 
 /**
@@ -224,6 +251,16 @@ function shouldConfirmDangerousSkipPermissions(rootPath: string): boolean {
     return false;
   }
   return vscode.workspace.getConfiguration('sessionDeck').get<boolean>('confirmDangerousSkipPermissions', true);
+}
+
+/** The actual CLI flag each agent's dangerous mode maps to — used only for confirmation-dialog wording. */
+function dangerousModeFlag(agent: AgentType): string {
+  return agent === 'claude' ? '--dangerously-skip-permissions' : '--allow-all';
+}
+
+function dangerousModeDetail(agent: AgentType): string {
+  const label = agent === 'claude' ? 'Claude' : 'Copilot';
+  return `${label} will not ask for approval before running tools in this session. Only do this if you trust what it will be doing.`;
 }
 
 /** Resuming an archived session takes it out of the archive — there's no such thing as an actively-open archived one. */
@@ -317,7 +354,7 @@ const SEARCH_STATUS_PREFIXES: Record<string, SessionStatus> = {
   '~': 'error',
 };
 
-async function searchSessions(tree: SessionTreeProvider, state: DeckState, terminalService: AgentTerminalService): Promise<void> {
+async function searchSessions(tree: SessionTreeProvider): Promise<void> {
   const all = await tree.listAllSessions();
   if (all.length === 0) {
     vscode.window.showInformationMessage('No sessions to search — add a project first.');
@@ -378,7 +415,10 @@ async function searchSessions(tree: SessionTreeProvider, state: DeckState, termi
     const [selected] = quickPick.selectedItems;
     quickPick.hide();
     if (selected) {
-      void ensureSessionActive(selected.session, state, tree).then(() => terminalService.openSession(selected.session));
+      // Routed through the command itself (not `terminalService.openSession` directly) so this gets
+      // exactly the same `ensureSessionActive`/acknowledge/refresh behavior as clicking the session
+      // anywhere else, with no duplicated logic here.
+      void vscode.commands.executeCommand('sessionDeck.openSession', selected.session);
     }
   });
 
@@ -470,16 +510,12 @@ async function editProjectList(): Promise<void> {
   await vscode.window.showTextDocument(vscode.Uri.file(configPath));
 }
 
-/** Starts a brand-new Claude Code session rooted at the project's own root path — not any particular worktree/subfolder member. */
+/** Starts a brand-new session (Claude or Copilot, per the node's own agent) rooted at the project's own root path — not any particular worktree/subfolder member. */
 async function newSession(node: ProjectGroupNode, terminalService: AgentTerminalService): Promise<void> {
   if (!node) {
     return;
   }
-  if (node.agent === 'copilot') {
-    await vscode.window.showInformationMessage('Starting a new Copilot CLI session from here is not supported yet — resuming existing Copilot sessions works today.');
-    return;
-  }
-  await terminalService.startNewSession(node.rootPath, node.displayName);
+  await terminalService.startNewSession(node.agent, node.rootPath, node.displayName);
 }
 
 /** Same reasoning as `openSessionDangerously`: always a fresh terminal, gated behind an explicit confirmation. */
@@ -487,16 +523,12 @@ async function newSessionDangerously(node: ProjectGroupNode, terminalService: Ag
   if (!node) {
     return;
   }
-  if (node.agent === 'copilot') {
-    await vscode.window.showInformationMessage('Starting a new Copilot CLI session from here is not supported yet — resuming existing Copilot sessions works today.');
-    return;
-  }
   if (shouldConfirmDangerousSkipPermissions(node.rootPath)) {
     const confirm = await vscode.window.showWarningMessage(
-      `Start a new session in "${node.displayName}" with --dangerously-skip-permissions?`,
+      `Start a new session in "${node.displayName}" with ${dangerousModeFlag(node.agent)}?`,
       {
         modal: true,
-        detail: 'Claude will not ask for approval before running tools in this session. Only do this if you trust what it will be doing.',
+        detail: dangerousModeDetail(node.agent),
       },
       'Start'
     );
@@ -504,7 +536,7 @@ async function newSessionDangerously(node: ProjectGroupNode, terminalService: Ag
       return;
     }
   }
-  await terminalService.startNewSession(node.rootPath, node.displayName, { dangerouslySkipPermissions: true });
+  await terminalService.startNewSession(node.agent, node.rootPath, node.displayName, { dangerouslySkipPermissions: true });
 }
 
 /** A project only ever appears in the tree because it's on this workspace's list, so renaming always writes its `name` field there. */
