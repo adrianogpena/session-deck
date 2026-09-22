@@ -7,13 +7,13 @@ import {
   listProjectDirNames,
   listSessionFiles,
   readSessionMeta,
-} from './claudeStorage';
-import { resolveProjectRoot } from './gitProject';
-import { normalizeFsPath } from './pathUtils';
-import { ensureSessionStatusDir, getSessionStatusDir, readEffectiveSessionStatus, SessionStatusRecord } from './sessionStatus';
-import { sessionStatusUri } from './sessionStatusDecorationProvider';
-import { DeckState } from './state';
-import { readWorkspaceProjectEntries } from './workspaceConfig';
+} from '../discovery/claudeStorage';
+import { resolveProjectRoot } from '../discovery/gitProject';
+import { normalizeFsPath } from '../discovery/pathUtils';
+import { ensureSessionStatusDir, getSessionStatusDir, readEffectiveSessionStatus, SessionStatusRecord } from '../status/sessionStatus';
+import { sessionStatusUri } from '../status/sessionStatusDecorationProvider';
+import { DeckState } from '../config/state';
+import { readWorkspaceProjectEntries } from '../config/workspaceConfig';
 
 /** How many of a project's most recent sessions the main tree shows — see `getChildren`. */
 const MAX_SESSIONS_PER_PROJECT_VIEW = 5;

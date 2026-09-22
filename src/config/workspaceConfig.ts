@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { normalizeFsPath } from './pathUtils';
+import { normalizeFsPath } from '../discovery/pathUtils';
 
 /** A `projects` entry can be a bare root path, or an object naming it — `name` is what makes this file hand-editable. */
 export interface WorkspaceProjectEntry {

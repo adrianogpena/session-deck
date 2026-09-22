@@ -9,7 +9,9 @@
   "engines": {
     "vscode": "^1.93.0"
   },
-  "categories": ["Other"],
+  "categories": [
+    "Other"
+  ],
   "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
@@ -224,11 +226,17 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "node --test out/test/suite/*.test.js",
+    "lint": "eslint src"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.93.0",
-    "typescript": "^5.4.0"
+    "eslint": "^10.11.0",
+    "typescript": "^5.4.0",
+    "typescript-eslint": "^8.70.1"
   }
 }

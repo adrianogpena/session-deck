@@ -60,7 +60,8 @@ function readClaudeSettings(): ClaudeSettings {
     throw new Error(
       `${settingsPath} is not valid JSON (${String(
         error instanceof Error ? error.message : error
-      )}) — fix or back it up before enabling status tracking.`
+      )}) — fix or back it up before enabling status tracking.`,
+      { cause: error }
     );
   }
 }

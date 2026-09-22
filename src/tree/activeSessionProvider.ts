@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { SessionTreeProvider, SessionWithProject } from './sessionProvider';
-import { readEffectiveSessionStatus } from './sessionStatus';
-import { sessionStatusUri } from './sessionStatusDecorationProvider';
+import { readEffectiveSessionStatus } from '../status/sessionStatus';
+import { sessionStatusUri } from '../status/sessionStatusDecorationProvider';
 
 /**
  * A compact companion view for the built-in Explorer sidebar — the reference

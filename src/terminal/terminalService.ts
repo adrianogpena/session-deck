@@ -3,9 +3,10 @@ import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { getClaudeProjectsDir, listProjectDirNames, listSessionFiles } from './claudeStorage';
-import { SessionNode } from './sessionProvider';
-import { clearSessionStatus } from './sessionStatus';
+import { getClaudeProjectsDir, listProjectDirNames, listSessionFiles } from '../discovery/claudeStorage';
+import { SessionNode } from '../tree/sessionProvider';
+import { clearSessionStatus } from '../status/sessionStatus';
+import { buildClaudeNewSessionCommand, buildClaudeResumeCommand } from './claudeCommand';
 
 const execFileAsync = promisify(execFile);
 
@@ -56,6 +57,8 @@ export class ClaudeTerminalService implements vscode.Disposable {
   /** Session ids already claimed by a pending `correlateNewSession` call, so two "New Session" clicks in quick succession can't both grab the same newly-created file. */
   private readonly claimedByCorrelation = new Set<string>();
   private readonly closeListener: vscode.Disposable;
+  /** Memoized `hasClaudeBinary` result — PATH doesn't change mid-session, so there's no need to re-probe it (up to 3 sequential subprocess spawns) on every single session launch. Cleared on manual refresh, same as `gitProject.ts`'s and `claudeStorage.ts`'s caches. */
+  private claudeBinaryCheck: Promise<boolean> | undefined;
 
   public constructor(private readonly outputChannel: vscode.OutputChannel) {
     this.closeListener = vscode.window.onDidCloseTerminal((terminal) => {
@@ -319,13 +322,25 @@ export class ClaudeTerminalService implements vscode.Disposable {
     this.outputChannel.appendLine('[terminal] `claude` executable not found in PATH.');
   }
 
+  /** Call on a manual refresh so a `claude` install that happened mid-session is picked up without a window reload. */
+  public clearClaudeBinaryCache(): void {
+    this.claudeBinaryCheck = undefined;
+  }
+
+  private hasClaudeBinary(): Promise<boolean> {
+    if (!this.claudeBinaryCheck) {
+      this.claudeBinaryCheck = this.probeClaudeBinary();
+    }
+    return this.claudeBinaryCheck;
+  }
+
   /**
    * VS Code's extension host often has a trimmed PATH that excludes what a
    * user's interactive shell profile (~/.zshrc, ~/.bashrc, PowerShell $PROFILE)
    * adds — falls back to checking through the user's actual configured shell
    * before concluding `claude` really isn't installed.
    */
-  private async hasClaudeBinary(): Promise<boolean> {
+  private async probeClaudeBinary(): Promise<boolean> {
     const checker = process.platform === 'win32' ? 'where' : 'which';
 
     try {
@@ -352,19 +367,6 @@ export class ClaudeTerminalService implements vscode.Disposable {
   }
 }
 
-export function buildClaudeResumeCommand(sessionId: string, dangerouslySkipPermissions: boolean): string {
-  const args = ['claude'];
-  if (dangerouslySkipPermissions) {
-    args.push('--dangerously-skip-permissions');
-  }
-  args.push('--resume', assertSafeSessionId(sessionId));
-  return args.join(' ');
-}
-
-export function buildClaudeNewSessionCommand(dangerouslySkipPermissions: boolean): string {
-  return dangerouslySkipPermissions ? 'claude --dangerously-skip-permissions' : 'claude';
-}
-
 /** Every `.jsonl` session file path currently under `root`, for `correlateNewSession`'s before/after diff. */
 function snapshotSessionFilePaths(root: string): Set<string> {
   const result = new Set<string>();
@@ -374,22 +376,6 @@ function snapshotSessionFilePaths(root: string): Set<string> {
     }
   }
   return result;
-}
-
-/**
- * A Claude Code session id is always a plain UUID-shaped token (hex digits and hyphens). Enforced here
- * before it's ever interpolated into a command string sent to a live terminal — a bare token matching
- * this never needs quoting to stay a single, unambiguous argument in bash, PowerShell, *or* cmd.exe
- * alike, which sidesteps having to pick a shell-specific quoting style (the previous POSIX-only
- * single-quote escaping here was silently wrong for a Windows terminal on cmd.exe or PowerShell).
- */
-const SAFE_SESSION_ID = /^[A-Za-z0-9-]+$/;
-
-function assertSafeSessionId(sessionId: string): string {
-  if (!SAFE_SESSION_ID.test(sessionId)) {
-    throw new Error(`Refusing to build a terminal command for an unexpected session id: ${JSON.stringify(sessionId)}`);
-  }
-  return sessionId;
 }
 
 function truncate(text: string, max: number): string {

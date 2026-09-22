@@ -1,15 +1,15 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { SessionTreeProvider, ProjectGroupNode, SessionNode, SessionWithProject } from './sessionProvider';
-import { ActiveSessionProvider } from './activeSessionProvider';
-import { SessionContentProvider, SESSION_SCHEME } from './sessionContentProvider';
-import { clearSearchTextCache, clearSessionMetaCache, readSessionSearchText } from './claudeStorage';
-import { disableStatusTracking, enableStatusTracking, getClaudeSettingsPath, isStatusTrackingEnabled } from './claudeSettings';
-import { resolveProjectRoot, clearProjectRootCache } from './gitProject';
-import { acknowledgeSessionStatus } from './sessionStatus';
-import { SessionStatusDecorationProvider } from './sessionStatusDecorationProvider';
-import { DeckState } from './state';
-import { ClaudeTerminalService } from './terminalService';
+import { SessionTreeProvider, ProjectGroupNode, SessionNode, SessionWithProject } from './tree/sessionProvider';
+import { ActiveSessionProvider } from './tree/activeSessionProvider';
+import { SessionContentProvider, SESSION_SCHEME } from './content/sessionContentProvider';
+import { clearSearchTextCache, clearSessionMetaCache, readSessionSearchText } from './discovery/claudeStorage';
+import { disableStatusTracking, enableStatusTracking, getClaudeSettingsPath, isStatusTrackingEnabled } from './status/claudeSettings';
+import { resolveProjectRoot, clearProjectRootCache } from './discovery/gitProject';
+import { acknowledgeSessionStatus } from './status/sessionStatus';
+import { SessionStatusDecorationProvider } from './status/sessionStatusDecorationProvider';
+import { DeckState } from './config/state';
+import { ClaudeTerminalService } from './terminal/terminalService';
 import {
   addProjectToWorkspaceList,
   getConfigFsPath,
@@ -18,7 +18,7 @@ import {
   removeProjectFromWorkspaceList,
   setWorkspaceProjectName,
   writeWorkspaceProjectEntries,
-} from './workspaceConfig';
+} from './config/workspaceConfig';
 
 export function activate(context: vscode.ExtensionContext) {
   const state = new DeckState(context.globalState);
@@ -57,6 +57,7 @@ export function activate(context: vscode.ExtensionContext) {
       clearProjectRootCache();
       clearSessionMetaCache();
       clearSearchTextCache();
+      terminalService.clearClaudeBinaryCache();
       treeProvider.refresh();
       activeSessionProvider.refresh();
     }),
@@ -404,7 +405,7 @@ async function renameSession(node: SessionNode, state: DeckState, tree: SessionT
 }
 
 function statusHookCommand(context: vscode.ExtensionContext): string {
-  const scriptPath = path.join(context.extensionPath, 'out', 'reportStatus.js');
+  const scriptPath = path.join(context.extensionPath, 'out', 'status', 'reportStatus.js');
   return `node "${scriptPath}"`;
 }
 

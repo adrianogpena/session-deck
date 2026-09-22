@@ -2,8 +2,8 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
-import { extractAssistantDisplayText, extractText, getClaudeProjectsDir, isDisplayableUserPrompt } from './claudeStorage';
-import { isInside } from './pathUtils';
+import { extractAssistantDisplayText, extractText, getClaudeProjectsDir, isDisplayableUserPrompt } from '../discovery/claudeStorage';
+import { isInside } from '../discovery/pathUtils';
 
 /** Custom URI scheme for the virtual, read-only documents that back the single reusable session tab. */
 export const SESSION_SCHEME = 'session-deck';
@@ -46,22 +46,28 @@ async function renderTranscript(filePath: string, sessionId: string): Promise<st
       continue;
     }
 
-    let record: any;
+    let record: unknown;
     try {
       record = JSON.parse(raw);
     } catch {
       continue;
     }
+    if (!record || typeof record !== 'object') {
+      continue;
+    }
 
-    if (record.type === 'user' && record.message?.role === 'user') {
-      const text = extractText(record.message.content).trim();
+    const { type, message } = record as Record<string, unknown>;
+    const msg = message as { role?: string; content?: unknown } | undefined;
+
+    if (type === 'user' && msg?.role === 'user') {
+      const text = extractText(msg.content).trim();
       if (text && isDisplayableUserPrompt(text)) {
         lines.push('## You', '', text, '');
       }
-    } else if (record.type === 'assistant' && record.message?.role === 'assistant') {
+    } else if (type === 'assistant' && msg?.role === 'assistant') {
       // Thinking/tool_use blocks are skipped for readability; consider a
       // collapsible representation of tool calls once this moves past skeleton stage.
-      const text = extractAssistantDisplayText(record.message.content).trim();
+      const text = extractAssistantDisplayText(msg.content).trim();
       if (text) {
         lines.push('## Claude', '', text, '');
       }
