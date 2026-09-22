@@ -82,8 +82,28 @@ export class ClaudeTerminalService implements vscode.Disposable {
     });
   }
 
+  /**
+   * Closes every session terminal Session Deck opened, on top of the base
+   * `closeListener` teardown — called when the extension host shuts down
+   * (window close/reload, wired via `context.subscriptions` in extension.ts).
+   * Each terminal already opts out of VS Code's persistent-session restore via
+   * `isTransient: true` at creation time (see `launch`/`startNewSession`) —
+   * that's the part that actually matters, since `deactivate()`/`dispose()`
+   * aren't reliably called on an abrupt window close (only on a graceful
+   * reload/disable), so nothing here could be depended on to run in time
+   * anyway. This is just belt-and-suspenders cleanup for the cases where it
+   * *does* run: closing the terminal outright instead of leaving it open with
+   * a dead process, and clearing its status so a "running"/"waiting" dot
+   * doesn't get stuck for a session Claude Code never got to send its own
+   * `SessionEnd` for.
+   */
   public dispose(): void {
     this.closeListener.dispose();
+    for (const [sessionId, terminal] of this.sessionTerminals) {
+      clearSessionStatus(sessionId);
+      terminal.dispose();
+    }
+    this.sessionTerminals.clear();
   }
 
   /** Session ids that currently have a tracked, still-open terminal — what the Explorer "Open Sessions" view shows. */
@@ -164,6 +184,7 @@ export class ClaudeTerminalService implements vscode.Disposable {
       cwd,
       location: { viewColumn: vscode.ViewColumn.Active },
       iconPath: this.claudeMarkIconPath(),
+      isTransient: true,
     });
     terminal.show(true);
     void this.correlateNewSession(terminal, projectName);
@@ -319,6 +340,7 @@ export class ClaudeTerminalService implements vscode.Disposable {
       cwd: session.cwd,
       location: { viewColumn: vscode.ViewColumn.Active },
       iconPath: this.claudeMarkIconPath(),
+      isTransient: true,
     });
     this.trackTerminal(session.sessionId, terminal);
     terminal.show(true);

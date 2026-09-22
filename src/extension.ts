@@ -4,7 +4,13 @@ import { SessionTreeProvider, ProjectGroupNode, SessionNode, SessionWithProject 
 import { ActiveSessionProvider } from './tree/activeSessionProvider';
 import { SessionContentProvider, SESSION_SCHEME } from './content/sessionContentProvider';
 import { clearSearchTextCache, clearSessionMetaCache, readSessionSearchText } from './discovery/claudeStorage';
-import { disableStatusTracking, enableStatusTracking, getClaudeSettingsPath, isStatusTrackingEnabled } from './status/claudeSettings';
+import {
+  disableStatusTracking,
+  enableStatusTracking,
+  getClaudeSettingsPath,
+  isStatusTrackingEnabled,
+  isStatusTrackingPresent,
+} from './status/claudeSettings';
 import { resolveProjectRoot, clearProjectRootCache } from './discovery/gitProject';
 import { acknowledgeSessionStatus } from './status/sessionStatus';
 import { SessionStatusDecorationProvider } from './status/sessionStatusDecorationProvider';
@@ -92,7 +98,7 @@ export function activate(context: vscode.ExtensionContext) {
       enableStatusTrackingCommand(context, treeProvider)
     ),
     vscode.commands.registerCommand('sessionDeck.disableStatusTracking', () =>
-      disableStatusTrackingCommand(context, treeProvider)
+      disableStatusTrackingCommand(treeProvider)
     )
   );
 
@@ -464,23 +470,21 @@ async function enableStatusTrackingCommand(context: vscode.ExtensionContext, tre
   );
 }
 
-async function disableStatusTrackingCommand(context: vscode.ExtensionContext, tree: SessionTreeProvider): Promise<void> {
-  const command = statusHookCommand(context);
-
-  let enabled: boolean;
+async function disableStatusTrackingCommand(tree: SessionTreeProvider): Promise<void> {
+  let present: boolean;
   try {
-    enabled = isStatusTrackingEnabled(command);
+    present = isStatusTrackingPresent();
   } catch (error) {
     vscode.window.showErrorMessage(errorMessage(error));
     return;
   }
-  if (!enabled) {
+  if (!present) {
     vscode.window.showInformationMessage('Session Deck status tracking is not currently enabled.');
     return;
   }
 
   try {
-    disableStatusTracking(command);
+    disableStatusTracking();
   } catch (error) {
     vscode.window.showErrorMessage(errorMessage(error));
     return;
