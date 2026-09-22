@@ -1,0 +1,47 @@
+import * as vscode from 'vscode';
+import { readEffectiveSessionStatus } from './sessionStatus';
+
+/** URI scheme used purely to give session tree items a `resourceUri` this provider can key decorations off of. */
+export const SESSION_STATUS_DECORATION_SCHEME = 'session-deck-status';
+
+export function sessionStatusUri(sessionId: string): vscode.Uri {
+  return vscode.Uri.parse(`${SESSION_STATUS_DECORATION_SCHEME}:/${sessionId}`);
+}
+
+/**
+ * Colors a session's status via `vscode.FileDecoration` instead of its
+ * `TreeItem.iconPath` — a plain `ThemeIcon` colored with a `ThemeColor` gets
+ * washed out to the row's plain foreground color when that row is selected
+ * (a VS Code tree-rendering quirk: selection highlighting overrides custom
+ * icon colors for contrast). File decorations are a separate rendering layer
+ * — the same mechanism Git/SCM status colors use — and reliably keep their
+ * color regardless of selection state.
+ */
+export class SessionStatusDecorationProvider implements vscode.FileDecorationProvider {
+  private readonly _onDidChangeFileDecorations = new vscode.EventEmitter<vscode.Uri | vscode.Uri[] | undefined>();
+  readonly onDidChangeFileDecorations = this._onDidChangeFileDecorations.event;
+
+  /** Called whenever the underlying status files may have changed, so decorations get re-queried. */
+  refresh(): void {
+    this._onDidChangeFileDecorations.fire(undefined);
+  }
+
+  provideFileDecoration(uri: vscode.Uri): vscode.FileDecoration | undefined {
+    if (uri.scheme !== SESSION_STATUS_DECORATION_SCHEME) {
+      return undefined;
+    }
+    const sessionId = uri.path.replace(/^\//, '');
+    const status = readEffectiveSessionStatus(sessionId);
+
+    switch (status?.status) {
+      case 'running':
+        return { badge: '●', color: new vscode.ThemeColor('charts.red'), tooltip: 'Running' };
+      case 'waiting':
+        return { badge: '●', color: new vscode.ThemeColor('charts.yellow'), tooltip: 'Waiting for input' };
+      case 'done':
+        return { badge: '●', color: new vscode.ThemeColor('charts.green'), tooltip: 'Done' };
+      default:
+        return undefined;
+    }
+  }
+}

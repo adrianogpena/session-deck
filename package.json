@@ -1,0 +1,209 @@
+{
+  "name": "session-deck",
+  "displayName": "Session Deck",
+  "description": "Multi-project AI coding session explorer (Claude Code today, more agents planned) with a single, reusable session tab",
+  "version": "0.0.1",
+  "private": true,
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "sessionDeck",
+          "title": "Session Deck",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "sessionDeck": [
+        {
+          "id": "sessionDeck.sessions",
+          "name": "Sessions"
+        }
+      ],
+      "explorer": [
+        {
+          "id": "sessionDeck.activeSession",
+          "name": "Active Claude Session",
+          "visibility": "collapsed"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "sessionDeck.sessions",
+        "contents": "No projects configured for this workspace yet — .vscode/session-deck.json is missing or empty.\n[Edit session-deck.json](command:sessionDeck.editProjectList)\n[Add Project](command:sessionDeck.addProject)"
+      },
+      {
+        "view": "sessionDeck.activeSession",
+        "contents": "No active Claude session right now.\n[Enable Live Status Tracking](command:sessionDeck.enableStatusTracking)"
+      }
+    ],
+    "commands": [
+      {
+        "command": "sessionDeck.refresh",
+        "title": "Session Deck: Refresh Sessions",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "sessionDeck.openSession",
+        "title": "Session Deck: Resume Session in Terminal"
+      },
+      {
+        "command": "sessionDeck.openSessionDangerously",
+        "title": "Session Deck: Resume Session in Terminal (Skip Permissions)"
+      },
+      {
+        "command": "sessionDeck.viewTranscript",
+        "title": "Session Deck: View Transcript",
+        "icon": "$(preview)"
+      },
+      {
+        "command": "sessionDeck.openSessionInNewTerminal",
+        "title": "Session Deck: Open Session in New Terminal",
+        "icon": "$(empty-window)"
+      },
+      {
+        "command": "sessionDeck.search",
+        "title": "Session Deck: Search Sessions",
+        "icon": "$(search)"
+      },
+      {
+        "command": "sessionDeck.addProject",
+        "title": "Session Deck: Add Project to Workspace",
+        "icon": "$(add)"
+      },
+      {
+        "command": "sessionDeck.editProjectList",
+        "title": "Session Deck: Edit Project List (session-deck.json)",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "sessionDeck.renameProject",
+        "title": "Session Deck: Rename Project",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "sessionDeck.removeProject",
+        "title": "Session Deck: Remove Project",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "sessionDeck.renameSession",
+        "title": "Session Deck: Rename Session",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "sessionDeck.enableStatusTracking",
+        "title": "Session Deck: Enable Live Status Tracking"
+      },
+      {
+        "command": "sessionDeck.disableStatusTracking",
+        "title": "Session Deck: Disable Live Status Tracking"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "sessionDeck.search",
+          "when": "view == sessionDeck.sessions",
+          "group": "navigation"
+        },
+        {
+          "command": "sessionDeck.addProject",
+          "when": "view == sessionDeck.sessions",
+          "group": "navigation"
+        },
+        {
+          "command": "sessionDeck.editProjectList",
+          "when": "view == sessionDeck.sessions",
+          "group": "navigation"
+        },
+        {
+          "command": "sessionDeck.refresh",
+          "when": "view == sessionDeck.sessions",
+          "group": "navigation"
+        },
+        {
+          "command": "sessionDeck.refresh",
+          "when": "view == sessionDeck.activeSession",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "sessionDeck.renameProject",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckProject",
+          "group": "inline@1"
+        },
+        {
+          "command": "sessionDeck.removeProject",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckProject",
+          "group": "inline@2"
+        },
+        {
+          "command": "sessionDeck.renameProject",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckProject",
+          "group": "1_modification"
+        },
+        {
+          "command": "sessionDeck.removeProject",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckProject",
+          "group": "1_modification"
+        },
+        {
+          "command": "sessionDeck.viewTranscript",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
+          "group": "inline@1"
+        },
+        {
+          "command": "sessionDeck.openSessionInNewTerminal",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
+          "group": "inline@2"
+        },
+        {
+          "command": "sessionDeck.renameSession",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
+          "group": "inline@3"
+        },
+        {
+          "command": "sessionDeck.viewTranscript",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
+          "group": "1_modification"
+        },
+        {
+          "command": "sessionDeck.openSessionInNewTerminal",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
+          "group": "1_modification"
+        },
+        {
+          "command": "sessionDeck.renameSession",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
+          "group": "1_modification"
+        },
+        {
+          "command": "sessionDeck.openSessionDangerously",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
+          "group": "2_danger"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.93.0",
+    "typescript": "^5.4.0"
+  }
+}
