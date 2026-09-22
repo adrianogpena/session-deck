@@ -83,7 +83,7 @@
       {
         "command": "sessionDeck.newSession",
         "title": "Session Deck: New Session",
-        "icon": "$(add)"
+        "icon": "$(comment-add)"
       },
       {
         "command": "sessionDeck.newSessionDangerously",
@@ -92,12 +92,12 @@
       {
         "command": "sessionDeck.editProjectList",
         "title": "Session Deck: Edit Project List (session-deck.json)",
-        "icon": "$(edit)"
+        "icon": "$(json)"
       },
       {
         "command": "sessionDeck.renameProject",
         "title": "Session Deck: Rename Project",
-        "icon": "$(edit)"
+        "icon": "$(rename)"
       },
       {
         "command": "sessionDeck.removeProject",
@@ -107,7 +107,7 @@
       {
         "command": "sessionDeck.renameSession",
         "title": "Session Deck: Rename Session",
-        "icon": "$(edit)"
+        "icon": "$(rename)"
       },
       {
         "command": "sessionDeck.enableStatusTracking",

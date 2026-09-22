@@ -18,7 +18,7 @@ export class ActiveSessionProvider implements vscode.TreeDataProvider<SessionWit
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
-  constructor(private readonly sessionTree: SessionTreeProvider) {}
+  constructor(private readonly sessionTree: SessionTreeProvider, private readonly extensionUri: vscode.Uri) {}
 
   refresh(): void {
     this._onDidChangeTreeData.fire();
@@ -31,7 +31,7 @@ export class ActiveSessionProvider implements vscode.TreeDataProvider<SessionWit
     const item = new vscode.TreeItem(session.displayName, vscode.TreeItemCollapsibleState.None);
     item.description = `${projectDisplayName} · ${status?.status === 'running' ? 'running' : 'waiting for input'}`;
     item.tooltip = `${session.cwd}\n${session.sessionId}`;
-    item.iconPath = new vscode.ThemeIcon('comment-discussion');
+    item.iconPath = vscode.Uri.joinPath(this.extensionUri, 'resources', 'claude-mark.svg');
     // Same decoration-based coloring as the main tree — see sessionStatusDecorationProvider.ts.
     item.resourceUri = sessionStatusUri(session.sessionId);
     item.contextValue = 'sessionDeckActiveSession';

@@ -22,8 +22,8 @@ import {
 
 export function activate(context: vscode.ExtensionContext) {
   const state = new DeckState(context.globalState);
-  const treeProvider = new SessionTreeProvider(state);
-  const activeSessionProvider = new ActiveSessionProvider(treeProvider);
+  const treeProvider = new SessionTreeProvider(state, context.extensionUri);
+  const activeSessionProvider = new ActiveSessionProvider(treeProvider, context.extensionUri);
   const contentProvider = new SessionContentProvider();
   const statusDecorationProvider = new SessionStatusDecorationProvider();
   const outputChannel = vscode.window.createOutputChannel('Session Deck');

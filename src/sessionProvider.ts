@@ -63,7 +63,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<ClaudeDeckNode | undefined | void>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
-  constructor(private readonly state: DeckState) {}
+  constructor(private readonly state: DeckState, private readonly extensionUri: vscode.Uri) {}
 
   refresh(): void {
     this._onDidChangeTreeData.fire();
@@ -105,7 +105,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
     if (element.kind === 'project') {
       const item = new vscode.TreeItem(element.displayName, vscode.TreeItemCollapsibleState.Collapsed);
       item.contextValue = 'sessionDeckProject';
-      item.iconPath = new vscode.ThemeIcon('folder');
+      item.iconPath = new vscode.ThemeIcon('briefcase');
       const tooltipLines = [
         element.rootPath,
         element.members.length > 1
@@ -127,7 +127,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
     item.tooltip = [`${element.cwd}`, element.sessionId, element.filePath, statusTooltipLine(status)]
       .filter(Boolean)
       .join('\n');
-    item.iconPath = new vscode.ThemeIcon('comment-discussion');
+    item.iconPath = vscode.Uri.joinPath(this.extensionUri, 'resources', 'claude-mark.svg');
     // Status color lives on a FileDecoration (see sessionStatusDecorationProvider.ts), not
     // this icon: a ThemeIcon's ThemeColor gets washed out to the row's plain foreground when
     // the row is selected, but a decoration is a separate layer that keeps its color regardless.
