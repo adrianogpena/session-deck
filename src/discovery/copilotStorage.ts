@@ -70,34 +70,76 @@ function withDb<T>(fn: (db: DatabaseSync) => T): T {
 /**
  * Every *real* Copilot CLI session across every project, newest first — the Copilot analogue of
  * `claudeStorage.ts`'s directory scan, and the input `sessionProvider.ts` groups by resolved git
- * root. "Real" excludes a row with zero turns whose `user_message` actually has content: unlike
- * Claude Code (which, per observed behavior, writes nothing discoverable until a session's first
- * real prompt), Copilot CLI inserts a session's `sessions` row immediately at startup — confirmed
- * live: creating a new session via "+ New Session" made it appear in the tree instantly, before
- * typing anything, which is exactly the "opened by mistake and closed" case Claude Code's own
- * later-write timing already avoids for free. Filtering here (once, in SQL) rather than per-caller
- * keeps that behavior symmetric with Claude's for every consumer — the main tree, the archive cap,
- * the Explorer view, search — since this is the only place any of them ever list Copilot sessions
- * from (confirmed: nothing else calls this function).
+ * root. "Real" excludes a session with no actual prompt yet: unlike Claude Code (which, per
+ * observed behavior, writes nothing discoverable until a session's first real prompt), Copilot CLI
+ * inserts a session's `sessions` row immediately at startup — confirmed live: creating a new
+ * session via "+ New Session" made it appear in the tree instantly, before typing anything, which
+ * is exactly the "opened by mistake and closed" case Claude Code's own later-write timing already
+ * avoids for free. Filtering here (once) rather than per-caller keeps that behavior symmetric with
+ * Claude's for every consumer — the main tree, the archive cap, the Explorer view, search — since
+ * this is the only place any of them ever list Copilot sessions from (confirmed: nothing else calls
+ * this function).
+ *
+ * The check itself is `copilotSessionHasStarted`, not a SQL condition on `sessions`/`turns` —
+ * `turns` turned out to not be a live signal at all: confirmed live, a session that had already had
+ * a real prompt answered still had zero rows in `turns` for it until the `copilot` process was
+ * actually exited, so filtering on it left a session invisible for the entire time it was actually
+ * being used (the opposite of the goal). `events.jsonl` (already proven live — status tracking
+ * depends on it updating in real time) is the reliable signal instead.
  */
 export function listCopilotSessions(): CopilotSessionRow[] {
   if (!copilotStoreExists()) {
     return [];
   }
-  return withDb((db) => {
-    const rows = db
+  const rows = withDb((db) => {
+    const result = db
       .prepare(
-        `SELECT id, cwd, repository, branch, summary, created_at AS createdAt, updated_at AS updatedAt
-         FROM sessions
-         WHERE EXISTS (
-           SELECT 1 FROM turns
-           WHERE turns.session_id = sessions.id AND trim(COALESCE(turns.user_message, '')) != ''
-         )
-         ORDER BY updated_at DESC`
+        'SELECT id, cwd, repository, branch, summary, created_at AS createdAt, updated_at AS updatedAt FROM sessions ORDER BY updated_at DESC'
       )
       .all();
-    return rows as unknown as CopilotSessionRow[];
+    return result as unknown as CopilotSessionRow[];
   });
+  return rows.filter((row) => copilotSessionHasStarted(row.id));
+}
+
+/**
+ * Once a session's `events.jsonl` is confirmed to contain a real `user.message` event, it's
+ * remembered permanently rather than re-checked on every call — this is a monotonic fact (a
+ * session that's been used once stays used forever), so re-reading its (potentially large, for a
+ * long-running session) event log on every tree refresh would be pure waste. A session not yet
+ * confirmed stays cheap to (re-)check too, since an unused session's log is still small. Never
+ * cleared by "Session Deck: Refresh Sessions" for the same reason: there is nothing here that could
+ * have gone stale and need a fresh read, unlike the mtime-keyed caches in `claudeStorage.ts`.
+ */
+const sessionsConfirmedStarted = new Set<string>();
+
+function copilotSessionHasStarted(sessionId: string): boolean {
+  if (sessionsConfirmedStarted.has(sessionId)) {
+    return true;
+  }
+  let content: string;
+  try {
+    content = fs.readFileSync(getCopilotSessionEventsLogPath(sessionId), 'utf8');
+  } catch {
+    return false; // No events file yet (or unreadable) — nothing has happened in this session yet.
+  }
+  const hasUserMessage = content
+    .split('\n')
+    .some((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        return false;
+      }
+      try {
+        return (JSON.parse(trimmed) as { type?: unknown }).type === 'user.message';
+      } catch {
+        return false; // Tolerate a partial trailing line mid-write — best-effort, matching copilotStatusWatcher.ts's tolerance for the same file.
+      }
+    });
+  if (hasUserMessage) {
+    sessionsConfirmedStarted.add(sessionId);
+  }
+  return hasUserMessage;
 }
 
 /** A session's turns in order — for rendering a read-only "transcript" the same way `claudeStorage.ts`'s functions do for Claude. */
