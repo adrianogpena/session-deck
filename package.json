@@ -113,6 +113,16 @@
         "icon": "$(rename)"
       },
       {
+        "command": "sessionDeck.archiveSession",
+        "title": "Session Deck: Archive Session",
+        "icon": "$(file-zip)"
+      },
+      {
+        "command": "sessionDeck.unarchiveSession",
+        "title": "Session Deck: Unarchive Session",
+        "icon": "$(inbox)"
+      },
+      {
         "command": "sessionDeck.enableStatusTracking",
         "title": "Session Deck: Enable Live Status Tracking"
       },
@@ -201,6 +211,11 @@
           "group": "inline@3"
         },
         {
+          "command": "sessionDeck.archiveSession",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
+          "group": "inline@4"
+        },
+        {
           "command": "sessionDeck.viewTranscript",
           "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
           "group": "1_modification"
@@ -216,8 +231,58 @@
           "group": "1_modification"
         },
         {
+          "command": "sessionDeck.archiveSession",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
+          "group": "1_modification"
+        },
+        {
           "command": "sessionDeck.openSessionDangerously",
           "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
+          "group": "2_danger"
+        },
+        {
+          "command": "sessionDeck.viewTranscript",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckArchivedSession",
+          "group": "inline@1"
+        },
+        {
+          "command": "sessionDeck.openSessionInNewTerminal",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckArchivedSession",
+          "group": "inline@2"
+        },
+        {
+          "command": "sessionDeck.renameSession",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckArchivedSession",
+          "group": "inline@3"
+        },
+        {
+          "command": "sessionDeck.unarchiveSession",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckArchivedSession",
+          "group": "inline@4"
+        },
+        {
+          "command": "sessionDeck.viewTranscript",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckArchivedSession",
+          "group": "1_modification"
+        },
+        {
+          "command": "sessionDeck.openSessionInNewTerminal",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckArchivedSession",
+          "group": "1_modification"
+        },
+        {
+          "command": "sessionDeck.renameSession",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckArchivedSession",
+          "group": "1_modification"
+        },
+        {
+          "command": "sessionDeck.unarchiveSession",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckArchivedSession",
+          "group": "1_modification"
+        },
+        {
+          "command": "sessionDeck.openSessionDangerously",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckArchivedSession",
           "group": "2_danger"
         }
       ]

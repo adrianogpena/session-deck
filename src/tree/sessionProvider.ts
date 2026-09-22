@@ -14,6 +14,7 @@ import { ensureSessionStatusDir, getSessionStatusDir, readEffectiveSessionStatus
 import { sessionStatusUri } from '../status/sessionStatusDecorationProvider';
 import { DeckState } from '../config/state';
 import { readWorkspaceProjectEntries } from '../config/workspaceConfig';
+import { selectSessionsToArchive } from './archivePolicy';
 
 /** How many of a project's most recent sessions the main tree shows — see `getChildren`. */
 const MAX_SESSIONS_PER_PROJECT_VIEW = 5;
@@ -52,7 +53,16 @@ export class SessionNode {
   ) {}
 }
 
-export type ClaudeDeckNode = ProjectGroupNode | SessionNode;
+/** A project's "Archived" bucket — only ever shown as a child of a project that has at least one archived session. */
+export class ArchiveFolderNode {
+  readonly kind = 'archiveFolder' as const;
+  constructor(
+    public readonly project: ProjectGroupNode,
+    public readonly archivedCount: number
+  ) {}
+}
+
+export type ClaudeDeckNode = ProjectGroupNode | SessionNode | ArchiveFolderNode;
 
 export interface SessionWithProject {
   session: SessionNode;
@@ -63,7 +73,15 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<ClaudeDeckNode | undefined | void>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
-  constructor(private readonly state: DeckState, private readonly extensionUri: vscode.Uri) {}
+  /** Session ids seen for each project on the previous pass, keyed by `normalizeFsPath(rootPath)` — see `enforceArchiveCap`. */
+  private readonly knownSessionIdsByProject = new Map<string, Set<string>>();
+
+  constructor(
+    private readonly state: DeckState,
+    private readonly extensionUri: vscode.Uri,
+    /** Called with the ids of any sessions `enforceArchiveCap` just auto-archived, so their terminals (if open) can be closed. */
+    private readonly onSessionsArchived?: (sessionIds: string[]) => void
+  ) {}
 
   refresh(): void {
     this._onDidChangeTreeData.fire();
@@ -120,6 +138,15 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
       return item;
     }
 
+    if (element.kind === 'archiveFolder') {
+      const item = new vscode.TreeItem(`Archived (${element.archivedCount})`, vscode.TreeItemCollapsibleState.Collapsed);
+      item.contextValue = 'sessionDeckArchiveFolder';
+      item.iconPath = new vscode.ThemeIcon('file-zip');
+      item.tooltip = `Sessions auto-archived once "${element.project.displayName}" had more than ${MAX_SESSIONS_PER_PROJECT_VIEW} active sessions, or archived by hand.`;
+      return item;
+    }
+
+    const archived = this.state.isSessionArchived(element.sessionId);
     const item = new vscode.TreeItem(element.displayName, vscode.TreeItemCollapsibleState.None);
     const relSubpath = relativeSubpath(element.projectRoot, element.cwd);
     item.description = relSubpath ? `${relSubpath} · ${timeAgo(element.lastModified)}` : timeAgo(element.lastModified);
@@ -132,7 +159,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
     // this icon: a ThemeIcon's ThemeColor gets washed out to the row's plain foreground when
     // the row is selected, but a decoration is a separate layer that keeps its color regardless.
     item.resourceUri = sessionStatusUri(element.sessionId);
-    item.contextValue = 'sessionDeckSession';
+    item.contextValue = archived ? 'sessionDeckArchivedSession' : 'sessionDeckSession';
     item.command = {
       command: 'sessionDeck.openSession',
       title: 'Open Claude Session',
@@ -146,12 +173,22 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
       return this.getProjectGroups();
     }
     if (element.kind === 'project') {
+      const candidates = await this.gatherCandidates(element);
+      const active = candidates.filter((c) => !this.state.isSessionArchived(c.sessionId));
+      const archivedCount = candidates.length - active.length;
       // Capped for readability — a project can easily accumulate dozens of
-      // sessions over time. Search and the "Active Claude Session" Explorer
-      // view both go through listAllSessions() instead, which is uncapped, so
-      // an older session is still findable/still shows as active if it's the
-      // one actually running.
-      return this.getSessionsForGroup(element, MAX_SESSIONS_PER_PROJECT_VIEW);
+      // sessions over time. Anything beyond the cap lives under "Archived"
+      // instead (auto-moved there — see enforceArchiveCap); Search and the
+      // "Open Claude Sessions" Explorer view both go through listAllSessions()
+      // instead, which is uncapped and includes archived ones, so nothing is
+      // ever unfindable.
+      const sessions = await this.toSessionNodes(active.slice(0, MAX_SESSIONS_PER_PROJECT_VIEW), element);
+      return archivedCount > 0 ? [...sessions, new ArchiveFolderNode(element, archivedCount)] : sessions;
+    }
+    if (element.kind === 'archiveFolder') {
+      const candidates = await this.gatherCandidates(element.project);
+      const archived = candidates.filter((c) => this.state.isSessionArchived(c.sessionId));
+      return this.toSessionNodes(archived, element.project);
     }
     return [];
   }
@@ -213,21 +250,13 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
   }
 
   /**
-   * `limit`, when given, keeps only the N most recently modified sessions —
-   * cheaply, by sorting on `fs.statSync` mtime *before* ever parsing a
-   * transcript for its title, so a project with dozens of old sessions doesn't
-   * pay to read all of them just to display the newest few.
+   * Every session file across a group's members, newest first (by `fs.statSync` mtime, cheaper than
+   * parsing a transcript for its title) — archived and active alike; callers filter by
+   * `state.isSessionArchived` for whichever subset they want. Also the single choke point
+   * `enforceArchiveCap` runs from, so every caller gets the same auto-archiving applied.
    */
-  private async getSessionsForGroup(group: ProjectGroupNode, limit?: number): Promise<SessionNode[]> {
-    interface Candidate {
-      dirName: string;
-      cwd: string;
-      filePath: string;
-      sessionId: string;
-      mtime: Date;
-    }
-
-    const candidates: Candidate[] = [];
+  private async gatherCandidates(group: ProjectGroupNode): Promise<SessionCandidate[]> {
+    const candidates: SessionCandidate[] = [];
     for (const { dirName, cwd } of group.members) {
       for (const file of listSessionFiles(dirName)) {
         const filePath = path.join(getClaudeProjectsDir(), dirName, file);
@@ -241,10 +270,13 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
       }
     }
     candidates.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
-    const selected = limit !== undefined ? candidates.slice(0, limit) : candidates;
+    await this.enforceArchiveCap(group, candidates);
+    return candidates;
+  }
 
+  private async toSessionNodes(candidates: SessionCandidate[], group: ProjectGroupNode): Promise<SessionNode[]> {
     return Promise.all(
-      selected.map(async (c) => {
+      candidates.map(async (c) => {
         const meta = await readSessionMeta(c.filePath);
         const displayName = this.state.getSessionName(c.sessionId) ?? meta.firstPrompt ?? '(empty session)';
         return new SessionNode(c.dirName, c.sessionId, c.filePath, displayName, c.mtime, c.cwd, group.rootPath);
@@ -252,18 +284,61 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
     );
   }
 
-  /** Every session across every configured project, for the "Search Sessions" command. */
+  /**
+   * Keeps at most {@link MAX_SESSIONS_PER_PROJECT_VIEW} *active* (non-archived) sessions per project by
+   * auto-archiving the oldest excess — but only in response to a genuinely new session showing up, never
+   * just because a project already had more than the cap (tracked via `knownSessionIdsByProject`, seeded
+   * without archiving anything on the first pass each VS Code session sees a given project — otherwise
+   * every pre-existing project with a long history would get mass-archived the moment this shipped).
+   * Closes each evicted session's terminal too, via `onSessionsArchived` — an archived session shouldn't
+   * be left running in a tab that's no longer visible anywhere in the tree.
+   */
+  private async enforceArchiveCap(group: ProjectGroupNode, candidates: SessionCandidate[]): Promise<void> {
+    const key = normalizeFsPath(group.rootPath);
+    const currentIds = new Set(candidates.map((c) => c.sessionId));
+    const known = this.knownSessionIdsByProject.get(key);
+    this.knownSessionIdsByProject.set(key, currentIds);
+
+    if (!known) {
+      return;
+    }
+
+    const newlyDiscovered = new Set([...currentIds].filter((id) => !known.has(id)));
+    const activeIdsByRecency = candidates
+      .filter((c) => !this.state.isSessionArchived(c.sessionId))
+      .map((c) => c.sessionId);
+    const toArchive = selectSessionsToArchive(activeIdsByRecency, MAX_SESSIONS_PER_PROJECT_VIEW, newlyDiscovered);
+    if (toArchive.length === 0) {
+      return;
+    }
+
+    for (const sessionId of toArchive) {
+      await this.state.setSessionArchived(sessionId, true);
+    }
+    this.onSessionsArchived?.(toArchive);
+  }
+
+  /** Every session across every configured project, archived included — for "Search Sessions", so nothing archived becomes unfindable. */
   async listAllSessions(): Promise<SessionWithProject[]> {
     const groups = await this.getProjectGroups();
     const result: SessionWithProject[] = [];
     for (const group of groups) {
-      const sessions = await this.getSessionsForGroup(group);
+      const candidates = await this.gatherCandidates(group);
+      const sessions = await this.toSessionNodes(candidates, group);
       for (const session of sessions) {
         result.push({ session, projectDisplayName: group.displayName });
       }
     }
     return result;
   }
+}
+
+interface SessionCandidate {
+  dirName: string;
+  cwd: string;
+  filePath: string;
+  sessionId: string;
+  mtime: Date;
 }
 
 /** The cwd a ~/.claude/projects/<dirName> folder was created for, read from its first session. */

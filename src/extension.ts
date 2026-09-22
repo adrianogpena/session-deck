@@ -28,11 +28,17 @@ import {
 
 export function activate(context: vscode.ExtensionContext) {
   const state = new DeckState(context.globalState);
-  const treeProvider = new SessionTreeProvider(state, context.extensionUri);
   const contentProvider = new SessionContentProvider();
   const statusDecorationProvider = new SessionStatusDecorationProvider();
   const outputChannel = vscode.window.createOutputChannel('Session Deck');
   const terminalService = new ClaudeTerminalService(outputChannel, context.extensionUri);
+  // The cap-eviction callback: a session auto-archived because a project went over
+  // MAX_SESSIONS_PER_PROJECT_VIEW shouldn't be left running in a now-hidden tab.
+  const treeProvider = new SessionTreeProvider(state, context.extensionUri, (sessionIds) => {
+    for (const sessionId of sessionIds) {
+      terminalService.closeSessionTerminal(sessionId);
+    }
+  });
   const activeSessionProvider = new ActiveSessionProvider(treeProvider, terminalService, context.extensionUri);
 
   const treeView = vscode.window.createTreeView('sessionDeck.sessions', {
@@ -68,17 +74,25 @@ export function activate(context: vscode.ExtensionContext) {
       treeProvider.refresh();
       activeSessionProvider.refresh();
     }),
-    vscode.commands.registerCommand('sessionDeck.openSession', (session: SessionNode) =>
-      terminalService.openSession(session)
-    ),
+    vscode.commands.registerCommand('sessionDeck.openSession', async (session: SessionNode) => {
+      await ensureSessionActive(session, state, treeProvider);
+      await terminalService.openSession(session);
+    }),
     vscode.commands.registerCommand('sessionDeck.openSessionDangerously', (session: SessionNode) =>
-      openSessionDangerously(session, terminalService)
+      openSessionDangerously(session, state, treeProvider, terminalService)
     ),
-    vscode.commands.registerCommand('sessionDeck.openSessionInNewTerminal', (session: SessionNode) =>
-      terminalService.openSessionInNewTerminal(session)
-    ),
+    vscode.commands.registerCommand('sessionDeck.openSessionInNewTerminal', async (session: SessionNode) => {
+      await ensureSessionActive(session, state, treeProvider);
+      await terminalService.openSessionInNewTerminal(session);
+    }),
     vscode.commands.registerCommand('sessionDeck.viewTranscript', (session: SessionNode) => viewTranscript(session)),
-    vscode.commands.registerCommand('sessionDeck.search', () => searchSessions(treeProvider, terminalService)),
+    vscode.commands.registerCommand('sessionDeck.search', () => searchSessions(treeProvider, state, terminalService)),
+    vscode.commands.registerCommand('sessionDeck.archiveSession', (node: SessionNode) =>
+      archiveSession(node, state, treeProvider, terminalService)
+    ),
+    vscode.commands.registerCommand('sessionDeck.unarchiveSession', (node: SessionNode) =>
+      unarchiveSession(node, state, treeProvider)
+    ),
     vscode.commands.registerCommand('sessionDeck.addProject', () => addProject(treeProvider)),
     vscode.commands.registerCommand('sessionDeck.editProjectList', () => editProjectList()),
     vscode.commands.registerCommand('sessionDeck.newSession', (node: ProjectGroupNode) => newSession(node, terminalService)),
@@ -153,7 +167,12 @@ async function viewTranscript(session: SessionNode): Promise<void> {
 }
 
 /** `claude --resume --dangerously-skip-permissions`, gated behind an explicit confirmation. */
-async function openSessionDangerously(session: SessionNode, terminalService: ClaudeTerminalService): Promise<void> {
+async function openSessionDangerously(
+  session: SessionNode,
+  state: DeckState,
+  tree: SessionTreeProvider,
+  terminalService: ClaudeTerminalService
+): Promise<void> {
   if (!session) {
     return;
   }
@@ -168,9 +187,42 @@ async function openSessionDangerously(session: SessionNode, terminalService: Cla
   if (confirm !== 'Resume') {
     return;
   }
+  await ensureSessionActive(session, state, tree);
   // Always a fresh terminal (never reuses this session's existing terminal, if any) — silently
   // reusing a non-dangerous terminal here would ignore the flag the user just confirmed.
   await terminalService.openSessionInNewTerminal(session, { dangerouslySkipPermissions: true });
+}
+
+/** Resuming an archived session takes it out of the archive — there's no such thing as an actively-open archived one. */
+async function ensureSessionActive(session: SessionNode, state: DeckState, tree: SessionTreeProvider): Promise<void> {
+  if (state.isSessionArchived(session.sessionId)) {
+    await state.setSessionArchived(session.sessionId, false);
+    tree.refresh();
+  }
+}
+
+/** Manual "Archive" (session row inline icon) — also closes the session's terminal if it's currently open, same as an auto-archived one. */
+async function archiveSession(
+  node: SessionNode,
+  state: DeckState,
+  tree: SessionTreeProvider,
+  terminalService: ClaudeTerminalService
+): Promise<void> {
+  if (!node) {
+    return;
+  }
+  terminalService.closeSessionTerminal(node.sessionId);
+  await state.setSessionArchived(node.sessionId, true);
+  tree.refresh();
+}
+
+/** Manual "Unarchive" (archived session row inline icon). */
+async function unarchiveSession(node: SessionNode, state: DeckState, tree: SessionTreeProvider): Promise<void> {
+  if (!node) {
+    return;
+  }
+  await state.setSessionArchived(node.sessionId, false);
+  tree.refresh();
 }
 
 interface SearchPickItem extends vscode.QuickPickItem {
@@ -185,7 +237,7 @@ interface SearchPickItem extends vscode.QuickPickItem {
  * text by mtime in `claudeStorage.ts`, so repeat searches are effectively free);
  * everything after that is an in-memory substring filter, so typing stays fast.
  */
-async function searchSessions(tree: SessionTreeProvider, terminalService: ClaudeTerminalService): Promise<void> {
+async function searchSessions(tree: SessionTreeProvider, state: DeckState, terminalService: ClaudeTerminalService): Promise<void> {
   const all = await tree.listAllSessions();
   if (all.length === 0) {
     vscode.window.showInformationMessage('No sessions to search — add a project first.');
@@ -233,7 +285,7 @@ async function searchSessions(tree: SessionTreeProvider, terminalService: Claude
     const [selected] = quickPick.selectedItems;
     quickPick.hide();
     if (selected) {
-      void terminalService.openSession(selected.session);
+      void ensureSessionActive(selected.session, state, tree).then(() => terminalService.openSession(selected.session));
     }
   });
 

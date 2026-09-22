@@ -111,6 +111,16 @@ export class ClaudeTerminalService implements vscode.Disposable {
     return new Set(this.sessionTerminals.keys());
   }
 
+  /**
+   * Closes this session's terminal if it's currently tracked — a no-op otherwise. Used when a session
+   * is archived (manually, or auto-evicted by the 5-per-project cap): an archived session shouldn't be
+   * left running with a now-hidden tab. `terminal.dispose()` triggers the same `onDidCloseTerminal`
+   * bookkeeping (untrack + clear status) as any other terminal close, so nothing extra to do here.
+   */
+  public closeSessionTerminal(sessionId: string): void {
+    this.sessionTerminals.get(sessionId)?.dispose();
+  }
+
   /** Same mark used for a session's tree row — set as the terminal tab's icon too, so it doesn't default to whatever the shell profile's own icon is (Git Bash's icon, on this machine) and read as unrelated to Claude Code. */
   private claudeMarkIconPath(): vscode.Uri {
     return vscode.Uri.joinPath(this.extensionUri, 'resources', 'claude-mark.svg');
