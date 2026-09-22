@@ -9,7 +9,7 @@ import { AgentType, SessionNode } from '../tree/sessionProvider';
 import { agentIconPath } from '../tree/agentIcons';
 import { clearSessionStatus, markSessionError } from '../status/sessionStatus';
 import { CopilotStatusWatcher } from '../status/copilotStatusWatcher';
-import { buildClaudeNewSessionCommand, buildClaudeResumeCommand } from './claudeCommand';
+import { buildClaudeForkCommand, buildClaudeNewSessionCommand, buildClaudeResumeCommand } from './claudeCommand';
 import { buildCopilotNewSessionCommand, buildCopilotResumeCommand } from './copilotCommand';
 
 const execFileAsync = promisify(execFile);
@@ -321,6 +321,45 @@ export class AgentTerminalService implements vscode.Disposable {
           command,
           this.terminalDeps((execution) => this.sessionIdByExecution.set(execution, sessionId))
         )
+    );
+  }
+
+  /**
+   * Claude-only (no equivalent in Copilot CLI — checked `copilot --help`/`copilot sessions --help`
+   * in full): `claude --resume <sessionId> --fork-session` resumes `session`'s full history under a
+   * brand-new session id, leaving the original completely untouched. Always a fresh terminal, always
+   * in `session.cwd` — there's no existing terminal to reuse, since this creates a session that never
+   * existed before. Its real new id is learned the same way a plain new session's is, via
+   * `correlateNewSession` — see `buildClaudeForkCommand`'s doc comment for why `--session-id`
+   * pre-assignment isn't used here the way it is for Copilot's new-session flow.
+   */
+  public async forkSession(session: SessionNode, options: OpenSessionTerminalOptions = {}): Promise<void> {
+    const dangerouslySkipPermissions = options.dangerouslySkipPermissions === true;
+
+    const hasClaude = await this.hasBinaryOnPath('claude');
+    if (!hasClaude) {
+      this.reportBinaryNotFound('claude');
+      return;
+    }
+
+    const terminal = vscode.window.createTerminal({
+      name: truncate(`Fork: ${session.displayName}`, 35),
+      cwd: session.cwd,
+      location: { viewColumn: vscode.ViewColumn.Active },
+      iconPath: agentIconPath(this.extensionUri, 'claude'),
+      isTransient: true,
+    });
+    terminal.show(true);
+    void this.correlateNewSession(terminal, session.displayName);
+
+    const command = buildClaudeForkCommand(session.sessionId, dangerouslySkipPermissions);
+    this.outputChannel.appendLine(
+      `[terminal] Forking session ${session.sessionId} in ${session.cwd} (skipPermissions=${String(dangerouslySkipPermissions)}).`
+    );
+
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: 'Waiting for terminal to be ready…' },
+      () => executeInTerminal(terminal, command, this.terminalDeps())
     );
   }
 

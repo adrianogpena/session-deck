@@ -94,6 +94,14 @@ function isProcessAlive(pid: number): boolean {
  * single logical write, and unconditionally rewriting an unchanged status would refresh its
  * `updatedAt` every time, which would defeat `sessionStatus.ts`'s acknowledge-by-exact-timestamp
  * matching for "done" — a session you'd already acknowledged would keep reappearing as unseen.
+ *
+ * A session id's *first* observed status is a baseline, never displayed — `lastWritten` only
+ * records it internally, `writeSessionStatus` isn't called. Needed because a freshly resumed
+ * session's process reports `idle` (→ "done") from the moment it starts, before any prompt has
+ * been typed — without this, every just-opened session would immediately show green. `clear()`
+ * (called when a pid dies or its file disappears) removes the session from `lastWritten` too, so
+ * resuming that same session again later gets its own fresh baseline rather than inheriting a
+ * stale one from the previous process.
  */
 export class ClaudeProcessWatcher {
   private watcher?: fs.FSWatcher;
@@ -152,7 +160,19 @@ export class ClaudeProcessWatcher {
         continue;
       }
       const status = classifyClaudeProcessStatus(parsed.status);
-      if (status && this.lastWritten.get(parsed.sessionId) !== status) {
+      if (!status) {
+        continue;
+      }
+      if (!this.lastWritten.has(parsed.sessionId)) {
+        // First sight of this session id is a baseline, not an event — same reasoning as
+        // `WaitingNotifier`/the auto-archive cap elsewhere in this codebase. Needed here
+        // specifically because a freshly resumed session's process starts in `idle` (Session
+        // Deck's "done") before any prompt has been typed, which would otherwise show every
+        // just-opened session as green immediately — reported live.
+        this.lastWritten.set(parsed.sessionId, status);
+        continue;
+      }
+      if (this.lastWritten.get(parsed.sessionId) !== status) {
         writeSessionStatus(parsed.sessionId, status);
         this.lastWritten.set(parsed.sessionId, status);
       }

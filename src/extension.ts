@@ -21,9 +21,10 @@ import { AgentTerminalService } from './terminal/terminalService';
 import {
   addProjectToWorkspaceList,
   getConfigFsPath,
-  getConfigRelativePattern,
+  getConfigGlobPattern,
   getWorkspaceProjectEntry,
   readWorkspaceProjectEntries,
+  readWorkspaceProjectEntriesForFolder,
   removeProjectFromWorkspaceList,
   setWorkspaceProjectHidden,
   setWorkspaceProjectName,
@@ -89,11 +90,6 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('sessionDeck.openSessionDangerously', (session: SessionNode) =>
       openSessionDangerously(session, state, treeProvider, statusDecorationProvider, activeSessionProvider, terminalService)
     ),
-    vscode.commands.registerCommand('sessionDeck.openSessionInNewTerminal', async (session: SessionNode) => {
-      await ensureSessionActive(session, state, treeProvider);
-      await terminalService.openSessionInNewTerminal(session);
-      acknowledgeAndRefresh(session, treeProvider, statusDecorationProvider, activeSessionProvider);
-    }),
     vscode.commands.registerCommand('sessionDeck.viewTranscript', (session: SessionNode) => viewTranscript(session)),
     vscode.commands.registerCommand('sessionDeck.search', () => searchSessions(treeProvider)),
     vscode.commands.registerCommand('sessionDeck.archiveSession', (node: SessionNode) =>
@@ -120,6 +116,10 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('sessionDeck.renameSession', (node: SessionNode) =>
       renameSession(node, state, treeProvider)
     ),
+    vscode.commands.registerCommand('sessionDeck.forkSession', (session: SessionNode) => forkSession(session, terminalService)),
+    vscode.commands.registerCommand('sessionDeck.forkSessionDangerously', (session: SessionNode) =>
+      forkSessionDangerously(session, terminalService)
+    ),
     { dispose: () => claudeProcessWatcher.dispose() }
   );
 
@@ -131,9 +131,10 @@ export function activate(context: vscode.ExtensionContext) {
     waitingNotifier.check(terminalService.getOpenSessions(), (sessionId) => terminalService.revealSession(sessionId));
   });
 
-  // Auto-refresh when the workspace's project list file is created/edited/deleted
-  // (by us via "Add Project"/"Remove Project", or by hand).
-  const configPattern = getConfigRelativePattern();
+  // Auto-refresh when any workspace folder's project list file is created/edited/deleted
+  // (by us via "Add Project"/"Remove Project", or by hand) — a plain glob string, not a
+  // RelativePattern, so it's watched across every open folder, not just the first.
+  const configPattern = getConfigGlobPattern();
   if (configPattern) {
     const refreshAll = () => {
       treeProvider.refresh();
@@ -425,6 +426,36 @@ interface ProjectPickItem extends vscode.QuickPickItem {
   addNew?: boolean;
 }
 
+interface WorkspaceFolderPickItem extends vscode.QuickPickItem {
+  folder: vscode.WorkspaceFolder;
+}
+
+/**
+ * Every write that targets a *specific* file (a brand-new project entry, or bootstrapping an empty
+ * file to hand-edit) needs to know which workspace folder's `.vscode/session-deck.json` that is.
+ * With one folder open — the overwhelmingly common case, and the only case before multi-root
+ * support existed — there's only one possible answer, so this never prompts at all; existing
+ * single-root usage is completely unaffected. Only asks when there's genuine ambiguity.
+ */
+async function pickTargetWorkspaceFolder(promptContext: string): Promise<vscode.WorkspaceFolder | undefined> {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) {
+    return undefined;
+  }
+  if (folders.length === 1) {
+    return folders[0];
+  }
+  const items: WorkspaceFolderPickItem[] = folders.map((folder) => ({
+    label: folder.name,
+    description: folder.uri.fsPath,
+    folder,
+  }));
+  const picked = await vscode.window.showQuickPick(items, {
+    placeHolder: `Which workspace folder's session-deck.json should ${promptContext}?`,
+  });
+  return picked?.folder;
+}
+
 /**
  * Lets the user build up this workspace's `.vscode/session-deck.json` list:
  * pick from every project Session Deck has discovered under `~/.claude/projects`,
@@ -476,16 +507,23 @@ async function addProject(tree: SessionTreeProvider): Promise<void> {
   if (!rootPath) {
     return;
   }
-  await addProjectToWorkspaceList(rootPath, name);
+
+  const targetFolder = await pickTargetWorkspaceFolder('this project be added to');
+  if (!targetFolder) {
+    return;
+  }
+
+  await addProjectToWorkspaceList(rootPath, name, targetFolder);
   tree.refresh();
 }
 
 /**
- * Opens `.vscode/session-deck.json` for direct hand-editing — of names as well as
- * the project list itself, since it's the single source of truth for both.
- * Creates the file first, empty (`{ "projects": [] }`), if this workspace
- * doesn't have one yet — populating it is what "Add Project" and hand-editing
- * are for, not this button.
+ * Opens a workspace folder's `.vscode/session-deck.json` for direct hand-editing — of names as
+ * well as the project list itself, since it's the single source of truth for both. With more than
+ * one workspace folder open, asks which one's file to open (see `pickTargetWorkspaceFolder`) rather
+ * than always opening the first. Creates that folder's file first, empty (`{ "projects": [] }`), if
+ * it doesn't have one yet — populating it is what "Add Project" and hand-editing are for, not this
+ * button.
  */
 async function editProjectList(): Promise<void> {
   if (!vscode.workspace.workspaceFolders?.length) {
@@ -493,11 +531,16 @@ async function editProjectList(): Promise<void> {
     return;
   }
 
-  if (!readWorkspaceProjectEntries()) {
-    writeWorkspaceProjectEntries([]);
+  const targetFolder = await pickTargetWorkspaceFolder('be opened for editing');
+  if (!targetFolder) {
+    return;
   }
 
-  const configPath = getConfigFsPath();
+  if (!readWorkspaceProjectEntriesForFolder(targetFolder)) {
+    writeWorkspaceProjectEntries([], targetFolder);
+  }
+
+  const configPath = getConfigFsPath(targetFolder);
   if (!configPath) {
     return;
   }
@@ -531,6 +574,43 @@ async function newSessionDangerously(node: ProjectGroupNode, terminalService: Ag
     }
   }
   await terminalService.startNewSession(node.agent, node.rootPath, node.displayName, { dangerouslySkipPermissions: true });
+}
+
+/** Claude-only (`claude --resume --fork-session`, no Copilot equivalent) — branches a brand-new session off this one's full history, leaving the original untouched. */
+async function forkSession(session: SessionNode, terminalService: AgentTerminalService): Promise<void> {
+  if (!session) {
+    return;
+  }
+  if (session.agent !== 'claude') {
+    await vscode.window.showInformationMessage("Forking a session isn't supported by Copilot CLI yet.");
+    return;
+  }
+  await terminalService.forkSession(session);
+}
+
+/** Same reasoning as `newSessionDangerously`: always a fresh terminal (forking always is), gated behind an explicit confirmation. */
+async function forkSessionDangerously(session: SessionNode, terminalService: AgentTerminalService): Promise<void> {
+  if (!session) {
+    return;
+  }
+  if (session.agent !== 'claude') {
+    await vscode.window.showInformationMessage("Forking a session isn't supported by Copilot CLI yet.");
+    return;
+  }
+  if (shouldConfirmDangerousSkipPermissions(session.projectRoot)) {
+    const confirm = await vscode.window.showWarningMessage(
+      `Fork "${session.displayName}" with ${dangerousModeFlag(session.agent)}?`,
+      {
+        modal: true,
+        detail: dangerousModeDetail(session.agent),
+      },
+      'Fork'
+    );
+    if (confirm !== 'Fork') {
+      return;
+    }
+  }
+  await terminalService.forkSession(session, { dangerouslySkipPermissions: true });
 }
 
 /** A project only ever appears in the tree because it's on this workspace's list, so renaming always writes its `name` field there. */

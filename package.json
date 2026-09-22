@@ -79,11 +79,6 @@
         "icon": "$(preview)"
       },
       {
-        "command": "sessionDeck.openSessionInNewTerminal",
-        "title": "Session Deck: Open Session in New Terminal",
-        "icon": "$(empty-window)"
-      },
-      {
         "command": "sessionDeck.search",
         "title": "Session Deck: Search Sessions",
         "icon": "$(search)"
@@ -146,6 +141,15 @@
         "command": "sessionDeck.copySessionInfo",
         "title": "Session Deck: Copy Session Info",
         "icon": "$(clippy)"
+      },
+      {
+        "command": "sessionDeck.forkSession",
+        "title": "Session Deck: Fork Session",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "sessionDeck.forkSessionDangerously",
+        "title": "Session Deck: Fork Session (Skip Permissions)"
       }
     ],
     "menus": {
@@ -223,27 +227,17 @@
           "group": "inline@1"
         },
         {
-          "command": "sessionDeck.openSessionInNewTerminal",
+          "command": "sessionDeck.renameSession",
           "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
           "group": "inline@2"
         },
         {
-          "command": "sessionDeck.renameSession",
+          "command": "sessionDeck.archiveSession",
           "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
           "group": "inline@3"
         },
         {
-          "command": "sessionDeck.archiveSession",
-          "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
-          "group": "inline@4"
-        },
-        {
           "command": "sessionDeck.viewTranscript",
-          "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
-          "group": "1_modification"
-        },
-        {
-          "command": "sessionDeck.openSessionInNewTerminal",
           "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
           "group": "1_modification"
         },
@@ -264,6 +258,11 @@
         },
         {
           "command": "sessionDeck.copySessionInfo",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
+          "group": "1_modification"
+        },
+        {
+          "command": "sessionDeck.forkSession",
           "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
           "group": "1_modification"
         },
@@ -273,32 +272,27 @@
           "group": "2_danger"
         },
         {
+          "command": "sessionDeck.forkSessionDangerously",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
+          "group": "2_danger"
+        },
+        {
           "command": "sessionDeck.viewTranscript",
           "when": "view == sessionDeck.sessions && viewItem == sessionDeckArchivedSession",
           "group": "inline@1"
         },
         {
-          "command": "sessionDeck.openSessionInNewTerminal",
+          "command": "sessionDeck.renameSession",
           "when": "view == sessionDeck.sessions && viewItem == sessionDeckArchivedSession",
           "group": "inline@2"
         },
         {
-          "command": "sessionDeck.renameSession",
+          "command": "sessionDeck.unarchiveSession",
           "when": "view == sessionDeck.sessions && viewItem == sessionDeckArchivedSession",
           "group": "inline@3"
         },
         {
-          "command": "sessionDeck.unarchiveSession",
-          "when": "view == sessionDeck.sessions && viewItem == sessionDeckArchivedSession",
-          "group": "inline@4"
-        },
-        {
           "command": "sessionDeck.viewTranscript",
-          "when": "view == sessionDeck.sessions && viewItem == sessionDeckArchivedSession",
-          "group": "1_modification"
-        },
-        {
-          "command": "sessionDeck.openSessionInNewTerminal",
           "when": "view == sessionDeck.sessions && viewItem == sessionDeckArchivedSession",
           "group": "1_modification"
         },
@@ -323,7 +317,17 @@
           "group": "1_modification"
         },
         {
+          "command": "sessionDeck.forkSession",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckArchivedSession",
+          "group": "1_modification"
+        },
+        {
           "command": "sessionDeck.openSessionDangerously",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckArchivedSession",
+          "group": "2_danger"
+        },
+        {
+          "command": "sessionDeck.forkSessionDangerously",
           "when": "view == sessionDeck.sessions && viewItem == sessionDeckArchivedSession",
           "group": "2_danger"
         }
