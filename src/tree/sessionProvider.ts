@@ -11,6 +11,7 @@ import {
 import { CopilotSessionRow, getCopilotHomeDir, listCopilotSessions } from '../discovery/copilotStorage';
 import { resolveProjectRoot } from '../discovery/gitProject';
 import { normalizeFsPath } from '../discovery/pathUtils';
+import { mapWithConcurrency } from '../concurrency';
 import { ensureSessionStatusDir, getSessionStatusDir, readEffectiveSessionStatus, SessionStatusRecord } from '../status/sessionStatus';
 import { sessionStatusUri } from '../status/sessionStatusDecorationProvider';
 import { DeckState } from '../config/state';
@@ -25,6 +26,9 @@ const AGENTS: readonly AgentType[] = ['claude', 'copilot'];
 
 /** How many of a project's most recent sessions the main tree shows by default — see `getChildren`. Overridable per project via `.vscode/session-deck.json`'s `maxSessionsShown`. Applied independently per (agent, project) pair. */
 const MAX_SESSIONS_PER_PROJECT_VIEW = 5;
+
+/** Caps how many `git` processes `discoverGroups` spawns at once when resolving distinct cwds to project roots — unbounded `Promise.all` would spawn one per distinct cwd simultaneously, fine for a personal project count but a real resource spike once there are hundreds. */
+const GIT_RESOLVE_CONCURRENCY = 8;
 
 /**
  * `color` on a project entry is a named swatch, not a `ThemeColor` id — a `TreeItem.iconPath` colored
@@ -171,8 +175,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
       }
     }
 
-    // Repaints session status dots live as reportStatus.ts (a Claude Code hook,
-    // enabled via "Session Deck: Enable Live Status Tracking") writes them.
+    // Repaints session status dots live as claudeProcessWatcher.ts/copilotStatusWatcher.ts write them.
     ensureSessionStatusDir();
     try {
       const statusWatcher = fs.watch(getSessionStatusDir(), () => {
@@ -315,7 +318,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
     const members = await Promise.all(
       dirNames.map(async (dirName) => ({ dirName, cwd: await resolveDirCwd(dirName) }))
     );
-    const roots = await Promise.all(members.map((m) => resolveProjectRoot(m.cwd)));
+    const roots = await mapWithConcurrency(members, GIT_RESOLVE_CONCURRENCY, (m) => resolveProjectRoot(m.cwd));
 
     const groups = new Map<string, DiscoveredGroup>();
     members.forEach((member, i) => {
@@ -440,17 +443,12 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
     }));
   }
 
-  /** Every Copilot session whose `cwd` resolves (git-aware, same as Claude's) to `rootPath` — re-queries the whole store and re-resolves each time, matching the "no persistent cache" approach `discoverGroups` already uses for Claude. */
+  /** Every Copilot session whose `cwd` resolves (git-aware, same as Claude's) to `rootPath` — re-queries the whole store and re-resolves each time, matching the "no persistent cache" approach `discoverGroups` already uses for Claude. Resolves with the same bounded concurrency as `discoverGroups`, not one cwd at a time. */
   private async copilotSessionsForRoot(rootPath: string): Promise<CopilotSessionRow[]> {
     const targetKey = normalizeFsPath(rootPath);
-    const matches: CopilotSessionRow[] = [];
-    for (const row of listCopilotSessions()) {
-      const { root } = await resolveProjectRoot(row.cwd);
-      if (normalizeFsPath(root) === targetKey) {
-        matches.push(row);
-      }
-    }
-    return matches;
+    const sessions = listCopilotSessions();
+    const roots = await mapWithConcurrency(sessions, GIT_RESOLVE_CONCURRENCY, (row) => resolveProjectRoot(row.cwd));
+    return sessions.filter((_, i) => normalizeFsPath(roots[i].root) === targetKey);
   }
 
   private async toSessionNodes(candidates: SessionCandidate[], group: ProjectGroupNode): Promise<SessionNode[]> {

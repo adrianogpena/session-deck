@@ -1,7 +1,7 @@
 {
   "name": "session-deck",
   "displayName": "Session Deck",
-  "description": "Multi-project AI coding session explorer (Claude Code today, more agents planned) with a single, reusable session tab",
+  "description": "Multi-project AI coding session explorer for Claude Code and GitHub Copilot CLI, with a single, reusable session tab",
   "version": "0.0.1",
   "private": true,
   "publisher": "local",
@@ -56,7 +56,7 @@
       },
       {
         "view": "sessionDeck.activeSession",
-        "contents": "No sessions open right now.\nCopilot sessions show live status automatically; [Enable Live Status Tracking](command:sessionDeck.enableStatusTracking) to see running/waiting/done for Claude sessions here too."
+        "contents": "No sessions open right now.\nStatus (running/waiting/done) shows automatically for both agents once a session is open — no setup needed."
       }
     ],
     "commands": [
@@ -146,14 +146,6 @@
         "command": "sessionDeck.copySessionInfo",
         "title": "Session Deck: Copy Session Info",
         "icon": "$(clippy)"
-      },
-      {
-        "command": "sessionDeck.enableStatusTracking",
-        "title": "Session Deck: Enable Live Status Tracking"
-      },
-      {
-        "command": "sessionDeck.disableStatusTracking",
-        "title": "Session Deck: Disable Live Status Tracking"
       }
     ],
     "menus": {

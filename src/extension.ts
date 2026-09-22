@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { mapWithConcurrency } from './concurrency';
 import { AgentType, SessionTreeProvider, ProjectGroupNode, SessionNode, SessionWithProject } from './tree/sessionProvider';
 import { ActiveSessionProvider } from './tree/activeSessionProvider';
 import { SessionContentProvider, SESSION_SCHEME } from './content/sessionContentProvider';
@@ -10,16 +11,10 @@ import {
   readSessionSearchText,
 } from './discovery/claudeStorage';
 import { copilotSessionSearchText, lastCopilotAssistantResponse } from './discovery/copilotStorage';
-import {
-  disableStatusTracking,
-  enableStatusTracking,
-  getClaudeSettingsPath,
-  isStatusTrackingEnabled,
-  isStatusTrackingPresent,
-} from './status/claudeSettings';
 import { resolveProjectRoot, clearProjectRootCache } from './discovery/gitProject';
 import { acknowledgeSessionStatus, readEffectiveSessionStatus, SessionStatus } from './status/sessionStatus';
 import { SessionStatusDecorationProvider } from './status/sessionStatusDecorationProvider';
+import { ClaudeProcessWatcher } from './status/claudeProcessWatcher';
 import { WaitingNotifier } from './status/waitingNotifier';
 import { DeckState } from './config/state';
 import { AgentTerminalService } from './terminal/terminalService';
@@ -51,6 +46,7 @@ export function activate(context: vscode.ExtensionContext) {
   const activeSessionProvider = new ActiveSessionProvider(treeProvider, terminalService, context.extensionUri);
   // resources/icon.png (not the tree's claude-mark.svg): most OS notifiers expect a raster icon.
   const waitingNotifier = new WaitingNotifier(path.join(context.extensionPath, 'resources', 'icon.png'));
+  const claudeProcessWatcher = new ClaudeProcessWatcher((message) => outputChannel.appendLine(message));
 
   const treeView = vscode.window.createTreeView('sessionDeck.sessions', {
     treeDataProvider: treeProvider,
@@ -124,13 +120,10 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('sessionDeck.renameSession', (node: SessionNode) =>
       renameSession(node, state, treeProvider)
     ),
-    vscode.commands.registerCommand('sessionDeck.enableStatusTracking', () =>
-      enableStatusTrackingCommand(context, treeProvider)
-    ),
-    vscode.commands.registerCommand('sessionDeck.disableStatusTracking', () =>
-      disableStatusTrackingCommand(treeProvider)
-    )
+    { dispose: () => claudeProcessWatcher.dispose() }
   );
+
+  claudeProcessWatcher.start();
 
   treeProvider.watch(context, () => {
     statusDecorationProvider.refresh();
@@ -354,6 +347,9 @@ const SEARCH_STATUS_PREFIXES: Record<string, SessionStatus> = {
   '~': 'error',
 };
 
+/** Caps how many sessions' full content Search reads at once on first use — unbounded `Promise.all` would read every configured session's transcript/turns simultaneously, fine at personal scale but a real resource spike once there are hundreds. */
+const SEARCH_READ_CONCURRENCY = 8;
+
 async function searchSessions(tree: SessionTreeProvider): Promise<void> {
   const all = await tree.listAllSessions();
   if (all.length === 0) {
@@ -386,14 +382,12 @@ async function searchSessions(tree: SessionTreeProvider): Promise<void> {
 
     if (query && !searchTextBySessionId) {
       quickPick.busy = true;
-      const pairs = await Promise.all(
-        all.map(async (entry): Promise<[string, string]> => [
-          entry.session.sessionId,
-          entry.session.agent === 'claude'
-            ? await readSessionSearchText(entry.session.filePath as string)
-            : copilotSessionSearchText(entry.session.sessionId),
-        ])
-      );
+      const pairs = await mapWithConcurrency(all, SEARCH_READ_CONCURRENCY, async (entry): Promise<[string, string]> => [
+        entry.session.sessionId,
+        entry.session.agent === 'claude'
+          ? await readSessionSearchText(entry.session.filePath as string)
+          : copilotSessionSearchText(entry.session.sessionId),
+      ]);
       searchTextBySessionId = new Map(pairs);
       quickPick.busy = false;
     }
@@ -617,92 +611,6 @@ async function renameSession(node: SessionNode, state: DeckState, tree: SessionT
   }
   await state.setSessionName(node.sessionId, name);
   tree.refresh();
-}
-
-function statusHookCommand(context: vscode.ExtensionContext): string {
-  const scriptPath = path.join(context.extensionPath, 'out', 'status', 'reportStatus.js');
-  return `node "${scriptPath}"`;
-}
-
-/**
- * Adds the hook entries `reportStatus.ts` needs to Claude Code's *global*
- * `~/.claude/settings.json` — shown in full before writing anything, since this
- * affects every Claude Code session on the machine, not just this workspace.
- */
-async function enableStatusTrackingCommand(context: vscode.ExtensionContext, tree: SessionTreeProvider): Promise<void> {
-  const command = statusHookCommand(context);
-
-  let alreadyEnabled: boolean;
-  try {
-    alreadyEnabled = isStatusTrackingEnabled(command);
-  } catch (error) {
-    vscode.window.showErrorMessage(errorMessage(error));
-    return;
-  }
-  if (alreadyEnabled) {
-    vscode.window.showInformationMessage('Session Deck status tracking is already enabled.');
-    return;
-  }
-
-  const confirm = await vscode.window.showWarningMessage(
-    'Enable live session status tracking?',
-    {
-      modal: true,
-      detail: [
-        `Adds 4 hook entries to your global ${getClaudeSettingsPath()}`,
-        '(UserPromptSubmit, Stop, Notification, SessionEnd), each running:',
-        '',
-        command,
-        '',
-        'This affects every Claude Code session on this machine, not just this workspace.',
-        'It only writes small status files under ~/.claude/session-deck-status/ — it never',
-        'blocks or changes your prompts or tool calls. Undo any time with',
-        '"Session Deck: Disable Live Status Tracking".',
-      ].join('\n'),
-    },
-    'Enable'
-  );
-  if (confirm !== 'Enable') {
-    return;
-  }
-
-  try {
-    enableStatusTracking(command);
-  } catch (error) {
-    vscode.window.showErrorMessage(errorMessage(error));
-    return;
-  }
-  tree.refresh();
-  vscode.window.showInformationMessage(
-    'Live session status tracking enabled — status dots appear once a hook actually fires (e.g. on your next prompt).'
-  );
-}
-
-async function disableStatusTrackingCommand(tree: SessionTreeProvider): Promise<void> {
-  let present: boolean;
-  try {
-    present = isStatusTrackingPresent();
-  } catch (error) {
-    vscode.window.showErrorMessage(errorMessage(error));
-    return;
-  }
-  if (!present) {
-    vscode.window.showInformationMessage('Session Deck status tracking is not currently enabled.');
-    return;
-  }
-
-  try {
-    disableStatusTracking();
-  } catch (error) {
-    vscode.window.showErrorMessage(errorMessage(error));
-    return;
-  }
-  tree.refresh();
-  vscode.window.showInformationMessage('Live session status tracking disabled.');
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 export function deactivate() {}

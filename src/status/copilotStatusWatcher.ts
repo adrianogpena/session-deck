@@ -92,7 +92,7 @@ const FILE_WAIT_POLL_INTERVAL_MS = 500;
  * unconditionally, for its own IDE/resume support. `start()` tails only the bytes appended *after*
  * tracking begins — never backfills a session's history, the same "baseline on first sight"
  * reasoning as `sessionProvider.ts`'s auto-archive cap — and writes through the same
- * `status/sessionStatus.ts` file `reportStatus.ts` writes for Claude, so every downstream consumer
+ * `status/sessionStatus.ts` file `claudeProcessWatcher.ts` writes for Claude, so every downstream consumer
  * (the decoration provider, `WaitingNotifier`, the tree's tooltip) already works unchanged;
  * nothing about them is Copilot-aware.
  *
