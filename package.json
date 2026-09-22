@@ -5,6 +5,10 @@
   "version": "0.0.1",
   "private": true,
   "publisher": "local",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/adrianogpena/session-deck.git"
+  },
   "icon": "resources/icon.png",
   "engines": {
     "vscode": "^1.93.0"
