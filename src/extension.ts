@@ -1,6 +1,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { mapWithConcurrency } from './concurrency';
+import { fuzzyMatch } from './fuzzyMatch';
 import { AgentType, SessionTreeProvider, ProjectGroupNode, SessionNode, SessionWithProject } from './tree/sessionProvider';
 import { ActiveSessionProvider } from './tree/activeSessionProvider';
 import { SessionContentProvider, SESSION_SCHEME } from './content/sessionContentProvider';
@@ -394,16 +395,14 @@ async function searchSessions(tree: SessionTreeProvider): Promise<void> {
     }
 
     quickPick.items = all
-      .filter((entry) => {
-        if (statusFilter && readEffectiveSessionStatus(entry.session.sessionId)?.status !== statusFilter) {
-          return false;
-        }
-        if (!query) {
-          return true;
-        }
-        return (searchTextBySessionId?.get(entry.session.sessionId) ?? '').toLowerCase().includes(query);
-      })
-      .map(toItem);
+      .filter((entry) => !statusFilter || readEffectiveSessionStatus(entry.session.sessionId)?.status === statusFilter)
+      .map((entry) => ({ entry, match: fuzzyMatch(query, searchTextBySessionId?.get(entry.session.sessionId) ?? '') }))
+      .filter((x) => x.match.matched)
+      // A stable sort, so with no query (every match scores 0 — see fuzzyMatch) this preserves
+      // `all`'s own order, same as before fuzzy matching existed; a real query ranks tighter,
+      // earlier matches first, same convention agent-deck's own `/` search uses.
+      .sort((a, b) => a.match.score - b.match.score)
+      .map((x) => toItem(x.entry));
   });
 
   quickPick.onDidAccept(() => {
