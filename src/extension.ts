@@ -26,8 +26,10 @@ import {
   addProjectToWorkspaceList,
   getConfigFsPath,
   getConfigRelativePattern,
+  getWorkspaceProjectEntry,
   readWorkspaceProjectEntries,
   removeProjectFromWorkspaceList,
+  setWorkspaceProjectHidden,
   setWorkspaceProjectName,
   writeWorkspaceProjectEntries,
 } from './config/workspaceConfig';
@@ -115,6 +117,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('sessionDeck.removeProject', (node: ProjectGroupNode) =>
       removeProject(node, treeProvider)
     ),
+    vscode.commands.registerCommand('sessionDeck.hideProject', (node: ProjectGroupNode) => hideProject(node, treeProvider)),
     vscode.commands.registerCommand('sessionDeck.renameSession', (node: SessionNode) =>
       renameSession(node, state, treeProvider)
     ),
@@ -187,21 +190,38 @@ async function openSessionDangerously(
   if (!session) {
     return;
   }
-  const confirm = await vscode.window.showWarningMessage(
-    `Resume "${session.displayName}" with --dangerously-skip-permissions?`,
-    {
-      modal: true,
-      detail: 'Claude will not ask for approval before running tools in this session. Only do this if you trust what it will be doing.',
-    },
-    'Resume'
-  );
-  if (confirm !== 'Resume') {
-    return;
+  if (shouldConfirmDangerousSkipPermissions(session.projectRoot)) {
+    const confirm = await vscode.window.showWarningMessage(
+      `Resume "${session.displayName}" with --dangerously-skip-permissions?`,
+      {
+        modal: true,
+        detail: 'Claude will not ask for approval before running tools in this session. Only do this if you trust what it will be doing.',
+      },
+      'Resume'
+    );
+    if (confirm !== 'Resume') {
+      return;
+    }
   }
   await ensureSessionActive(session, state, tree);
   // Always a fresh terminal (never reuses this session's existing terminal, if any) — silently
   // reusing a non-dangerous terminal here would ignore the flag the user just confirmed.
   await terminalService.openSessionInNewTerminal(session, { dangerouslySkipPermissions: true });
+}
+
+/**
+ * `sessionDeck.confirmDangerousSkipPermissions` (default `true`) — read live on every dangerous-mode
+ * launch rather than cached, so toggling it in Settings takes effect immediately, no reload needed.
+ * Ported from the reference extension's own setting of the same name/default. A project entry's own
+ * `dangerouslySkipPermissions: true` (`.vscode/session-deck.json`) overrides this to `false` for that
+ * project specifically — a per-project "I trust this one" exception, never the other way around: there's
+ * no way to force confirmation back on for one project while the global setting is off.
+ */
+function shouldConfirmDangerousSkipPermissions(rootPath: string): boolean {
+  if (getWorkspaceProjectEntry(rootPath)?.dangerouslySkipPermissions) {
+    return false;
+  }
+  return vscode.workspace.getConfiguration('sessionDeck').get<boolean>('confirmDangerousSkipPermissions', true);
 }
 
 /** Resuming an archived session takes it out of the archive — there's no such thing as an actively-open archived one. */
@@ -453,16 +473,18 @@ async function newSessionDangerously(node: ProjectGroupNode, terminalService: Cl
   if (!node) {
     return;
   }
-  const confirm = await vscode.window.showWarningMessage(
-    `Start a new session in "${node.displayName}" with --dangerously-skip-permissions?`,
-    {
-      modal: true,
-      detail: 'Claude will not ask for approval before running tools in this session. Only do this if you trust what it will be doing.',
-    },
-    'Start'
-  );
-  if (confirm !== 'Start') {
-    return;
+  if (shouldConfirmDangerousSkipPermissions(node.rootPath)) {
+    const confirm = await vscode.window.showWarningMessage(
+      `Start a new session in "${node.displayName}" with --dangerously-skip-permissions?`,
+      {
+        modal: true,
+        detail: 'Claude will not ask for approval before running tools in this session. Only do this if you trust what it will be doing.',
+      },
+      'Start'
+    );
+    if (confirm !== 'Start') {
+      return;
+    }
   }
   await terminalService.startNewSession(node.rootPath, node.displayName, { dangerouslySkipPermissions: true });
 }
@@ -508,6 +530,27 @@ async function removeProject(node: ProjectGroupNode, tree: SessionTreeProvider):
   }
   await removeProjectFromWorkspaceList(node.rootPath);
   tree.refresh();
+}
+
+/**
+ * Soft-hide: sets `hidden: true` on the entry rather than removing it (see `WorkspaceProjectEntry.hidden`).
+ * No confirmation dialog — it's non-destructive and one hand-edit away from undone — but a project that
+ * just vanished from the tree with no visible "Unhide" button anywhere is worth a pointer to how.
+ */
+async function hideProject(node: ProjectGroupNode, tree: SessionTreeProvider): Promise<void> {
+  if (!node) {
+    return;
+  }
+  if (!setWorkspaceProjectHidden(node.rootPath, true)) {
+    vscode.window.showErrorMessage(
+      `Couldn't hide "${node.displayName}" — its entry in session-deck.json seems to have changed. Try refreshing.`
+    );
+    return;
+  }
+  tree.refresh();
+  vscode.window.showInformationMessage(
+    `Hid "${node.displayName}". Set "hidden": false (or remove the property) for it in session-deck.json to bring it back — "Edit Project List" opens the file directly.`
+  );
 }
 
 async function renameSession(node: SessionNode, state: DeckState, tree: SessionTreeProvider): Promise<void> {

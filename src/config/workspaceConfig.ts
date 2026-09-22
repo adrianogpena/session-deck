@@ -3,10 +3,23 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { normalizeFsPath } from '../discovery/pathUtils';
 
-/** A `projects` entry can be a bare root path, or an object naming it — `name` is what makes this file hand-editable. */
+/**
+ * A `projects` entry can be a bare root path, or an object naming it and carrying its per-project
+ * overrides — `name` (and everything below) is what makes this file hand-editable.
+ */
 export interface WorkspaceProjectEntry {
   root: string;
   name?: string;
+  /** Skip the "Skip Permissions" confirmation dialog for *this* project specifically, regardless of the global `sessionDeck.confirmDangerousSkipPermissions` setting — for a project you've already decided to trust. Never makes a project *more* confirmed than the global default; there's no way to force confirmation back on for one project while it's off globally. */
+  dangerouslySkipPermissions?: boolean;
+  /** Per-project override of the default cap (`MAX_SESSIONS_PER_PROJECT_VIEW` in `sessionProvider.ts`) on how many active sessions this project shows before the rest auto-archive. */
+  maxSessionsShown?: number;
+  /** A literal emoji prefixed onto the project's tree label — takes priority over `color` if both are set. */
+  emoji?: string;
+  /** A named color swatch (see `COLOR_SWATCH_EMOJI` in `sessionProvider.ts`) prefixed onto the project's tree label — a plain-text swatch rather than a `ThemeColor`'d icon, since a `TreeItem.iconPath` colored that way washes out to the row's foreground color when selected (the same reason session status uses a `FileDecoration` instead of its icon). */
+  color?: string;
+  /** Soft-hide: keeps the entry (and whatever `name`/other overrides it carries) in this file, just leaves it out of the tree — unlike "Remove Project", which deletes the entry outright. Only reachable back to visible by hand-editing this file (there's a "Hide" action, deliberately no "Unhide" one — a hidden project isn't shown anywhere to attach that action's context menu to). */
+  hidden?: boolean;
 }
 
 interface WorkspaceProjectConfigFile {
@@ -60,6 +73,11 @@ function matchesRoot(entry: WorkspaceProjectEntry, rootPath: string): boolean {
   return normalizeFsPath(entry.root) === normalizeFsPath(rootPath);
 }
 
+/** This project's raw config entry, whatever overrides it carries — `undefined` if it isn't on the list (or there's no list at all). */
+export function getWorkspaceProjectEntry(rootPath: string): WorkspaceProjectEntry | undefined {
+  return (readWorkspaceProjectEntries() ?? []).find((e) => matchesRoot(e, rootPath));
+}
+
 /**
  * `name` is optional but should normally be passed — an explicit name makes a
  * newly-added entry self-documenting and immediately editable, matching what
@@ -86,6 +104,15 @@ export async function removeProjectFromWorkspaceList(rootPath: string): Promise<
  * caller decides what to do then (e.g. fall back to the global rename).
  */
 export function setWorkspaceProjectName(rootPath: string, name: string): boolean {
+  return updateWorkspaceProjectEntry(rootPath, { name });
+}
+
+/** Sets/clears an entry's `hidden` flag ("Hide Project") — see {@link WorkspaceProjectEntry.hidden}. Same "not on the list" behavior as {@link setWorkspaceProjectName}. */
+export function setWorkspaceProjectHidden(rootPath: string, hidden: boolean): boolean {
+  return updateWorkspaceProjectEntry(rootPath, { hidden: hidden || undefined });
+}
+
+function updateWorkspaceProjectEntry(rootPath: string, patch: Partial<WorkspaceProjectEntry>): boolean {
   const entries = readWorkspaceProjectEntries();
   if (!entries) {
     return false;
@@ -94,7 +121,7 @@ export function setWorkspaceProjectName(rootPath: string, name: string): boolean
   if (index === -1) {
     return false;
   }
-  entries[index] = { ...entries[index], name };
+  entries[index] = { ...entries[index], ...patch };
   writeWorkspaceProjectEntries(entries);
   return true;
 }

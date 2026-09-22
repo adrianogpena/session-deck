@@ -16,8 +16,26 @@ import { DeckState } from '../config/state';
 import { readWorkspaceProjectEntries } from '../config/workspaceConfig';
 import { selectSessionsToArchive } from './archivePolicy';
 
-/** How many of a project's most recent sessions the main tree shows — see `getChildren`. */
+/** How many of a project's most recent sessions the main tree shows by default — see `getChildren`. Overridable per project via `.vscode/session-deck.json`'s `maxSessionsShown`. */
 const MAX_SESSIONS_PER_PROJECT_VIEW = 5;
+
+/**
+ * `color` on a project entry is a named swatch, not a `ThemeColor` id — a `TreeItem.iconPath` colored
+ * via `ThemeColor` washes out to the row's plain foreground when selected (the same reason session
+ * status uses a `FileDecoration` instead of its icon), so this is prefixed onto the label as plain text
+ * instead, immune to that. `emoji` on the entry is used verbatim instead of a swatch when both are set.
+ */
+const COLOR_SWATCH_EMOJI: Record<string, string> = {
+  red: '🔴',
+  orange: '🟠',
+  yellow: '🟡',
+  green: '🟢',
+  blue: '🔵',
+  purple: '🟣',
+  brown: '🟤',
+  black: '⚫',
+  white: '⚪',
+};
 
 interface ProjectMember {
   dirName: string;
@@ -36,7 +54,11 @@ export class ProjectGroupNode {
     /** Exactly as written in `.vscode/session-deck.json` — the stable identity used for renames/removal. */
     public readonly rootPath: string,
     public readonly displayName: string,
-    public readonly members: ProjectMember[]
+    public readonly members: ProjectMember[],
+    /** Already defaulted from `.vscode/session-deck.json`'s `maxSessionsShown` — see `getProjectGroups`. */
+    public readonly maxSessionsShown: number = MAX_SESSIONS_PER_PROJECT_VIEW,
+    public readonly emoji?: string,
+    public readonly color?: string
   ) {}
 }
 
@@ -121,7 +143,11 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
 
   getTreeItem(element: ClaudeDeckNode): vscode.TreeItem {
     if (element.kind === 'project') {
-      const item = new vscode.TreeItem(element.displayName, vscode.TreeItemCollapsibleState.Collapsed);
+      const swatch = element.emoji ?? (element.color ? COLOR_SWATCH_EMOJI[element.color] : undefined);
+      const item = new vscode.TreeItem(
+        swatch ? `${swatch} ${element.displayName}` : element.displayName,
+        vscode.TreeItemCollapsibleState.Collapsed
+      );
       item.contextValue = 'sessionDeckProject';
       item.iconPath = new vscode.ThemeIcon('briefcase');
       const tooltipLines = [
@@ -131,8 +157,8 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
           : '',
       ];
       const totalSessions = countSessionsInGroup(element);
-      if (totalSessions > MAX_SESSIONS_PER_PROJECT_VIEW) {
-        tooltipLines.push(`Showing the ${MAX_SESSIONS_PER_PROJECT_VIEW} most recent of ${totalSessions} sessions.`);
+      if (totalSessions > element.maxSessionsShown) {
+        tooltipLines.push(`Showing the ${element.maxSessionsShown} most recent of ${totalSessions} sessions.`);
       }
       item.tooltip = tooltipLines.filter(Boolean).join('\n');
       return item;
@@ -182,7 +208,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
       // "Open Claude Sessions" Explorer view both go through listAllSessions()
       // instead, which is uncapped and includes archived ones, so nothing is
       // ever unfindable.
-      const sessions = await this.toSessionNodes(active.slice(0, MAX_SESSIONS_PER_PROJECT_VIEW), element);
+      const sessions = await this.toSessionNodes(active.slice(0, element.maxSessionsShown), element);
       return archivedCount > 0 ? [...sessions, new ArchiveFolderNode(element, archivedCount)] : sessions;
     }
     if (element.kind === 'archiveFolder') {
@@ -233,7 +259,9 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
    * `.vscode/session-deck.json` is the sole source of truth for what the tree
    * shows: no file, or `{ "projects": [] }`, means an empty tree — never "show
    * everything discovered". This keeps exactly one mental model instead of a
-   * "configured" vs. "legacy default" mode to reason about.
+   * "configured" vs. "legacy default" mode to reason about. An entry with
+   * `hidden: true` is skipped here — still on the list (and still readable via
+   * `getWorkspaceProjectEntry`), just never turned into a node.
    */
   private async getProjectGroups(): Promise<ProjectGroupNode[]> {
     const groups = await this.discoverGroups();
@@ -241,9 +269,21 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
 
     const nodes: ProjectGroupNode[] = [];
     for (const entry of workspaceEntries) {
+      if (entry.hidden) {
+        continue;
+      }
       const groupMembers = groups.get(normalizeFsPath(entry.root))?.members ?? [];
       const displayName = entry.name ?? (path.basename(entry.root) || entry.root);
-      nodes.push(new ProjectGroupNode(entry.root, displayName, groupMembers));
+      nodes.push(
+        new ProjectGroupNode(
+          entry.root,
+          displayName,
+          groupMembers,
+          entry.maxSessionsShown ?? MAX_SESSIONS_PER_PROJECT_VIEW,
+          entry.emoji,
+          entry.color
+        )
+      );
     }
 
     return nodes.sort((a, b) => a.displayName.localeCompare(b.displayName));
@@ -285,7 +325,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
   }
 
   /**
-   * Keeps at most {@link MAX_SESSIONS_PER_PROJECT_VIEW} *active* (non-archived) sessions per project by
+   * Keeps at most `group.maxSessionsShown` *active* (non-archived) sessions per project by
    * auto-archiving the oldest excess — but only in response to a genuinely new session showing up, never
    * just because a project already had more than the cap (tracked via `knownSessionIdsByProject`, seeded
    * without archiving anything on the first pass each VS Code session sees a given project — otherwise
@@ -307,7 +347,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
     const activeIdsByRecency = candidates
       .filter((c) => !this.state.isSessionArchived(c.sessionId))
       .map((c) => c.sessionId);
-    const toArchive = selectSessionsToArchive(activeIdsByRecency, MAX_SESSIONS_PER_PROJECT_VIEW, newlyDiscovered);
+    const toArchive = selectSessionsToArchive(activeIdsByRecency, group.maxSessionsShown, newlyDiscovered);
     if (toArchive.length === 0) {
       return;
     }

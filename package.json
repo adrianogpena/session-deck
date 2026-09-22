@@ -15,6 +15,16 @@
   "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "Session Deck",
+      "properties": {
+        "sessionDeck.confirmDangerousSkipPermissions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a confirmation dialog before resuming or starting a session with --dangerously-skip-permissions."
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         {
@@ -108,6 +118,11 @@
         "icon": "$(trash)"
       },
       {
+        "command": "sessionDeck.hideProject",
+        "title": "Session Deck: Hide Project",
+        "icon": "$(circle-slash)"
+      },
+      {
         "command": "sessionDeck.renameSession",
         "title": "Session Deck: Rename Session",
         "icon": "$(rename)"
@@ -197,6 +212,11 @@
         },
         {
           "command": "sessionDeck.removeProject",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckProject",
+          "group": "2_modification"
+        },
+        {
+          "command": "sessionDeck.hideProject",
           "when": "view == sessionDeck.sessions && viewItem == sessionDeckProject",
           "group": "2_modification"
         },
