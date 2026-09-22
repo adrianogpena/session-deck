@@ -5,6 +5,7 @@
   "version": "0.0.1",
   "private": true,
   "publisher": "local",
+  "icon": "resources/icon.png",
   "engines": {
     "vscode": "^1.93.0"
   },
