@@ -67,7 +67,19 @@ function withDb<T>(fn: (db: DatabaseSync) => T): T {
   }
 }
 
-/** Every Copilot CLI session across every project, newest first — the Copilot analogue of `claudeStorage.ts`'s directory scan, and the input `sessionProvider.ts` groups by resolved git root. */
+/**
+ * Every *real* Copilot CLI session across every project, newest first — the Copilot analogue of
+ * `claudeStorage.ts`'s directory scan, and the input `sessionProvider.ts` groups by resolved git
+ * root. "Real" excludes a row with zero turns whose `user_message` actually has content: unlike
+ * Claude Code (which, per observed behavior, writes nothing discoverable until a session's first
+ * real prompt), Copilot CLI inserts a session's `sessions` row immediately at startup — confirmed
+ * live: creating a new session via "+ New Session" made it appear in the tree instantly, before
+ * typing anything, which is exactly the "opened by mistake and closed" case Claude Code's own
+ * later-write timing already avoids for free. Filtering here (once, in SQL) rather than per-caller
+ * keeps that behavior symmetric with Claude's for every consumer — the main tree, the archive cap,
+ * the Explorer view, search — since this is the only place any of them ever list Copilot sessions
+ * from (confirmed: nothing else calls this function).
+ */
 export function listCopilotSessions(): CopilotSessionRow[] {
   if (!copilotStoreExists()) {
     return [];
@@ -75,7 +87,13 @@ export function listCopilotSessions(): CopilotSessionRow[] {
   return withDb((db) => {
     const rows = db
       .prepare(
-        'SELECT id, cwd, repository, branch, summary, created_at AS createdAt, updated_at AS updatedAt FROM sessions ORDER BY updated_at DESC'
+        `SELECT id, cwd, repository, branch, summary, created_at AS createdAt, updated_at AS updatedAt
+         FROM sessions
+         WHERE EXISTS (
+           SELECT 1 FROM turns
+           WHERE turns.session_id = sessions.id AND trim(COALESCE(turns.user_message, '')) != ''
+         )
+         ORDER BY updated_at DESC`
       )
       .all();
     return rows as unknown as CopilotSessionRow[];

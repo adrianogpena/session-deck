@@ -8,7 +8,7 @@ import {
   listSessionFiles,
   readSessionMeta,
 } from '../discovery/claudeStorage';
-import { CopilotSessionRow, listCopilotSessions } from '../discovery/copilotStorage';
+import { CopilotSessionRow, getCopilotHomeDir, listCopilotSessions } from '../discovery/copilotStorage';
 import { resolveProjectRoot } from '../discovery/gitProject';
 import { normalizeFsPath } from '../discovery/pathUtils';
 import { ensureSessionStatusDir, getSessionStatusDir, readEffectiveSessionStatus, SessionStatusRecord } from '../status/sessionStatus';
@@ -149,6 +149,25 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
         context.subscriptions.push({ dispose: () => watcher.close() });
       } catch {
         // Silently fall back to manual refresh.
+      }
+    }
+
+    // Copilot's session list has no per-session file the way Claude's does — it's all rows in one
+    // shared SQLite database, `session-store.db`, run in WAL mode (confirmed in `copilotStorage.ts`),
+    // so every write — including a brand-new session's very first row — lands in `session-store.db-wal`
+    // before it's ever checkpointed into the main file. Watching both (not the whole `~/.copilot`
+    // directory, which also holds `open-sessions-state.json` and friends, updated on their own noisy
+    // heartbeat) is what actually catches a new session appearing; without this, a session created via
+    // "+ New Session" never showed up until a manual refresh — reported live after creating one.
+    for (const filename of ['session-store.db', 'session-store.db-wal']) {
+      const filePath = path.join(getCopilotHomeDir(), filename);
+      if (fs.existsSync(filePath)) {
+        try {
+          const watcher = fs.watch(filePath, () => this.refresh());
+          context.subscriptions.push({ dispose: () => watcher.close() });
+        } catch {
+          // Silently fall back to manual refresh.
+        }
       }
     }
 
