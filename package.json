@@ -56,7 +56,7 @@
       },
       {
         "view": "sessionDeck.activeSession",
-        "contents": "No sessions open right now.\n[Enable Live Status Tracking](command:sessionDeck.enableStatusTracking) to see running/waiting/done here too (Claude Code sessions only, for now)."
+        "contents": "No sessions open right now.\nCopilot sessions show live status automatically; [Enable Live Status Tracking](command:sessionDeck.enableStatusTracking) to see running/waiting/done for Claude sessions here too."
       }
     ],
     "commands": [

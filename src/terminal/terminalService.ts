@@ -4,9 +4,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { getClaudeProjectsDir, listProjectDirNames, listSessionFiles } from '../discovery/claudeStorage';
-import { SessionNode } from '../tree/sessionProvider';
+import { AgentType, SessionNode } from '../tree/sessionProvider';
 import { agentIconPath } from '../tree/agentIcons';
 import { clearSessionStatus, markSessionError } from '../status/sessionStatus';
+import { CopilotStatusWatcher } from '../status/copilotStatusWatcher';
 import { buildClaudeNewSessionCommand, buildClaudeResumeCommand } from './claudeCommand';
 import { buildCopilotResumeCommand } from './copilotCommand';
 
@@ -58,6 +59,8 @@ export class AgentTerminalService implements vscode.Disposable {
   private readonly sessionTerminals = new Map<string, vscode.Terminal>();
   /** Display label per tracked session id — `session.displayName` for a resume, the project name for a just-started new session (its real title isn't known yet). Used only for `WaitingNotifier`'s notification text. */
   private readonly sessionLabels = new Map<string, string>();
+  /** Which agent each tracked session belongs to — used only to know whether to start/stop `copilotStatusWatcher` tailing when a session is tracked/untracked. */
+  private readonly sessionAgents = new Map<string, AgentType>();
   /** Session ids already claimed by a pending `correlateNewSession` call, so two "New Session" clicks in quick succession can't both grab the same newly-created file. */
   private readonly claimedByCorrelation = new Set<string>();
   private readonly closeListener: vscode.Disposable;
@@ -69,8 +72,12 @@ export class AgentTerminalService implements vscode.Disposable {
   /** Which session a just-launched `claude --resume` execution belongs to — see `executionEndListener` and `launch`. */
   private readonly sessionIdByExecution = new Map<vscode.TerminalShellExecution, string>();
   private readonly executionEndListener: vscode.Disposable;
+  /** Tails a Copilot session's `events.jsonl` for live status, started/stopped alongside its terminal — see `trackTerminal`/`untrackTerminal`. No Claude equivalent needed here: Claude's status comes from its own hook process, entirely outside this class. */
+  private readonly copilotStatusWatcher: CopilotStatusWatcher;
 
   public constructor(private readonly outputChannel: vscode.OutputChannel, private readonly extensionUri: vscode.Uri) {
+    this.copilotStatusWatcher = new CopilotStatusWatcher((message) => this.outputChannel.appendLine(message));
+
     this.closeListener = vscode.window.onDidCloseTerminal((terminal) => {
       for (const [sessionId, tracked] of this.sessionTerminals) {
         if (tracked === terminal) {
@@ -89,14 +96,16 @@ export class AgentTerminalService implements vscode.Disposable {
     });
 
     /**
-     * Neither agent's hooks expose a distinct failure signal (confirmed for Claude Code: `Stop` fires
-     * the same way on a clean turn end or a fatal error; Copilot has no hook mechanism wired up at all
-     * yet) — this infers "error" instead from the exit code of the `claude`/`copilot` command itself,
-     * via shell integration's per-command completion event, agent-agnostic. Deliberately only acts on a
-     * real, positive exit code: `exitCode` comes back `undefined` for a Ctrl+C cancel, a sub-shell being
-     * opened, or a shell integration script that isn't reporting properly (documented on
-     * `TerminalShellExecutionEndEvent.exitCode`), so those are correctly left alone rather than misread
-     * as a crash.
+     * A backstop error signal, agent-agnostic, from the exit code of the `claude`/`copilot` command
+     * itself via shell integration's per-command completion event. Claude Code's hooks don't expose a
+     * distinct failure signal at all (`Stop` fires the same way on a clean turn end or a fatal error),
+     * so this is its only error signal; Copilot has its own more precise `session.error` event
+     * (`copilotStatusWatcher.ts`), which fires within the same command and so resolves first — this
+     * only catches what that one missed (e.g. a crash before Copilot CLI got to emit the event at all).
+     * Deliberately only acts on a real, positive exit code: `exitCode` comes back `undefined` for a
+     * Ctrl+C cancel, a sub-shell being opened, or a shell integration script that isn't reporting
+     * properly (documented on `TerminalShellExecutionEndEvent.exitCode`), so those are correctly left
+     * alone rather than misread as a crash.
      */
     this.executionEndListener = vscode.window.onDidEndTerminalShellExecution((event) => {
       const sessionId = this.sessionIdByExecution.get(event.execution);
@@ -131,9 +140,11 @@ export class AgentTerminalService implements vscode.Disposable {
     this.executionEndListener.dispose();
     for (const [sessionId, terminal] of this.sessionTerminals) {
       clearSessionStatus(sessionId);
+      this.copilotStatusWatcher.stop(sessionId);
       terminal.dispose();
     }
     this.sessionTerminals.clear();
+    this.sessionAgents.clear();
   }
 
   /** Session ids that currently have a tracked, still-open terminal — what the Explorer "Open Sessions" view shows. */
@@ -164,15 +175,23 @@ export class AgentTerminalService implements vscode.Disposable {
     this.sessionTerminals.get(sessionId)?.dispose();
   }
 
-  private trackTerminal(sessionId: string, terminal: vscode.Terminal, label: string): void {
+  private trackTerminal(sessionId: string, terminal: vscode.Terminal, label: string, agent: AgentType): void {
     this.sessionTerminals.set(sessionId, terminal);
     this.sessionLabels.set(sessionId, label);
+    this.sessionAgents.set(sessionId, agent);
+    if (agent === 'copilot') {
+      this.copilotStatusWatcher.start(sessionId);
+    }
     this._onDidChangeOpenSessions.fire();
   }
 
   private untrackTerminal(sessionId: string): void {
+    if (this.sessionAgents.get(sessionId) === 'copilot') {
+      this.copilotStatusWatcher.stop(sessionId);
+    }
     this.sessionTerminals.delete(sessionId);
     this.sessionLabels.delete(sessionId);
+    this.sessionAgents.delete(sessionId);
     this._onDidChangeOpenSessions.fire();
   }
 
@@ -331,7 +350,7 @@ export class AgentTerminalService implements vscode.Disposable {
             continue;
           }
           this.claimedByCorrelation.add(sessionId);
-          this.trackTerminal(sessionId, terminal, projectName);
+          this.trackTerminal(sessionId, terminal, projectName, 'claude');
           this.outputChannel.appendLine(`[terminal] New session ${sessionId} correlated with its terminal.`);
           this.renameIfStillActive(terminal, projectName);
           finish(true);
@@ -396,7 +415,7 @@ export class AgentTerminalService implements vscode.Disposable {
       iconPath: agentIconPath(this.extensionUri, session.agent),
       isTransient: true,
     });
-    this.trackTerminal(session.sessionId, terminal, session.displayName);
+    this.trackTerminal(session.sessionId, terminal, session.displayName, session.agent);
     terminal.show(true);
 
     this.outputChannel.appendLine(

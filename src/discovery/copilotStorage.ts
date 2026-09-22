@@ -18,6 +18,17 @@ function getSessionStorePath(): string {
   return path.join(getCopilotHomeDir(), 'session-store.db');
 }
 
+/**
+ * Copilot CLI's own live per-session activity log — appended to unconditionally for every session
+ * (used for its own IDE/resume support), independent of the `hooks` config entirely. `status/copilotStatusWatcher.ts`
+ * tails this for live status instead of requiring Copilot's opt-in hooks system, since this needs no setup.
+ * An internal, undocumented format (not the public `hooks` API) — confirmed by reading the CLI's own bundled
+ * `session-events.schema.json` — so treat its shape as best-effort, not a stable contract.
+ */
+export function getCopilotSessionEventsLogPath(sessionId: string): string {
+  return path.join(getCopilotHomeDir(), 'session-state', sessionId, 'events.jsonl');
+}
+
 export function copilotStoreExists(): boolean {
   return fs.existsSync(getSessionStorePath());
 }
