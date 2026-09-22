@@ -123,6 +123,16 @@
         "icon": "$(inbox)"
       },
       {
+        "command": "sessionDeck.copyLastResponse",
+        "title": "Session Deck: Copy Last Response",
+        "icon": "$(clippy)"
+      },
+      {
+        "command": "sessionDeck.copySessionInfo",
+        "title": "Session Deck: Copy Session Info",
+        "icon": "$(clippy)"
+      },
+      {
         "command": "sessionDeck.enableStatusTracking",
         "title": "Session Deck: Enable Live Status Tracking"
       },
@@ -236,6 +246,16 @@
           "group": "1_modification"
         },
         {
+          "command": "sessionDeck.copyLastResponse",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
+          "group": "1_modification"
+        },
+        {
+          "command": "sessionDeck.copySessionInfo",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
+          "group": "1_modification"
+        },
+        {
           "command": "sessionDeck.openSessionDangerously",
           "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
           "group": "2_danger"
@@ -277,6 +297,16 @@
         },
         {
           "command": "sessionDeck.unarchiveSession",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckArchivedSession",
+          "group": "1_modification"
+        },
+        {
+          "command": "sessionDeck.copyLastResponse",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckArchivedSession",
+          "group": "1_modification"
+        },
+        {
+          "command": "sessionDeck.copySessionInfo",
           "when": "view == sessionDeck.sessions && viewItem == sessionDeckArchivedSession",
           "group": "1_modification"
         },

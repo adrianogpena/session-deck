@@ -3,7 +3,12 @@ import * as vscode from 'vscode';
 import { SessionTreeProvider, ProjectGroupNode, SessionNode, SessionWithProject } from './tree/sessionProvider';
 import { ActiveSessionProvider } from './tree/activeSessionProvider';
 import { SessionContentProvider, SESSION_SCHEME } from './content/sessionContentProvider';
-import { clearSearchTextCache, clearSessionMetaCache, readSessionSearchText } from './discovery/claudeStorage';
+import {
+  clearSearchTextCache,
+  clearSessionMetaCache,
+  readLastAssistantResponse,
+  readSessionSearchText,
+} from './discovery/claudeStorage';
 import {
   disableStatusTracking,
   enableStatusTracking,
@@ -12,7 +17,7 @@ import {
   isStatusTrackingPresent,
 } from './status/claudeSettings';
 import { resolveProjectRoot, clearProjectRootCache } from './discovery/gitProject';
-import { acknowledgeSessionStatus } from './status/sessionStatus';
+import { acknowledgeSessionStatus, readEffectiveSessionStatus } from './status/sessionStatus';
 import { SessionStatusDecorationProvider } from './status/sessionStatusDecorationProvider';
 import { DeckState } from './config/state';
 import { ClaudeTerminalService } from './terminal/terminalService';
@@ -93,6 +98,8 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('sessionDeck.unarchiveSession', (node: SessionNode) =>
       unarchiveSession(node, state, treeProvider)
     ),
+    vscode.commands.registerCommand('sessionDeck.copyLastResponse', (session: SessionNode) => copyLastResponse(session)),
+    vscode.commands.registerCommand('sessionDeck.copySessionInfo', (session: SessionNode) => copySessionInfo(session)),
     vscode.commands.registerCommand('sessionDeck.addProject', () => addProject(treeProvider)),
     vscode.commands.registerCommand('sessionDeck.editProjectList', () => editProjectList()),
     vscode.commands.registerCommand('sessionDeck.newSession', (node: ProjectGroupNode) => newSession(node, terminalService)),
@@ -223,6 +230,39 @@ async function unarchiveSession(node: SessionNode, state: DeckState, tree: Sessi
   }
   await state.setSessionArchived(node.sessionId, false);
   tree.refresh();
+}
+
+/** Copies just the last assistant reply — e.g. to paste a fix/answer somewhere else without opening the terminal or the transcript view. */
+async function copyLastResponse(session: SessionNode): Promise<void> {
+  if (!session) {
+    return;
+  }
+  const text = await readLastAssistantResponse(session.filePath);
+  if (!text) {
+    vscode.window.showInformationMessage('No assistant response found in this session yet.');
+    return;
+  }
+  await vscode.env.clipboard.writeText(text);
+  vscode.window.showInformationMessage('Copied last response to the clipboard.');
+}
+
+/** Copies a plain-text summary — handy for pasting into an issue, a chat with a teammate, or another Claude session. */
+async function copySessionInfo(session: SessionNode): Promise<void> {
+  if (!session) {
+    return;
+  }
+  const status = readEffectiveSessionStatus(session.sessionId);
+  const lines = [
+    session.displayName,
+    `Project: ${path.basename(session.projectRoot)} (${session.projectRoot})`,
+    `Working directory: ${session.cwd}`,
+    `Session ID: ${session.sessionId}`,
+    `Last modified: ${session.lastModified.toISOString()}`,
+    status ? `Status: ${status.status}` : undefined,
+    `Transcript: ${session.filePath}`,
+  ].filter((line): line is string => Boolean(line));
+  await vscode.env.clipboard.writeText(lines.join('\n'));
+  vscode.window.showInformationMessage('Copied session info to the clipboard.');
 }
 
 interface SearchPickItem extends vscode.QuickPickItem {

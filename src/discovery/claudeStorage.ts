@@ -263,6 +263,42 @@ async function parseSessionSearchText(filePath: string): Promise<string> {
   return parts.join('\n');
 }
 
+/**
+ * The last assistant reply's displayable text — for the "Copy Last Response" command. A full scan like
+ * {@link readSessionSearchText}, but deliberately not cached: an on-demand action a user triggers once,
+ * not something read on every tree refresh.
+ */
+export async function readLastAssistantResponse(filePath: string): Promise<string | undefined> {
+  const rl = readline.createInterface({ input: fs.createReadStream(filePath), crlfDelay: Infinity });
+  let last: string | undefined;
+
+  try {
+    for await (const line of rl) {
+      if (!line.trim()) {
+        continue;
+      }
+      let record: Record<string, unknown>;
+      try {
+        record = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      const message = record.message as { role?: string; content?: unknown } | undefined;
+      if (record.type === 'assistant' && message?.role === 'assistant') {
+        const text = extractAssistantDisplayText(message.content).trim();
+        if (text) {
+          last = text;
+        }
+      }
+    }
+  } finally {
+    rl.close();
+  }
+
+  return last;
+}
+
 function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
