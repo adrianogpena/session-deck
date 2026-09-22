@@ -1,3 +1,4 @@
+import * as os from 'os';
 import * as path from 'path';
 
 /**
@@ -20,4 +21,21 @@ export function isInside(root: string, candidate: string): boolean {
   const normalizedRoot = normalizeFsPath(root);
   const normalizedCandidate = normalizeFsPath(candidate);
   return normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(normalizedRoot + path.sep);
+}
+
+/**
+ * `~` is a shell convention, never expanded by Node/VS Code — a `root` typed by hand as `~/foo`
+ * in `.vscode/session-deck.json` would otherwise be treated as a literal, nonexistent path
+ * (reported live: broke both "+ New Session" and matching real sessions back to their project).
+ * Only a *leading* `~` is special (`~user` isn't supported — no cross-platform way to resolve
+ * another user's home directory).
+ */
+export function expandHome(root: string): string {
+  if (root === '~') {
+    return os.homedir();
+  }
+  if (root.startsWith('~/') || root.startsWith('~\\')) {
+    return path.join(os.homedir(), root.slice(2));
+  }
+  return root;
 }

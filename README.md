@@ -15,9 +15,9 @@ Session Deck turns `~/.claude/projects` and the Copilot CLI's own session histor
 per-workspace session explorer. Pick up any past session — or start a new one — in a real
 terminal, running the real CLI, with live status at a glance.
 
-> 📷 **Placeholder for image** — the main Session Deck tree in the Activity Bar: a couple of
-> projects expanded, showing a mix of Claude and Copilot sessions with visible status dots
-> (🔴 running, 🟡 waiting, 🟢 done) and an "Archived (N)" folder.
+<p align="center">
+  <img src="resources/Overview-status-example.png" alt="The Session Deck tree in the Activity Bar, showing Claude and Copilot sessions grouped by project with live status dots" width="420">
+</p>
 
 ## Features
 
@@ -40,7 +40,13 @@ terminal, running the real CLI, with live status at a glance.
   session cap, and permission prompts.
 - **View a transcript**, or copy a session's last response or full details to the clipboard.
 - **Multi-root workspace support.**
+- **Open Sessions view in Explorer** — a flat, cross-project list of your currently open sessions
+  with live status, right in the built-in Explorer sidebar.
 - Works natively on Windows, macOS, and Linux — no WSL, no tmux.
+
+<p align="center">
+  <img src="resources/Open-sessions-status-example.png" alt="The Open Sessions panel in the Explorer sidebar, listing currently open sessions with live status dots" width="420">
+</p>
 
 > 📷 **Placeholder for image** — the Search Sessions QuickPick open, mid-query, showing ranked
 > fuzzy-matched results with a status-prefix filter (e.g. `!` for running) in the placeholder text.
@@ -101,9 +107,7 @@ union of all of them.
 
 ## Known Limitations
 
-- Forking a session works for Claude Code only — Copilot CLI has no equivalent capability.
-- No automatic git worktree creation for running parallel sessions on the same repo.
-- No cost/token usage dashboard.
+- Forking a session works for Claude Code only — Copilot CLI has no equivalent capability yet. Worth revisiting once Copilot CLI adds its own fork/branch support, the way Claude Code's `--fork-session` already works.
 
 ## Development
 

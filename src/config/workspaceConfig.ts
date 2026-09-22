@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { normalizeFsPath } from '../discovery/pathUtils';
+import { normalizeFsPath, expandHome } from '../discovery/pathUtils';
 
 /**
  * A `projects` entry can be a bare root path, or an object naming it and carrying its per-project
@@ -33,7 +33,8 @@ function configPathForFolder(folder: vscode.WorkspaceFolder): string {
 }
 
 function normalizeEntry(entry: string | WorkspaceProjectEntry): WorkspaceProjectEntry {
-  return typeof entry === 'string' ? { root: entry } : entry;
+  const normalized = typeof entry === 'string' ? { root: entry } : entry;
+  return { ...normalized, root: expandHome(normalized.root) };
 }
 
 /** `undefined` means this specific folder has no `.vscode/session-deck.json` (or it's malformed) — distinct from `readWorkspaceProjectEntries()`'s workspace-wide merge below. */

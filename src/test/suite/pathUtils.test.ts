@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import * as os from 'os';
 import * as path from 'path';
-import { normalizeFsPath, isInside } from '../../discovery/pathUtils';
+import { normalizeFsPath, isInside, expandHome } from '../../discovery/pathUtils';
 
 test('normalizeFsPath resolves relative segments away', () => {
   const a = normalizeFsPath(path.join('some', 'dir'));
@@ -35,4 +36,24 @@ test('isInside rejects a sibling directory that merely shares a name prefix', ()
   const root = path.resolve('/claude/projects');
   const sibling = path.resolve('/claude/projects-evil/x');
   assert.equal(isInside(root, sibling), false);
+});
+
+test('expandHome expands a bare ~ to the home directory', () => {
+  assert.equal(expandHome('~'), os.homedir());
+});
+
+test('expandHome expands a leading ~/ to a path under the home directory', () => {
+  assert.equal(expandHome('~/foo/bar'), path.join(os.homedir(), 'foo/bar'));
+});
+
+test('expandHome expands a leading ~\\ to a path under the home directory', () => {
+  assert.equal(expandHome('~\\foo\\bar'), path.join(os.homedir(), 'foo\\bar'));
+});
+
+test('expandHome leaves an absolute path untouched', () => {
+  assert.equal(expandHome('C:/Source/my-project'), 'C:/Source/my-project');
+});
+
+test('expandHome does not expand ~user (no cross-platform resolution available)', () => {
+  assert.equal(expandHome('~someuser/foo'), '~someuser/foo');
 });
