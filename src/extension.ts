@@ -23,11 +23,11 @@ import {
 export function activate(context: vscode.ExtensionContext) {
   const state = new DeckState(context.globalState);
   const treeProvider = new SessionTreeProvider(state, context.extensionUri);
-  const activeSessionProvider = new ActiveSessionProvider(treeProvider, context.extensionUri);
   const contentProvider = new SessionContentProvider();
   const statusDecorationProvider = new SessionStatusDecorationProvider();
   const outputChannel = vscode.window.createOutputChannel('Session Deck');
-  const terminalService = new ClaudeTerminalService(outputChannel);
+  const terminalService = new ClaudeTerminalService(outputChannel, context.extensionUri);
+  const activeSessionProvider = new ActiveSessionProvider(treeProvider, terminalService, context.extensionUri);
 
   const treeView = vscode.window.createTreeView('sessionDeck.sessions', {
     treeDataProvider: treeProvider,
@@ -40,6 +40,7 @@ export function activate(context: vscode.ExtensionContext) {
     terminalService,
     vscode.window.registerFileDecorationProvider(statusDecorationProvider),
     vscode.window.registerTreeDataProvider('sessionDeck.activeSession', activeSessionProvider),
+    terminalService.onDidChangeOpenSessions(() => activeSessionProvider.refresh()),
     treeView.onDidChangeSelection((e) => {
       const selectedSessions = e.selection.filter((node): node is SessionNode => node.kind === 'session');
       if (selectedSessions.length === 0) {

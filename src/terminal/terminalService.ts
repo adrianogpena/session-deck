@@ -59,12 +59,15 @@ export class ClaudeTerminalService implements vscode.Disposable {
   private readonly closeListener: vscode.Disposable;
   /** Memoized `hasClaudeBinary` result — PATH doesn't change mid-session, so there's no need to re-probe it (up to 3 sequential subprocess spawns) on every single session launch. Cleared on manual refresh, same as `gitProject.ts`'s and `claudeStorage.ts`'s caches. */
   private claudeBinaryCheck: Promise<boolean> | undefined;
+  private readonly _onDidChangeOpenSessions = new vscode.EventEmitter<void>();
+  /** Fires whenever a session gains or loses a tracked open terminal — what `activeSessionProvider.ts`'s Explorer view refreshes on. */
+  public readonly onDidChangeOpenSessions = this._onDidChangeOpenSessions.event;
 
-  public constructor(private readonly outputChannel: vscode.OutputChannel) {
+  public constructor(private readonly outputChannel: vscode.OutputChannel, private readonly extensionUri: vscode.Uri) {
     this.closeListener = vscode.window.onDidCloseTerminal((terminal) => {
       for (const [sessionId, tracked] of this.sessionTerminals) {
         if (tracked === terminal) {
-          this.sessionTerminals.delete(sessionId);
+          this.untrackTerminal(sessionId);
           // Closing the terminal kills the process tree outright (no graceful
           // shutdown on Windows without WSL/tmux), so Claude Code may never get
           // to fire its own SessionEnd hook — clear the status ourselves so the
@@ -81,6 +84,26 @@ export class ClaudeTerminalService implements vscode.Disposable {
 
   public dispose(): void {
     this.closeListener.dispose();
+  }
+
+  /** Session ids that currently have a tracked, still-open terminal — what the Explorer "Open Sessions" view shows. */
+  public openSessionIds(): ReadonlySet<string> {
+    return new Set(this.sessionTerminals.keys());
+  }
+
+  /** Same mark used for a session's tree row — set as the terminal tab's icon too, so it doesn't default to whatever the shell profile's own icon is (Git Bash's icon, on this machine) and read as unrelated to Claude Code. */
+  private claudeMarkIconPath(): vscode.Uri {
+    return vscode.Uri.joinPath(this.extensionUri, 'resources', 'claude-mark.svg');
+  }
+
+  private trackTerminal(sessionId: string, terminal: vscode.Terminal): void {
+    this.sessionTerminals.set(sessionId, terminal);
+    this._onDidChangeOpenSessions.fire();
+  }
+
+  private untrackTerminal(sessionId: string): void {
+    this.sessionTerminals.delete(sessionId);
+    this._onDidChangeOpenSessions.fire();
   }
 
   /** The default action: reuses (just `.show()`s) this session's own terminal if it's still alive, otherwise opens a new one. */
@@ -140,6 +163,7 @@ export class ClaudeTerminalService implements vscode.Disposable {
       name: truncate(`New: ${projectName}`, 35),
       cwd,
       location: { viewColumn: vscode.ViewColumn.Active },
+      iconPath: this.claudeMarkIconPath(),
     });
     terminal.show(true);
     void this.correlateNewSession(terminal, projectName);
@@ -236,7 +260,7 @@ export class ClaudeTerminalService implements vscode.Disposable {
             continue;
           }
           this.claimedByCorrelation.add(sessionId);
-          this.sessionTerminals.set(sessionId, terminal);
+          this.trackTerminal(sessionId, terminal);
           this.outputChannel.appendLine(`[terminal] New session ${sessionId} correlated with its terminal.`);
           this.renameIfStillActive(terminal, projectName);
           finish(true);
@@ -294,8 +318,9 @@ export class ClaudeTerminalService implements vscode.Disposable {
       name: truncate(session.displayName, 35),
       cwd: session.cwd,
       location: { viewColumn: vscode.ViewColumn.Active },
+      iconPath: this.claudeMarkIconPath(),
     });
-    this.sessionTerminals.set(session.sessionId, terminal);
+    this.trackTerminal(session.sessionId, terminal);
     terminal.show(true);
 
     this.outputChannel.appendLine(
