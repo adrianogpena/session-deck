@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
 import { extractAssistantDisplayText, extractText, getClaudeProjectsDir, isDisplayableUserPrompt } from './claudeStorage';
+import { isInside } from './pathUtils';
 
 /** Custom URI scheme for the virtual, read-only documents that back the single reusable session tab. */
 export const SESSION_SCHEME = 'session-deck';
@@ -13,9 +14,19 @@ export class SessionContentProvider implements vscode.TextDocumentContentProvide
 
   async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
     const [projectDirNameEncoded, fileName] = uri.path.replace(/^\//, '').split('/');
-    const projectDirName = decodeURIComponent(projectDirNameEncoded);
-    const sessionId = fileName.replace(/\.md$/, '');
-    const filePath = path.join(getClaudeProjectsDir(), projectDirName, `${sessionId}.jsonl`);
+    const projectDirName = decodeURIComponent(projectDirNameEncoded ?? '');
+    const sessionId = (fileName ?? '').replace(/\.md$/, '');
+
+    const root = getClaudeProjectsDir();
+    const filePath = path.join(root, projectDirName, `${sessionId}.jsonl`);
+
+    // Defense in depth: projectDirName/sessionId are decoded straight from the URI, so a
+    // "../" (or similar) segment must never resolve outside ~/.claude/projects, even though
+    // every URI this extension itself builds (viewTranscript) only ever uses real directory/file
+    // names already enumerated from that same tree.
+    if (!isInside(root, filePath)) {
+      return '# Invalid session reference';
+    }
 
     if (!fs.existsSync(filePath)) {
       return `# Session not found\n\n\`${filePath}\` no longer exists.`;

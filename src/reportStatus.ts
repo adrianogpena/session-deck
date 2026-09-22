@@ -32,6 +32,13 @@ function statusDir(): string {
 }
 
 /**
+ * `session_id` is external input to this process (a hook payload from the `claude` CLI on stdin), used
+ * below to build the status file's path — Claude Code itself always sends a plain UUID, but this is the
+ * boundary that actually matters, so anything else is rejected outright rather than trusted to be safe.
+ */
+const SAFE_SESSION_ID = /^[A-Za-z0-9-]+$/;
+
+/**
  * Only these `notification_type`s represent something genuinely needing
  * *your* action. `claudeSettings.ts` already configures the `Notification`
  * hook's `matcher` to this same set, so Claude Code shouldn't invoke this
@@ -87,7 +94,7 @@ function main(): void {
       const payload = JSON.parse(raw) as HookPayload;
       const action = actionForPayload(payload);
       const sessionId = payload.session_id;
-      if (!action || !sessionId) {
+      if (!action || !sessionId || !SAFE_SESSION_ID.test(sessionId)) {
         return;
       }
 

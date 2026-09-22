@@ -10,3 +10,14 @@ export function normalizeFsPath(fsPath: string): string {
   const resolved = path.resolve(fsPath);
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
+
+/**
+ * True when `candidate` resolves to `root` itself or somewhere inside it — the standard guard against a
+ * path built from external/decoded input (a URI segment, a hook payload) escaping outside `root` via a
+ * "../" or similar segment.
+ */
+export function isInside(root: string, candidate: string): boolean {
+  const normalizedRoot = normalizeFsPath(root);
+  const normalizedCandidate = normalizeFsPath(candidate);
+  return normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(normalizedRoot + path.sep);
+}

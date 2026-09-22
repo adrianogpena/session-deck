@@ -1,4 +1,4 @@
-import { execFile, exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -8,7 +8,6 @@ import { SessionNode } from './sessionProvider';
 import { clearSessionStatus } from './sessionStatus';
 
 const execFileAsync = promisify(execFile);
-const execAsync = promisify(exec);
 
 /** Time to wait for shell integration before falling back to sendText. */
 const SHELL_INTEGRATION_TIMEOUT_MS = 500;
@@ -280,6 +279,14 @@ export class ClaudeTerminalService implements vscode.Disposable {
       return;
     }
 
+    let resumeCommand: string;
+    try {
+      resumeCommand = buildClaudeResumeCommand(session.sessionId, dangerouslySkipPermissions);
+    } catch (error) {
+      vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+      return;
+    }
+
     const terminal = vscode.window.createTerminal({
       name: truncate(session.displayName, 35),
       cwd: session.cwd,
@@ -288,7 +295,6 @@ export class ClaudeTerminalService implements vscode.Disposable {
     this.sessionTerminals.set(session.sessionId, terminal);
     terminal.show(true);
 
-    const resumeCommand = buildClaudeResumeCommand(session.sessionId, dangerouslySkipPermissions);
     this.outputChannel.appendLine(
       `[terminal] Opening session ${session.sessionId} (skipPermissions=${String(dangerouslySkipPermissions)}).`
     );
@@ -328,12 +334,15 @@ export class ClaudeTerminalService implements vscode.Disposable {
     } catch {
       try {
         const shell = vscode.env.shell || '/bin/sh';
-        await execAsync(`${checker} claude`, { env: { ...process.env, SHELL: shell } });
+        await execFileAsync(checker, ['claude'], { env: { ...process.env, SHELL: shell } });
         return true;
       } catch {
         try {
+          // execFile (not exec) so vscode.env.shell is invoked directly rather than parsed by
+          // an intermediate shell — only its `-c` argument (a fixed, non-interpolated string) is
+          // ever shell-interpreted.
           const shell = vscode.env.shell || '/bin/sh';
-          await execAsync(`"${shell}" -l -c "${checker} claude"`);
+          await execFileAsync(shell, ['-l', '-c', `${checker} claude`]);
           return true;
         } catch {
           return false;
@@ -348,7 +357,7 @@ export function buildClaudeResumeCommand(sessionId: string, dangerouslySkipPermi
   if (dangerouslySkipPermissions) {
     args.push('--dangerously-skip-permissions');
   }
-  args.push('--resume', shellQuote(sessionId));
+  args.push('--resume', assertSafeSessionId(sessionId));
   return args.join(' ');
 }
 
@@ -367,8 +376,20 @@ function snapshotSessionFilePaths(root: string): Set<string> {
   return result;
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
+/**
+ * A Claude Code session id is always a plain UUID-shaped token (hex digits and hyphens). Enforced here
+ * before it's ever interpolated into a command string sent to a live terminal — a bare token matching
+ * this never needs quoting to stay a single, unambiguous argument in bash, PowerShell, *or* cmd.exe
+ * alike, which sidesteps having to pick a shell-specific quoting style (the previous POSIX-only
+ * single-quote escaping here was silently wrong for a Windows terminal on cmd.exe or PowerShell).
+ */
+const SAFE_SESSION_ID = /^[A-Za-z0-9-]+$/;
+
+function assertSafeSessionId(sessionId: string): string {
+  if (!SAFE_SESSION_ID.test(sessionId)) {
+    throw new Error(`Refusing to build a terminal command for an unexpected session id: ${JSON.stringify(sessionId)}`);
+  }
+  return sessionId;
 }
 
 function truncate(text: string, max: number): string {
