@@ -40,6 +40,9 @@ export class SessionStatusDecorationProvider implements vscode.FileDecorationPro
         return { badge: '●', color: new vscode.ThemeColor('charts.yellow'), tooltip: 'Waiting for input' };
       case 'done':
         return { badge: '●', color: new vscode.ThemeColor('charts.green'), tooltip: 'Done' };
+      case 'error':
+        // A distinct glyph, not just a red dot — otherwise indistinguishable from "running" at a glance.
+        return { badge: '✗', color: new vscode.ThemeColor('errorForeground'), tooltip: 'Exited with an error' };
       default:
         return undefined;
     }

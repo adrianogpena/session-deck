@@ -17,8 +17,9 @@ import {
   isStatusTrackingPresent,
 } from './status/claudeSettings';
 import { resolveProjectRoot, clearProjectRootCache } from './discovery/gitProject';
-import { acknowledgeSessionStatus, readEffectiveSessionStatus } from './status/sessionStatus';
+import { acknowledgeSessionStatus, readEffectiveSessionStatus, SessionStatus } from './status/sessionStatus';
 import { SessionStatusDecorationProvider } from './status/sessionStatusDecorationProvider';
+import { WaitingNotifier } from './status/waitingNotifier';
 import { DeckState } from './config/state';
 import { ClaudeTerminalService } from './terminal/terminalService';
 import {
@@ -45,6 +46,8 @@ export function activate(context: vscode.ExtensionContext) {
     }
   });
   const activeSessionProvider = new ActiveSessionProvider(treeProvider, terminalService, context.extensionUri);
+  // resources/icon.png (not the tree's claude-mark.svg): most OS notifiers expect a raster icon.
+  const waitingNotifier = new WaitingNotifier(path.join(context.extensionPath, 'resources', 'icon.png'));
 
   const treeView = vscode.window.createTreeView('sessionDeck.sessions', {
     treeDataProvider: treeProvider,
@@ -126,6 +129,7 @@ export function activate(context: vscode.ExtensionContext) {
   treeProvider.watch(context, () => {
     statusDecorationProvider.refresh();
     activeSessionProvider.refresh();
+    waitingNotifier.check(terminalService.getOpenSessions(), (sessionId) => terminalService.revealSession(sessionId));
   });
 
   // Auto-refresh when the workspace's project list file is created/edited/deleted
@@ -277,6 +281,14 @@ interface SearchPickItem extends vscode.QuickPickItem {
  * text by mtime in `claudeStorage.ts`, so repeat searches are effectively free);
  * everything after that is an in-memory substring filter, so typing stays fast.
  */
+/** A leading status filter in Search, same characters as agent-deck: `!running`, `@waiting for input`, `#done`, `~error`. */
+const SEARCH_STATUS_PREFIXES: Record<string, SessionStatus> = {
+  '!': 'running',
+  '@': 'waiting',
+  '#': 'done',
+  '~': 'error',
+};
+
 async function searchSessions(tree: SessionTreeProvider, state: DeckState, terminalService: ClaudeTerminalService): Promise<void> {
   const all = await tree.listAllSessions();
   if (all.length === 0) {
@@ -285,7 +297,7 @@ async function searchSessions(tree: SessionTreeProvider, state: DeckState, termi
   }
 
   const quickPick = vscode.window.createQuickPick<SearchPickItem>();
-  quickPick.placeholder = 'Search session content across all configured projects…';
+  quickPick.placeholder = 'Search sessions… ! running, @ waiting, # done, ~ error';
   quickPick.matchOnDescription = false;
   quickPick.matchOnDetail = false;
 
@@ -298,13 +310,16 @@ async function searchSessions(tree: SessionTreeProvider, state: DeckState, termi
   let searchTextBySessionId: Map<string, string> | undefined;
 
   quickPick.onDidChangeValue(async (value) => {
-    const query = value.trim().toLowerCase();
-    if (!query) {
+    const trimmed = value.trim();
+    if (!trimmed) {
       quickPick.items = [];
       return;
     }
 
-    if (!searchTextBySessionId) {
+    const statusFilter = SEARCH_STATUS_PREFIXES[trimmed[0]];
+    const query = (statusFilter ? trimmed.slice(1) : trimmed).trim().toLowerCase();
+
+    if (query && !searchTextBySessionId) {
       quickPick.busy = true;
       const pairs = await Promise.all(
         all.map(async (entry): Promise<[string, string]> => [
@@ -317,7 +332,15 @@ async function searchSessions(tree: SessionTreeProvider, state: DeckState, termi
     }
 
     quickPick.items = all
-      .filter((entry) => (searchTextBySessionId?.get(entry.session.sessionId) ?? '').toLowerCase().includes(query))
+      .filter((entry) => {
+        if (statusFilter && readEffectiveSessionStatus(entry.session.sessionId)?.status !== statusFilter) {
+          return false;
+        }
+        if (!query) {
+          return true;
+        }
+        return (searchTextBySessionId?.get(entry.session.sessionId) ?? '').toLowerCase().includes(query);
+      })
       .map(toItem);
   });
 

@@ -1,8 +1,15 @@
 import * as vscode from 'vscode';
 import { SessionTreeProvider, SessionWithProject } from './sessionProvider';
-import { readEffectiveSessionStatus } from '../status/sessionStatus';
+import { readEffectiveSessionStatus, SessionStatus } from '../status/sessionStatus';
 import { sessionStatusUri } from '../status/sessionStatusDecorationProvider';
 import { ClaudeTerminalService } from '../terminal/terminalService';
+
+const STATUS_LABELS: Record<SessionStatus, string> = {
+  running: 'running',
+  waiting: 'waiting for input',
+  done: 'done',
+  error: 'exited with an error',
+};
 
 /**
  * A compact companion view for the built-in Explorer sidebar — the reference
@@ -34,14 +41,7 @@ export class ActiveSessionProvider implements vscode.TreeDataProvider<SessionWit
   getTreeItem(element: SessionWithProject): vscode.TreeItem {
     const { session, projectDisplayName } = element;
     const status = readEffectiveSessionStatus(session.sessionId);
-    const statusLabel =
-      status?.status === 'running'
-        ? 'running'
-        : status?.status === 'waiting'
-          ? 'waiting for input'
-          : status?.status === 'done'
-            ? 'done'
-            : 'open';
+    const statusLabel = status ? STATUS_LABELS[status.status] : 'open';
 
     const item = new vscode.TreeItem(session.displayName, vscode.TreeItemCollapsibleState.None);
     item.description = `${projectDisplayName} · ${statusLabel}`;

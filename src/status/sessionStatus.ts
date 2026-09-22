@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
-export type SessionStatus = 'running' | 'waiting' | 'done';
+export type SessionStatus = 'running' | 'waiting' | 'done' | 'error';
 
 export interface SessionStatusRecord {
   status: SessionStatus;
@@ -38,6 +38,19 @@ export function clearSessionStatus(sessionId: string): void {
 }
 
 /**
+ * Written directly by `terminalService.ts` (unlike every other status, which comes from
+ * `reportStatus.ts`'s hook payloads) — Claude Code's hooks don't expose a distinct failure signal, so
+ * this is inferred instead from the exit code of the `claude` command run in a session's terminal. See
+ * `terminalService.ts`'s `onDidEndTerminalShellExecution` listener for the (best-effort, heuristic)
+ * detection itself.
+ */
+export function markSessionError(sessionId: string): void {
+  ensureSessionStatusDir();
+  const filePath = path.join(getSessionStatusDir(), `${sessionId}.json`);
+  fs.writeFileSync(filePath, JSON.stringify({ status: 'error', updatedAt: Date.now() }), 'utf8');
+}
+
+/**
  * `undefined` means "no status" — either tracking isn't enabled, this session
  * predates it, or `reportStatus.ts` just cleared the file on `SessionEnd`
  * (the `claude` process actually exited, so there's no live state left to show).
@@ -46,7 +59,10 @@ export function readSessionStatus(sessionId: string): SessionStatusRecord | unde
   const filePath = path.join(getSessionStatusDir(), `${sessionId}.json`);
   try {
     const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    if (parsed && (parsed.status === 'running' || parsed.status === 'waiting' || parsed.status === 'done')) {
+    if (
+      parsed &&
+      (parsed.status === 'running' || parsed.status === 'waiting' || parsed.status === 'done' || parsed.status === 'error')
+    ) {
       return { status: parsed.status, updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0 };
     }
   } catch {
@@ -56,29 +72,27 @@ export function readSessionStatus(sessionId: string): SessionStatusRecord | unde
 }
 
 /**
- * "done" (🟢) is purely informational — a completed task sitting there for you
- * to notice — unlike "waiting" (🟡), which is a real pending request that only
- * clears when you actually resolve it (approving a permission, typing
- * something) and thus gets a fresh hook event of its own. Once you've selected
- * a "done" session in the tree, there's nothing further to inform you of, so
- * it should read as "no status" (blank) until a *newer* event supersedes it —
- * tracked here by exact `updatedAt`, in memory only (deliberately not
- * persisted: "have I looked at this since it finished" is scoped to the
- * current VS Code session).
+ * "done" (🟢) and "error" (🔴✗) are both purely informational — something happened, sitting there for
+ * you to notice — unlike "waiting" (🟡), which is a real pending request that only clears when you
+ * actually resolve it (approving a permission, typing something) and thus gets a fresh hook event of
+ * its own. Once you've selected such a session in the tree, there's nothing further to inform you of,
+ * so it should read as "no status" (blank) until a *newer* event supersedes it — tracked here by exact
+ * `updatedAt`, in memory only (deliberately not persisted: "have I looked at this since it finished" is
+ * scoped to the current VS Code session).
  */
-const acknowledgedDoneAt = new Map<string, number>();
+const acknowledgedAt = new Map<string, number>();
 
 export function acknowledgeSessionStatus(sessionId: string): void {
   const status = readSessionStatus(sessionId);
-  if (status?.status === 'done') {
-    acknowledgedDoneAt.set(sessionId, status.updatedAt);
+  if (status?.status === 'done' || status?.status === 'error') {
+    acknowledgedAt.set(sessionId, status.updatedAt);
   }
 }
 
 /** What the UI should actually display — see {@link acknowledgeSessionStatus}. */
 export function readEffectiveSessionStatus(sessionId: string): SessionStatusRecord | undefined {
   const status = readSessionStatus(sessionId);
-  if (status?.status === 'done' && acknowledgedDoneAt.get(sessionId) === status.updatedAt) {
+  if ((status?.status === 'done' || status?.status === 'error') && acknowledgedAt.get(sessionId) === status.updatedAt) {
     return undefined;
   }
   return status;

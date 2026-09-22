@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { getClaudeProjectsDir, listProjectDirNames, listSessionFiles } from '../discovery/claudeStorage';
 import { SessionNode } from '../tree/sessionProvider';
-import { clearSessionStatus } from '../status/sessionStatus';
+import { clearSessionStatus, markSessionError } from '../status/sessionStatus';
 import { buildClaudeNewSessionCommand, buildClaudeResumeCommand } from './claudeCommand';
 
 const execFileAsync = promisify(execFile);
@@ -54,6 +54,8 @@ export interface OpenSessionTerminalOptions {
  */
 export class ClaudeTerminalService implements vscode.Disposable {
   private readonly sessionTerminals = new Map<string, vscode.Terminal>();
+  /** Display label per tracked session id — `session.displayName` for a resume, the project name for a just-started new session (its real title isn't known yet). Used only for `WaitingNotifier`'s notification text. */
+  private readonly sessionLabels = new Map<string, string>();
   /** Session ids already claimed by a pending `correlateNewSession` call, so two "New Session" clicks in quick succession can't both grab the same newly-created file. */
   private readonly claimedByCorrelation = new Set<string>();
   private readonly closeListener: vscode.Disposable;
@@ -62,6 +64,9 @@ export class ClaudeTerminalService implements vscode.Disposable {
   private readonly _onDidChangeOpenSessions = new vscode.EventEmitter<void>();
   /** Fires whenever a session gains or loses a tracked open terminal — what `activeSessionProvider.ts`'s Explorer view refreshes on. */
   public readonly onDidChangeOpenSessions = this._onDidChangeOpenSessions.event;
+  /** Which session a just-launched `claude --resume` execution belongs to — see `executionEndListener` and `launch`. */
+  private readonly sessionIdByExecution = new Map<vscode.TerminalShellExecution, string>();
+  private readonly executionEndListener: vscode.Disposable;
 
   public constructor(private readonly outputChannel: vscode.OutputChannel, private readonly extensionUri: vscode.Uri) {
     this.closeListener = vscode.window.onDidCloseTerminal((terminal) => {
@@ -78,6 +83,27 @@ export class ClaudeTerminalService implements vscode.Disposable {
           this.outputChannel.appendLine(`[terminal] Terminal for session ${sessionId} closed; status cleared.`);
           break;
         }
+      }
+    });
+
+    /**
+     * Claude Code's hooks don't expose a distinct failure signal (confirmed: `Stop` fires the same way
+     * on a clean turn end or a fatal error) — this infers "error" instead from the exit code of the
+     * `claude` command itself, via shell integration's per-command completion event. Deliberately only
+     * acts on a real, positive exit code: `exitCode` comes back `undefined` for a Ctrl+C cancel, a
+     * sub-shell being opened, or a shell integration script that isn't reporting properly (documented
+     * on `TerminalShellExecutionEndEvent.exitCode`), so those are correctly left alone rather than
+     * misread as a crash.
+     */
+    this.executionEndListener = vscode.window.onDidEndTerminalShellExecution((event) => {
+      const sessionId = this.sessionIdByExecution.get(event.execution);
+      if (!sessionId) {
+        return;
+      }
+      this.sessionIdByExecution.delete(event.execution);
+      if (typeof event.exitCode === 'number' && event.exitCode !== 0) {
+        markSessionError(sessionId);
+        this.outputChannel.appendLine(`[terminal] Session ${sessionId}'s command exited with code ${event.exitCode}; marked as error.`);
       }
     });
   }
@@ -99,6 +125,7 @@ export class ClaudeTerminalService implements vscode.Disposable {
    */
   public dispose(): void {
     this.closeListener.dispose();
+    this.executionEndListener.dispose();
     for (const [sessionId, terminal] of this.sessionTerminals) {
       clearSessionStatus(sessionId);
       terminal.dispose();
@@ -109,6 +136,19 @@ export class ClaudeTerminalService implements vscode.Disposable {
   /** Session ids that currently have a tracked, still-open terminal — what the Explorer "Open Sessions" view shows. */
   public openSessionIds(): ReadonlySet<string> {
     return new Set(this.sessionTerminals.keys());
+  }
+
+  /** Same, with a display label per id — what `WaitingNotifier` watches and names in its notifications. */
+  public getOpenSessions(): { sessionId: string; label: string }[] {
+    return [...this.sessionTerminals.keys()].map((sessionId) => ({
+      sessionId,
+      label: this.sessionLabels.get(sessionId) ?? sessionId,
+    }));
+  }
+
+  /** Brings this session's terminal to the front within the window — the click-through target for `WaitingNotifier`. A no-op if it's not (or no longer) tracked. */
+  public revealSession(sessionId: string): void {
+    this.sessionTerminals.get(sessionId)?.show(true);
   }
 
   /**
@@ -126,13 +166,15 @@ export class ClaudeTerminalService implements vscode.Disposable {
     return vscode.Uri.joinPath(this.extensionUri, 'resources', 'claude-mark.svg');
   }
 
-  private trackTerminal(sessionId: string, terminal: vscode.Terminal): void {
+  private trackTerminal(sessionId: string, terminal: vscode.Terminal, label: string): void {
     this.sessionTerminals.set(sessionId, terminal);
+    this.sessionLabels.set(sessionId, label);
     this._onDidChangeOpenSessions.fire();
   }
 
   private untrackTerminal(sessionId: string): void {
     this.sessionTerminals.delete(sessionId);
+    this.sessionLabels.delete(sessionId);
     this._onDidChangeOpenSessions.fire();
   }
 
@@ -291,7 +333,7 @@ export class ClaudeTerminalService implements vscode.Disposable {
             continue;
           }
           this.claimedByCorrelation.add(sessionId);
-          this.trackTerminal(sessionId, terminal);
+          this.trackTerminal(sessionId, terminal, projectName);
           this.outputChannel.appendLine(`[terminal] New session ${sessionId} correlated with its terminal.`);
           this.renameIfStillActive(terminal, projectName);
           finish(true);
@@ -352,7 +394,7 @@ export class ClaudeTerminalService implements vscode.Disposable {
       iconPath: this.claudeMarkIconPath(),
       isTransient: true,
     });
-    this.trackTerminal(session.sessionId, terminal);
+    this.trackTerminal(session.sessionId, terminal, session.displayName);
     terminal.show(true);
 
     this.outputChannel.appendLine(
@@ -361,16 +403,22 @@ export class ClaudeTerminalService implements vscode.Disposable {
 
     await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: 'Waiting for terminal to be ready…' },
-      () => executeInTerminal(terminal, resumeCommand, this.terminalDeps())
+      () =>
+        executeInTerminal(
+          terminal,
+          resumeCommand,
+          this.terminalDeps((execution) => this.sessionIdByExecution.set(execution, session.sessionId))
+        )
     );
   }
 
-  private terminalDeps(): ExecuteInTerminalDeps {
+  private terminalDeps(onExecutionStarted?: (execution: vscode.TerminalShellExecution) => void): ExecuteInTerminalDeps {
     return {
       subscribe: vscode.window.onDidChangeTerminalShellIntegration,
       onDidStartExecution: vscode.window.onDidStartTerminalShellExecution,
       log: (msg) => this.outputChannel.appendLine(msg),
       timeoutMs: SHELL_INTEGRATION_TIMEOUT_MS,
+      onExecutionStarted,
     };
   }
 
@@ -444,6 +492,8 @@ interface ExecuteInTerminalDeps {
   readonly onDidStartExecution: typeof vscode.window.onDidStartTerminalShellExecution;
   readonly log: (message: string) => void;
   readonly timeoutMs: number;
+  /** Called with the `TerminalShellExecution` the moment `executeCommand` actually runs, whichever path gets there — lets a caller (`launch`) correlate it to a session id for `executionEndListener`. */
+  readonly onExecutionStarted?: (execution: vscode.TerminalShellExecution) => void;
 }
 
 /**
@@ -454,11 +504,11 @@ interface ExecuteInTerminalDeps {
  * never activates within the timeout.
  */
 function executeInTerminal(terminal: vscode.Terminal, command: string, deps: ExecuteInTerminalDeps): Promise<void> {
-  const { subscribe, onDidStartExecution, log, timeoutMs } = deps;
+  const { subscribe, onDidStartExecution, log, timeoutMs, onExecutionStarted } = deps;
 
   if (terminal.shellIntegration) {
     log('[terminal] Shell integration available, using executeCommand.');
-    terminal.shellIntegration.executeCommand(command);
+    onExecutionStarted?.(terminal.shellIntegration.executeCommand(command));
     return awaitCommandStart(terminal, onDidStartExecution, log, timeoutMs);
   }
 
@@ -470,7 +520,7 @@ function executeInTerminal(terminal: vscode.Terminal, command: string, deps: Exe
         executed = true;
         listener.dispose();
         log('[terminal] Shell integration activated, using executeCommand.');
-        shellIntegration.executeCommand(command);
+        onExecutionStarted?.(shellIntegration.executeCommand(command));
         awaitCommandStart(terminal, onDidStartExecution, log, timeoutMs).then(resolve);
       }
     });
