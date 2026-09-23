@@ -356,7 +356,14 @@
           "group": "2_danger"
         }
       ]
-    }
+    },
+    "keybindings": [
+      {
+        "command": "sessionDeck.search",
+        "key": "ctrl+k s",
+        "mac": "cmd+k s"
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
