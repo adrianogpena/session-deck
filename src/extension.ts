@@ -83,6 +83,9 @@ export function activate(context: vscode.ExtensionContext) {
       activeSessionProvider.refresh();
     }),
     vscode.commands.registerCommand('sessionDeck.openSession', async (session: SessionNode) => {
+      if (!session) {
+        return;
+      }
       await ensureSessionActive(session, state, treeProvider);
       await terminalService.openSession(session);
       acknowledgeAndRefresh(session, treeProvider, statusDecorationProvider, activeSessionProvider);

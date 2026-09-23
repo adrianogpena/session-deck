@@ -177,6 +177,21 @@
       }
     ],
     "menus": {
+      "commandPalette": [
+        { "command": "sessionDeck.openSession", "when": "false" },
+        { "command": "sessionDeck.openSessionDangerously", "when": "false" },
+        { "command": "sessionDeck.viewTranscript", "when": "false" },
+        { "command": "sessionDeck.archiveSession", "when": "false" },
+        { "command": "sessionDeck.unarchiveSession", "when": "false" },
+        { "command": "sessionDeck.copyLastResponse", "when": "false" },
+        { "command": "sessionDeck.copySessionInfo", "when": "false" },
+        { "command": "sessionDeck.renameSession", "when": "false" },
+        { "command": "sessionDeck.forkSession", "when": "false" },
+        { "command": "sessionDeck.forkSessionDangerously", "when": "false" },
+        { "command": "sessionDeck.renameProject", "when": "false" },
+        { "command": "sessionDeck.removeProject", "when": "false" },
+        { "command": "sessionDeck.hideProject", "when": "false" }
+      ],
       "view/title": [
         {
           "command": "sessionDeck.search",
