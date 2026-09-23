@@ -380,8 +380,8 @@
       },
       {
         "command": "sessionDeck.newSession",
-        "key": "ctrl+k n",
-        "mac": "cmd+k n"
+        "key": "ctrl+k g",
+        "mac": "cmd+k g"
       }
     ]
   },
