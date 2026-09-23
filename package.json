@@ -377,6 +377,11 @@
         "command": "sessionDeck.search",
         "key": "ctrl+k s",
         "mac": "cmd+k s"
+      },
+      {
+        "command": "sessionDeck.newSession",
+        "key": "ctrl+k n",
+        "mac": "cmd+k n"
       }
     ]
   },
