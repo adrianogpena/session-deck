@@ -10,10 +10,8 @@ import { isInside } from '../discovery/pathUtils';
 export const SESSION_SCHEME = 'session-deck';
 
 /**
- * `session-deck:/claude/<projectDirNameEncoded>/<sessionId>.md` (a real `.jsonl` transcript to read) or
- * `session-deck:/copilot/<sessionId>.md` (no per-session file — its turns live in the shared
- * `~/.copilot/session-store.db`, read by id instead) — see `viewTranscript` in extension.ts, the only
- * place that builds these.
+ * `session-deck:/claude/<projectDirNameEncoded>/<sessionId>.md` or `session-deck:/copilot/<sessionId>.md`
+ * — see `viewTranscript` in extension.ts, the only place that builds these.
  */
 export class SessionContentProvider implements vscode.TextDocumentContentProvider {
   private readonly _onDidChange = new vscode.EventEmitter<vscode.Uri>();
@@ -35,10 +33,7 @@ export class SessionContentProvider implements vscode.TextDocumentContentProvide
     const root = getClaudeProjectsDir();
     const filePath = path.join(root, projectDirName, `${sessionId}.jsonl`);
 
-    // Defense in depth: projectDirName/sessionId are decoded straight from the URI, so a
-    // "../" (or similar) segment must never resolve outside ~/.claude/projects, even though
-    // every URI this extension itself builds (viewTranscript) only ever uses real directory/file
-    // names already enumerated from that same tree.
+    // Defense in depth: decoded straight from the URI, so it must never resolve outside the projects root.
     if (!isInside(root, filePath)) {
       return '# Invalid session reference';
     }
@@ -80,8 +75,7 @@ async function renderClaudeTranscript(filePath: string, sessionId: string): Prom
         lines.push('## You', '', text, '');
       }
     } else if (type === 'assistant' && msg?.role === 'assistant') {
-      // Thinking/tool_use blocks are skipped for readability; consider a
-      // collapsible representation of tool calls once this moves past skeleton stage.
+      // Thinking/tool_use blocks skipped for readability.
       const text = extractAssistantDisplayText(msg.content).trim();
       if (text) {
         lines.push('## Claude', '', text, '');

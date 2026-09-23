@@ -13,17 +13,9 @@ const STATUS_LABELS: Record<SessionStatus, string> = {
 };
 
 /**
- * A compact companion view for the built-in Explorer sidebar — the reference
- * extension (`ShahadIshraq/claude-session-vs-code-extension`) does the same
- * thing, contributing into `views.explorer` alongside its own dedicated
- * container. Shows exactly the sessions that currently have an open terminal
- * in *this* window (`AgentTerminalService.openSessionIds()`), each with its
- * live status if tracking is enabled — not "every running/waiting session on
- * the machine", which could include ones from another window entirely.
- * Deliberately not the full project/session tree — Explorer already shares
- * space with a file tree, and Session Deck's own view is where the full
- * picture belongs; this stays to "what I currently have open", typically 0 or
- * 1 rows, occasionally a few if several sessions are open at once.
+ * A compact companion view for the built-in Explorer sidebar. Shows only sessions with an open
+ * terminal in *this* window (`AgentTerminalService.openSessionIds()`) — not every running/waiting
+ * session on the machine, which could include another window's.
  */
 export class ActiveSessionProvider implements vscode.TreeDataProvider<SessionWithProject> {
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<void>();

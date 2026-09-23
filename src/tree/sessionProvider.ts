@@ -24,18 +24,13 @@ export type AgentType = 'claude' | 'copilot';
 /** Fixed render order when both agents have sessions — see `getRootNodes`. */
 const AGENTS: readonly AgentType[] = ['claude', 'copilot'];
 
-/** How many of a project's most recent sessions the main tree shows by default — see `getChildren`. Overridable per project via `.vscode/session-deck.json`'s `maxSessionsShown`. Applied independently per (agent, project) pair. */
+/** How many of a project's most recent sessions the main tree shows by default. Overridable via `maxSessionsShown`. */
 const MAX_SESSIONS_PER_PROJECT_VIEW = 5;
 
-/** Caps how many `git` processes `discoverGroups` spawns at once when resolving distinct cwds to project roots — unbounded `Promise.all` would spawn one per distinct cwd simultaneously, fine for a personal project count but a real resource spike once there are hundreds. */
+/** Caps concurrent `git` processes `discoverGroups` spawns when resolving cwds to project roots. */
 const GIT_RESOLVE_CONCURRENCY = 8;
 
-/**
- * `color` on a project entry is a named swatch, not a `ThemeColor` id — a `TreeItem.iconPath` colored
- * via `ThemeColor` washes out to the row's plain foreground when selected (the same reason session
- * status uses a `FileDecoration` instead of its icon), so this is prefixed onto the label as plain text
- * instead, immune to that. `emoji` on the entry is used verbatim instead of a swatch when both are set.
- */
+/** A named swatch prefixed onto the label as plain text (a `ThemeColor`'d icon washes out when selected). `emoji` wins if both are set. */
 const COLOR_SWATCH_EMOJI: Record<string, string> = {
   red: '🔴',
   orange: '🟠',
@@ -59,11 +54,7 @@ interface DiscoveredGroup {
   members: ProjectMember[];
 }
 
-/**
- * Only present in the tree when *more than one* agent has any sessions at all (see
- * `detectAgentsInUse`) — wraps that agent's own Project → Session subtree. Collapses away to
- * exactly today's flat project list whenever only one agent (Claude or Copilot) has any sessions.
- */
+/** Only present when more than one agent has any sessions — wraps that agent's Project → Session subtree. */
 export class AgentFolderNode {
   readonly kind = 'agentFolder' as const;
   constructor(public readonly agent: AgentType) {}
@@ -72,16 +63,15 @@ export class AgentFolderNode {
 export class ProjectGroupNode {
   readonly kind = 'project' as const;
   constructor(
-    /** Which agent's sessions this node represents — the *same* `rootPath` can have a separate `ProjectGroupNode` per agent, each with its own cap/archive bucket. */
+    /** The same `rootPath` can have a separate node per agent, each with its own cap/archive bucket. */
     public readonly agent: AgentType,
     /** Exactly as written in `.vscode/session-deck.json` — the stable identity used for renames/removal. */
     public readonly rootPath: string,
     public readonly displayName: string,
-    /** Distinct working-directory variants seen for this (agent, project) — Claude's `~/.claude/projects/<dirName>` folders, or Copilot's distinct session `cwd` values; either way, >1 usually means worktrees. */
+    /** Distinct working-directory variants for this (agent, project); >1 usually means worktrees. */
     public readonly members: ProjectMember[],
-    /** Total sessions for this agent, before the `maxSessionsShown` cap — precomputed once per tree render, not lazily. */
+    /** Total sessions for this agent, before the `maxSessionsShown` cap. */
     public readonly totalSessionCount: number,
-    /** Already defaulted from `.vscode/session-deck.json`'s `maxSessionsShown` — see `getProjectGroups`. */
     public readonly maxSessionsShown: number = MAX_SESSIONS_PER_PROJECT_VIEW,
     public readonly emoji?: string,
     public readonly color?: string
@@ -99,7 +89,7 @@ export class SessionNode {
     public readonly projectRoot: string,
     /** Claude-only: the `~/.claude/projects/<dirName>` folder this session's `.jsonl` lives in. */
     public readonly projectDirName?: string,
-    /** Claude-only: absolute path to the session's `.jsonl` transcript. A Copilot session has no per-session file — its data lives in the shared `~/.copilot/session-store.db`, read by id instead. */
+    /** Claude-only: Copilot sessions live in the shared `session-store.db`, read by id instead. */
     public readonly filePath?: string
   ) {}
 }
@@ -138,13 +128,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
     this._onDidChangeTreeData.fire();
   }
 
-  /** Best-effort live refresh. Recursive fs.watch isn't supported on every
-   * platform (it is on Windows and macOS, which covers this project's target),
-   * so this is a nice-to-have on top of the manual refresh button.
-   *
-   * `onStatusChanged` additionally repaints the status decorations
-   * (`sessionStatusDecorationProvider.ts`) — a separate rendering layer from
-   * the tree itself, so it needs its own explicit nudge. */
+  /** Best-effort live refresh — recursive fs.watch isn't supported on every platform. */
   watch(context: vscode.ExtensionContext, onStatusChanged?: () => void): void {
     const root = getClaudeProjectsDir();
     if (fs.existsSync(root)) {
@@ -156,13 +140,8 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
       }
     }
 
-    // Copilot's session list has no per-session file the way Claude's does — it's all rows in one
-    // shared SQLite database, `session-store.db`, run in WAL mode (confirmed in `copilotStorage.ts`),
-    // so every write — including a brand-new session's very first row — lands in `session-store.db-wal`
-    // before it's ever checkpointed into the main file. Watching both (not the whole `~/.copilot`
-    // directory, which also holds `open-sessions-state.json` and friends, updated on their own noisy
-    // heartbeat) is what actually catches a new session appearing; without this, a session created via
-    // "+ New Session" never showed up until a manual refresh — reported live after creating one.
+    // Copilot writes new sessions to session-store.db-wal (WAL mode) before it's checkpointed
+    // into the main file, so both need watching, not just session-store.db.
     for (const filename of ['session-store.db', 'session-store.db-wal']) {
       const filePath = path.join(getCopilotHomeDir(), filename);
       if (fs.existsSync(filePath)) {
@@ -234,10 +213,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
       .filter(Boolean)
       .join('\n');
     item.iconPath = agentIconPath(this.extensionUri, element.agent);
-    // Status color lives on a FileDecoration (see sessionStatusDecorationProvider.ts), not
-    // this icon: a ThemeIcon's ThemeColor gets washed out to the row's plain foreground when
-    // the row is selected, but a decoration is a separate layer that keeps its color regardless.
-    // (Copilot sessions have no status tracking yet, so this is always blank for them today.)
+    // Status color lives on a FileDecoration, not this icon — a ThemeColor'd icon washes out when selected.
     item.resourceUri = sessionStatusUri(element.sessionId);
     item.contextValue = archived ? 'sessionDeckArchivedSession' : 'sessionDeckSession';
     item.command = {
@@ -259,12 +235,8 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
       const candidates = await this.gatherCandidates(element);
       const active = candidates.filter((c) => !this.state.isSessionArchived(c.sessionId));
       const archivedCount = candidates.length - active.length;
-      // Capped for readability — a project can easily accumulate dozens of
-      // sessions over time. Anything beyond the cap lives under "Archived"
-      // instead (auto-moved there — see enforceArchiveCap); Search and the
-      // "Open Sessions" Explorer view both go through listAllSessions()
-      // instead, which is uncapped and includes archived ones, so nothing is
-      // ever unfindable.
+      // Anything beyond the cap moves to "Archived" (see enforceArchiveCap); listAllSessions()
+      // (Search, Open Sessions) is uncapped, so nothing is ever unfindable.
       const sessions = await this.toSessionNodes(active.slice(0, element.maxSessionsShown), element);
       return archivedCount > 0 ? [...sessions, new ArchiveFolderNode(element, archivedCount)] : sessions;
     }
@@ -276,12 +248,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
     return [];
   }
 
-  /**
-   * Root of the tree: an `AgentFolderNode` per agent that has *any* sessions at all (globally — not
-   * scoped to configured projects, since this is purely "have I ever used this agent", not a filter on
-   * what shows underneath), or — the common case today — straight to the flat project list when at most
-   * one agent qualifies, exactly as the tree looked before Copilot existed at all.
-   */
+  /** An `AgentFolderNode` per agent that has any sessions at all, or straight to the flat project list when only one agent qualifies. */
   private async getRootNodes(): Promise<ClaudeDeckNode[]> {
     const agentsInUse = this.detectAgentsInUse();
     if (agentsInUse.length <= 1) {
@@ -301,18 +268,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
     return result;
   }
 
-  /**
-   * Every project Session Deck can find under `~/.claude/projects`, regardless of
-   * whether it's on this workspace's `session-deck.json` list. Used to populate
-   * the "Add Project" picker and to bootstrap the file the first time it's
-   * created — never used directly to decide what the tree shows. Claude-only for
-   * now: discovering not-yet-added projects from Copilot's session history too
-   * is a reasonable follow-up, just not this pass.
-   *
-   * Keyed case-insensitively on Windows (`normalizeFsPath`) so a project isn't
-   * split into two groups just because git and a hand-typed workspace-list entry
-   * happen to differ in drive-letter casing.
-   */
+  /** Every Claude project found under `~/.claude/projects`, whether or not it's on this workspace's list. */
   private async discoverGroups(): Promise<Map<string, DiscoveredGroup>> {
     const dirNames = listProjectDirNames();
     const members = await Promise.all(
@@ -332,14 +288,9 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
   }
 
   /**
-   * Every discovered project with a default display name, for the "Add Project" picker and to seed a fresh `session-deck.json`.
-   *
-   * `SESSION_DECK_DISCOVERY_ROOT`, if set, narrows this to projects under that one root — a dev-only
-   * escape hatch (never a real setting, undocumented outside this comment) for demoing/screenshotting
-   * the picker without every real project on the machine showing up alongside a couple of fixture
-   * ones. Deliberately scoped to just this method: `getProjectGroups()` (what the tree actually
-   * renders) reads `discoverGroups()` directly and is untouched, so real, already-configured sessions
-   * keep showing normally regardless of this variable.
+   * Every discovered project, for the "Add Project" picker. `SESSION_DECK_DISCOVERY_ROOT`, if set,
+   * narrows this to one root — a dev-only escape hatch for demoing the picker without every real
+   * project on the machine showing up. Doesn't affect `getProjectGroups()` / what the tree renders.
    */
   async listKnownProjects(): Promise<{ rootPath: string; displayName: string }[]> {
     const groups = await this.discoverGroups();
@@ -350,17 +301,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
       .sort((a, b) => a.displayName.localeCompare(b.displayName));
   }
 
-  /**
-   * `.vscode/session-deck.json` is the sole source of truth for what the tree
-   * shows: no file, or `{ "projects": [] }`, means an empty tree — never "show
-   * everything discovered". This keeps exactly one mental model instead of a
-   * "configured" vs. "legacy default" mode to reason about. An entry with
-   * `hidden: true` is skipped here — still on the list (and still readable via
-   * `getWorkspaceProjectEntry`), just never turned into a node. Every
-   * configured, non-hidden project appears under *every* agent shown (not just
-   * ones it already has sessions for) — same reasoning as today: a project you
-   * add is one you plan to use, sessions or not.
-   */
+  /** `.vscode/session-deck.json` is the sole source of truth for the tree — no file means no projects shown, never "show everything discovered". A `hidden: true` entry is skipped here. */
   private async getProjectGroups(agent: AgentType): Promise<ProjectGroupNode[]> {
     const workspaceEntries = (readWorkspaceProjectEntries() ?? []).filter((e) => !e.hidden);
     const nodes: ProjectGroupNode[] = [];
@@ -407,11 +348,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
     return nodes.sort((a, b) => a.displayName.localeCompare(b.displayName));
   }
 
-  /**
-   * Every session for a group's agent, newest first (by mtime) — archived and active alike; callers
-   * filter by `state.isSessionArchived` for whichever subset they want. Also the single choke point
-   * `enforceArchiveCap` runs from, so every caller gets the same auto-archiving applied.
-   */
+  /** Every session for a group's agent, newest first, archived and active alike — also where `enforceArchiveCap` runs from. */
   private async gatherCandidates(group: ProjectGroupNode): Promise<SessionCandidate[]> {
     const candidates =
       group.agent === 'claude' ? this.gatherClaudeCandidates(group) : await this.gatherCopilotCandidates(group);
@@ -420,11 +357,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
     return candidates;
   }
 
-  /**
-   * Cheap: sorts on `fs.statSync` mtime, never parses a transcript for its
-   * title (that happens lazily in `toSessionNodes`, only for whatever's
-   * actually selected/displayed).
-   */
+  /** Cheap: sorts on mtime only, never parses a transcript for its title (that's lazy, in `toSessionNodes`). */
   private gatherClaudeCandidates(group: ProjectGroupNode): SessionCandidate[] {
     const candidates: SessionCandidate[] = [];
     for (const { dirName, cwd } of group.members) {
@@ -454,7 +387,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
     }));
   }
 
-  /** Every Copilot session whose `cwd` resolves (git-aware, same as Claude's) to `rootPath` — re-queries the whole store and re-resolves each time, matching the "no persistent cache" approach `discoverGroups` already uses for Claude. Resolves with the same bounded concurrency as `discoverGroups`, not one cwd at a time. */
+  /** Every Copilot session whose `cwd` resolves (git-aware) to `rootPath` — re-queries and re-resolves each call, no caching. */
   private async copilotSessionsForRoot(rootPath: string): Promise<CopilotSessionRow[]> {
     const targetKey = normalizeFsPath(rootPath);
     const sessions = listCopilotSessions();
@@ -477,13 +410,9 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
   }
 
   /**
-   * Keeps at most `group.maxSessionsShown` *active* (non-archived) sessions per (agent, project) pair by
-   * auto-archiving the oldest excess — but only in response to a genuinely new session showing up, never
-   * just because a project already had more than the cap (tracked via `knownSessionIdsByProject`, seeded
-   * without archiving anything on the first pass each VS Code session sees a given (agent, project) pair —
-   * otherwise every pre-existing project with a long history would get mass-archived the moment this
-   * shipped). Closes each evicted session's terminal too, via `onSessionsArchived` — an archived session
-   * shouldn't be left running in a tab that's no longer visible anywhere in the tree.
+   * Keeps at most `maxSessionsShown` active sessions per (agent, project), auto-archiving the oldest
+   * excess — but only in response to a genuinely new session appearing, never on the first pass a
+   * project is seen (which would otherwise mass-archive every pre-existing project's history).
    */
   private async enforceArchiveCap(group: ProjectGroupNode, candidates: SessionCandidate[]): Promise<void> {
     const key = `${group.agent}:${normalizeFsPath(group.rootPath)}`;
@@ -510,7 +439,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
     this.onSessionsArchived?.(toArchive);
   }
 
-  /** Every session across every configured project and *both* agents, archived included — for "Search Sessions", so nothing archived (or from either agent) becomes unfindable. Unlike the tree, never collapses: always checks both, regardless of whether Copilot has any sessions yet. */
+  /** Every session across every project and both agents, archived included — used by Search, uncapped unlike the tree. */
   async listAllSessions(): Promise<SessionWithProject[]> {
     const result: SessionWithProject[] = [];
     for (const agent of AGENTS) {

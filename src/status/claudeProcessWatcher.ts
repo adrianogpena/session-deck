@@ -3,30 +3,12 @@ import * as os from 'os';
 import * as path from 'path';
 import { clearSessionStatus, writeSessionStatus, SessionStatus } from './sessionStatus';
 
-/**
- * Claude Code's own live per-process status directory — one small JSON file per running `claude`
- * process, named `<pid>.json`, containing (among other fields) `sessionId`, `status`, and
- * `statusUpdatedAt`. Confirmed live against this very extension-development session's own process:
- * its file's `status` field and `statusUpdatedAt` timestamp changed in real time as tool calls
- * happened, with no user prompt submitted in between. An internal, undocumented format (not
- * Claude Code's public `hooks` feature) — the exact status enum (`"busy"`/`"shell"`/`"idle"`/
- * `"waiting"`) was found by string-searching the compiled `claude.exe` binary itself, since there's
- * no public schema for it the way Copilot ships `session-events.schema.json`. Treat its shape as
- * best-effort, not a stable contract, same caveat as `copilotStorage.ts`'s equivalent.
- */
+/** Claude Code's own live per-process status directory — one `<pid>.json` file per running `claude` process, with `sessionId`/`status`/`statusUpdatedAt`. Undocumented format — treat as best-effort, not a stable contract. */
 export function getClaudeSessionsStateDir(): string {
   return path.join(os.homedir(), '.claude', 'sessions');
 }
 
-/**
- * `busy`/`shell` (running a shell command mid-turn) both map to "running" — `SessionStatus` has no
- * finer distinction than Claude's own hook-based tracking had either. `waiting` is a genuine,
- * precise signal for "needs your input" (a permission prompt, `ask_user`-equivalent, etc.) that the
- * old hook-based tracking could only approximate via a filtered `Notification` hook. `idle` is the
- * resting state once a turn completes — Session Deck's "done". Anything else (an unrecognized
- * future status value) is ignored, same tolerance the hook-based system had for payloads it didn't
- * recognize.
- */
+/** `busy`/`shell` both map to "running". `waiting` means "needs your input". `idle` is the resting state once a turn completes — "done". Anything else is ignored. */
 const STATUS_MAP: Readonly<Record<string, SessionStatus>> = {
   busy: 'running',
   shell: 'running',
@@ -50,7 +32,7 @@ function parseClaudeProcessFile(raw: string): ClaudeProcessFile | undefined {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return undefined; // Tolerate a partial write mid-save — best-effort, matching copilotStatusWatcher.ts's tolerance for its own live file.
+    return undefined; // Tolerate a partial write mid-save.
   }
   if (typeof parsed !== 'object' || parsed === null) {
     return undefined;
@@ -62,15 +44,7 @@ function parseClaudeProcessFile(raw: string): ClaudeProcessFile | undefined {
   return { pid, sessionId, status };
 }
 
-/**
- * Whether `pid` still refers to a live process — `process.kill(pid, 0)` is the standard
- * cross-platform (including Windows) liveness probe: signal `0` sends nothing, it just probes
- * whether the OS would let a real signal through, throwing if the process doesn't exist. Needed
- * because a `<pid>.json` file isn't guaranteed to be cleaned up the moment its process exits
- * (confirmed nothing in the binary's own strings points at a reliable delete-on-exit path) — so a
- * stale file left behind by a crashed/killed process should read as "gone", not as whatever status
- * it last reported before dying.
- */
+/** Whether `pid` still refers to a live process — `process.kill(pid, 0)` probes without sending a real signal. A `<pid>.json` file isn't guaranteed to be cleaned up on exit, so a stale file should read as "gone". */
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -81,27 +55,10 @@ function isProcessAlive(pid: number): boolean {
 }
 
 /**
- * Live status for Claude Code sessions, without its `hooks` mechanism (`UserPromptSubmit`/`Stop`/
- * `Notification`/`SessionEnd`) or any settings mutation — replacing that entirely, per the same
- * zero-setup philosophy `copilotStatusWatcher.ts` already established for Copilot. One watcher for
- * the extension's whole lifetime (not started/stopped per terminal): `getClaudeSessionsStateDir()`
- * holds one file per *any* running `claude` process on the machine, not just ones Session Deck
- * itself opened — matching the old hook system's machine-wide scope, since hooks were configured
- * globally in `~/.claude/settings.json` too.
- *
- * Deliberately only calls `writeSessionStatus` on an actual status *change* (tracked in
- * `lastWritten`), not on every directory-change tick: `fs.watch` can fire more than once for a
- * single logical write, and unconditionally rewriting an unchanged status would refresh its
- * `updatedAt` every time, which would defeat `sessionStatus.ts`'s acknowledge-by-exact-timestamp
- * matching for "done" — a session you'd already acknowledged would keep reappearing as unseen.
- *
- * A session id's *first* observed status is a baseline, never displayed — `lastWritten` only
- * records it internally, `writeSessionStatus` isn't called. Needed because a freshly resumed
- * session's process reports `idle` (→ "done") from the moment it starts, before any prompt has
- * been typed — without this, every just-opened session would immediately show green. `clear()`
- * (called when a pid dies or its file disappears) removes the session from `lastWritten` too, so
- * resuming that same session again later gets its own fresh baseline rather than inheriting a
- * stale one from the previous process.
+ * Live status for Claude Code sessions, zero setup — one watcher for the extension's lifetime,
+ * covering every running `claude` process. Only writes on an actual status *change* (rewriting an
+ * unchanged status would defeat "done"'s acknowledge-by-timestamp matching). A session's first
+ * observed status is a baseline, never displayed — a freshly resumed process starts `idle`.
  */
 export class ClaudeProcessWatcher {
   private watcher?: fs.FSWatcher;
@@ -164,11 +121,7 @@ export class ClaudeProcessWatcher {
         continue;
       }
       if (!this.lastWritten.has(parsed.sessionId)) {
-        // First sight of this session id is a baseline, not an event — same reasoning as
-        // `WaitingNotifier`/the auto-archive cap elsewhere in this codebase. Needed here
-        // specifically because a freshly resumed session's process starts in `idle` (Session
-        // Deck's "done") before any prompt has been typed, which would otherwise show every
-        // just-opened session as green immediately — reported live.
+        // First sight is a baseline, not an event — see the class doc.
         this.lastWritten.set(parsed.sessionId, status);
         continue;
       }
@@ -178,8 +131,7 @@ export class ClaudeProcessWatcher {
       }
     }
 
-    // A session id that had a pid file last scan but has none at all now — its process file is
-    // gone, the closest available signal to "the session actually ended".
+    // A session id with a pid file last scan but none now — its process ended.
     for (const sessionId of this.knownSessionIds) {
       if (!currentSessionIds.has(sessionId)) {
         this.clear(sessionId);

@@ -14,22 +14,12 @@ export interface ProjectRoot {
 const cache = new Map<string, Promise<ProjectRoot>>();
 
 /**
- * Resolves a working directory to its project root, git-aware.
- *
- * `git rev-parse --git-common-dir` returns the *same* .git directory for a
- * repo's main worktree and every linked worktree (e.g. Claude Code's
- * `.claude/worktrees/<branch>` checkouts created by the EnterWorktree tool), and
- * for a plain subfolder it walks up to the containing repo on its own — so this
- * naturally consolidates worktrees and subfolders (like `.idea/localDebug`)
- * under one project root with no manual directory-walking needed on our side.
- * Falls back to the raw cwd (each becomes its own project) when git is missing
- * or the folder isn't a repo.
- *
- * Requires git >= 2.31 (2021) for `--path-format=absolute`.
+ * Resolves a working directory to its project root, git-aware — `git rev-parse --git-common-dir`
+ * consolidates worktrees and subfolders under one root. Falls back to the raw cwd when git is
+ * missing or it's not a repo. Requires git >= 2.31 for `--path-format=absolute`.
  */
 export function resolveProjectRoot(cwd: string): Promise<ProjectRoot> {
-  // Keyed case-insensitively on Windows: two dirName folders whose recorded cwd
-  // differs only by drive-letter/segment casing are still the same real directory.
+  // Case-insensitive on Windows: cwds differing only by casing are still the same directory.
   const key = normalizeFsPath(cwd);
   const cached = cache.get(key);
   if (cached) {

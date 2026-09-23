@@ -17,16 +17,7 @@ const execFileAsync = promisify(execFile);
 /** Time to wait for shell integration before falling back to sendText. */
 const SHELL_INTEGRATION_TIMEOUT_MS = 500;
 
-/**
- * How long to wait for a brand-new session's transcript file to appear
- * before giving up on correlating it to its terminal. Generous on purpose:
- * shell integration never activates in some environments (a slow-loading
- * shell profile, or shell integration disabled/unsupported), which means
- * `claude` is only started via a blind `sendText` 500ms after the terminal
- * is created — if the shell itself is still initializing at that point, the
- * actual `claude` process (and thus its `.jsonl` file) can start noticeably
- * later than a plain terminal launch would suggest.
- */
+/** How long to wait for a brand-new session's transcript file to appear before giving up on correlating it to its terminal — generous since a slow-starting shell can delay it well past a plain launch. */
 const NEW_SESSION_DISCOVERY_TIMEOUT_MS = 60_000;
 
 /** How often to re-scan `~/.claude/projects` while waiting for a new session file — see `correlateNewSession`. */
@@ -37,35 +28,19 @@ export interface OpenSessionTerminalOptions {
 }
 
 /**
- * Launches `claude --resume <sessionId>` in a real terminal — ported from the
- * reference extension's `terminal.ts` (cloned and read directly).
- *
- * One terminal *per session*, tracked in `sessionTerminals`: switching to a
- * different session never touches whatever's running in another session's
- * terminal — no interrupt, no visible "logout/login" flicker, and (critically)
- * no orphaned live-status: a session left running in the background keeps
- * firing its own `UserPromptSubmit`/`Stop`/`Notification` hooks normally,
- * exactly as if you'd never looked away. An earlier version of this file tried
- * a single shared terminal (interrupting the running session with Ctrl+C to
- * reuse the tab for a different one) to match this project's single-tab
- * philosophy — but that philosophy only holds for *passive* views like the
- * read-only transcript tab; there's no way to "pause" a foreground CLI process
- * without either killing it or moving it out of the way, so a live terminal
- * needs a real process per session. Verified against the actual desktop
- * "Claude Terminal" Electron app (`Sterll/claude-terminal`), which keeps the
- * same shape: a `Map<id, ptyProcess>` of concurrently-alive processes, never
- * one shared pty for every session.
+ * Launches `claude --resume <sessionId>` in a real terminal — one terminal per session, tracked in
+ * `sessionTerminals`, so switching sessions never touches another session's running terminal.
  */
 export class AgentTerminalService implements vscode.Disposable {
   private readonly sessionTerminals = new Map<string, vscode.Terminal>();
   /** Display label per tracked session id — `session.displayName` for a resume, the project name for a just-started new session (its real title isn't known yet). Used only for `WaitingNotifier`'s notification text. */
   private readonly sessionLabels = new Map<string, string>();
-  /** Which agent each tracked session belongs to — used only to know whether to start/stop `copilotStatusWatcher` tailing when a session is tracked/untracked. */
+  /** Which agent each tracked session belongs to — used to start/stop `copilotStatusWatcher` tailing on track/untrack. */
   private readonly sessionAgents = new Map<string, AgentType>();
-  /** Session ids already claimed by a pending `correlateNewSession` call, so two "New Session" clicks in quick succession can't both grab the same newly-created file. */
+  /** Session ids already claimed by a pending `correlateNewSession` call, so two "New Session" clicks can't both grab the same file. */
   private readonly claimedByCorrelation = new Set<string>();
   private readonly closeListener: vscode.Disposable;
-  /** Memoized PATH check per CLI command ("claude", "copilot") — PATH doesn't change mid-session, so there's no need to re-probe it (up to 3 sequential subprocess spawns) on every single session launch. Cleared on manual refresh, same as `gitProject.ts`'s and `claudeStorage.ts`'s caches. */
+  /** Memoized PATH check per CLI command — cleared on manual refresh. */
   private readonly binaryCheckCache = new Map<string, Promise<boolean>>();
   private readonly _onDidChangeOpenSessions = new vscode.EventEmitter<void>();
   /** Fires whenever a session gains or loses a tracked open terminal — what `activeSessionProvider.ts`'s Explorer view refreshes on. */
@@ -73,7 +48,7 @@ export class AgentTerminalService implements vscode.Disposable {
   /** Which session a just-launched `claude --resume` execution belongs to — see `executionEndListener` and `launch`. */
   private readonly sessionIdByExecution = new Map<vscode.TerminalShellExecution, string>();
   private readonly executionEndListener: vscode.Disposable;
-  /** Tails a Copilot session's `events.jsonl` for live status, started/stopped alongside its terminal — see `trackTerminal`/`untrackTerminal`. No Claude equivalent needed here: Claude's status comes from its own hook process, entirely outside this class. */
+  /** Tails a Copilot session's `events.jsonl` for live status, started/stopped alongside its terminal. No Claude equivalent needed here — Claude's status comes from its own separate watcher process. */
   private readonly copilotStatusWatcher: CopilotStatusWatcher;
 
   public constructor(private readonly outputChannel: vscode.OutputChannel, private readonly extensionUri: vscode.Uri) {
@@ -83,12 +58,8 @@ export class AgentTerminalService implements vscode.Disposable {
       for (const [sessionId, tracked] of this.sessionTerminals) {
         if (tracked === terminal) {
           this.untrackTerminal(sessionId);
-          // Closing the terminal kills the process tree outright (no graceful
-          // shutdown on Windows without WSL/tmux), so Claude Code may never get
-          // to fire its own SessionEnd hook — clear the status ourselves so the
-          // dot doesn't get stuck showing "running"/"waiting" forever for a
-          // session that's actually dead. Idempotent if it already exited
-          // cleanly and the hook beat us to it.
+          // No graceful shutdown on close, so the watcher may never notice — clear status ourselves
+          // so the dot doesn't get stuck showing "running"/"waiting" for a session that's actually dead.
           clearSessionStatus(sessionId);
           this.outputChannel.appendLine(`[terminal] Terminal for session ${sessionId} closed; status cleared.`);
           break;
@@ -97,16 +68,9 @@ export class AgentTerminalService implements vscode.Disposable {
     });
 
     /**
-     * A backstop error signal, agent-agnostic, from the exit code of the `claude`/`copilot` command
-     * itself via shell integration's per-command completion event. Claude Code's hooks don't expose a
-     * distinct failure signal at all (`Stop` fires the same way on a clean turn end or a fatal error),
-     * so this is its only error signal; Copilot has its own more precise `session.error` event
-     * (`copilotStatusWatcher.ts`), which fires within the same command and so resolves first — this
-     * only catches what that one missed (e.g. a crash before Copilot CLI got to emit the event at all).
-     * Deliberately only acts on a real, positive exit code: `exitCode` comes back `undefined` for a
-     * Ctrl+C cancel, a sub-shell being opened, or a shell integration script that isn't reporting
-     * properly (documented on `TerminalShellExecutionEndEvent.exitCode`), so those are correctly left
-     * alone rather than misread as a crash.
+     * Backstop error signal from the exit code of the `claude`/`copilot` command itself. Copilot has
+     * its own more precise `session.error` event that usually resolves first; `exitCode` is
+     * `undefined` for a Ctrl+C cancel or a sub-shell, so those are correctly left alone.
      */
     this.executionEndListener = vscode.window.onDidEndTerminalShellExecution((event) => {
       const sessionId = this.sessionIdByExecution.get(event.execution);
@@ -121,21 +85,7 @@ export class AgentTerminalService implements vscode.Disposable {
     });
   }
 
-  /**
-   * Closes every session terminal Session Deck opened, on top of the base
-   * `closeListener` teardown — called when the extension host shuts down
-   * (window close/reload, wired via `context.subscriptions` in extension.ts).
-   * Each terminal already opts out of VS Code's persistent-session restore via
-   * `isTransient: true` at creation time (see `launch`/`startNewSession`) —
-   * that's the part that actually matters, since `deactivate()`/`dispose()`
-   * aren't reliably called on an abrupt window close (only on a graceful
-   * reload/disable), so nothing here could be depended on to run in time
-   * anyway. This is just belt-and-suspenders cleanup for the cases where it
-   * *does* run: closing the terminal outright instead of leaving it open with
-   * a dead process, and clearing its status so a "running"/"waiting" dot
-   * doesn't get stuck for a session Claude Code never got to send its own
-   * `SessionEnd` for.
-   */
+  /** Closes every tracked terminal on extension-host shutdown — best-effort, since `dispose()` isn't reliably called on an abrupt window close (only a graceful reload/disable). */
   public dispose(): void {
     this.closeListener.dispose();
     this.executionEndListener.dispose();
@@ -166,12 +116,7 @@ export class AgentTerminalService implements vscode.Disposable {
     this.sessionTerminals.get(sessionId)?.show(true);
   }
 
-  /**
-   * Closes this session's terminal if it's currently tracked — a no-op otherwise. Used when a session
-   * is archived (manually, or auto-evicted by the 5-per-project cap): an archived session shouldn't be
-   * left running with a now-hidden tab. `terminal.dispose()` triggers the same `onDidCloseTerminal`
-   * bookkeeping (untrack + clear status) as any other terminal close, so nothing extra to do here.
-   */
+  /** Closes this session's terminal if tracked — used when a session is archived so it doesn't keep running behind a hidden tab. */
   public closeSessionTerminal(sessionId: string): void {
     this.sessionTerminals.get(sessionId)?.dispose();
   }
@@ -213,20 +158,12 @@ export class AgentTerminalService implements vscode.Disposable {
     await this.launch(session, options);
   }
 
-  /**
-   * The explicit escape hatch (a tree-item button next to "Rename Session",
-   * not the default click): always opens a brand-new terminal for this
-   * session, even if one is already tracked — e.g. to run it twice side by
-   * side, or to recover from a terminal stuck in a broken state. Also used for
-   * the "Skip Permissions" resume, deliberately bypassing the reuse check: a
-   * dangerous relaunch should never silently reuse (and thus ignore the flag
-   * on) an already-open, non-dangerous terminal for the same session.
-   */
+  /** Always opens a fresh terminal for this session, even if one's tracked — used for "Skip Permissions" resume, which must never silently reuse a non-dangerous terminal. */
   public async openSessionInNewTerminal(session: SessionNode, options: OpenSessionTerminalOptions = {}): Promise<void> {
     await this.launch(session, options);
   }
 
-  /** Starts a brand-new session for the given agent, rooted at `cwd` — always a fresh terminal, since there's no existing session id to reuse by yet. Dispatches to the two very differently-shaped implementations below. */
+  /** Starts a brand-new session for the given agent, rooted at `cwd` — always a fresh terminal. Dispatches to the two differently-shaped implementations below. */
   public async startNewSession(
     agent: AgentType,
     cwd: string,
@@ -239,18 +176,7 @@ export class AgentTerminalService implements vscode.Disposable {
     return this.startNewCopilotSession(cwd, projectName, options);
   }
 
-  /**
-   * Plain `claude` (no `--resume`).
-   *
-   * There's no CLI flag to pre-assign a session id (checked: `claude --help`
-   * has no `--session-id`; `--name` is a separate alias on top of the
-   * auto-generated id, not a replacement for it, so it doesn't help here
-   * either), so the real id can only be learned after the fact via
-   * `correlateNewSession`. Once that resolves, clicking the session's tree
-   * entry (once it shows up) reuses this same terminal via `openSession`,
-   * exactly like any other tracked session, instead of opening a redundant
-   * second one.
-   */
+  /** Plain `claude` (no `--resume`) — no CLI flag to pre-assign a session id, so its real id is learned after the fact via `correlateNewSession`. */
   private async startNewClaudeSession(cwd: string, projectName: string, options: OpenSessionTerminalOptions): Promise<void> {
     const dangerouslySkipPermissions = options.dangerouslySkipPermissions === true;
 
@@ -281,13 +207,7 @@ export class AgentTerminalService implements vscode.Disposable {
     );
   }
 
-  /**
-   * Unlike `startNewClaudeSession`, this needs no `correlateNewSession`-style polling at all:
-   * Copilot CLI's `--session-id` flag (confirmed via `copilot --help`'s own examples) lets a
-   * brand-new session's UUID be chosen upfront, generated here with `crypto.randomUUID()`, so
-   * the terminal can be tracked under its real session id — and given its real project name,
-   * with no "New: " placeholder or rename-after-correlation dance — from the moment it's created.
-   */
+  /** Unlike Claude, Copilot's `--session-id` flag lets a new session's UUID be chosen upfront, so the terminal is tracked under its real id from creation — no polling needed. */
   private async startNewCopilotSession(cwd: string, projectName: string, options: OpenSessionTerminalOptions): Promise<void> {
     const dangerouslySkipPermissions = options.dangerouslySkipPermissions === true;
 
@@ -324,15 +244,7 @@ export class AgentTerminalService implements vscode.Disposable {
     );
   }
 
-  /**
-   * Claude-only (no equivalent in Copilot CLI — checked `copilot --help`/`copilot sessions --help`
-   * in full): `claude --resume <sessionId> --fork-session` resumes `session`'s full history under a
-   * brand-new session id, leaving the original completely untouched. Always a fresh terminal, always
-   * in `session.cwd` — there's no existing terminal to reuse, since this creates a session that never
-   * existed before. Its real new id is learned the same way a plain new session's is, via
-   * `correlateNewSession` — see `buildClaudeForkCommand`'s doc comment for why `--session-id`
-   * pre-assignment isn't used here the way it is for Copilot's new-session flow.
-   */
+  /** Claude-only — resumes `session` under a brand-new session id via `--fork-session`, leaving the original untouched. Always a fresh terminal; the new id is learned via `correlateNewSession`. */
   public async forkSession(session: SessionNode, options: OpenSessionTerminalOptions = {}): Promise<void> {
     const dangerouslySkipPermissions = options.dangerouslySkipPermissions === true;
 
@@ -364,45 +276,11 @@ export class AgentTerminalService implements vscode.Disposable {
   }
 
   /**
-   * Polls `~/.claude/projects` for the next brand-new session file to appear,
-   * then registers `terminal` under that file's session id (the same map
-   * `openSession` checks).
-   *
-   * Deliberately does **not** wait for that file to record a `cwd` and match
-   * it against the cwd this terminal started at: a session's `cwd` is only
-   * written on its first actual user turn (confirmed against real transcript
-   * data), not on the startup metadata records Claude Code writes
-   * immediately — so if you click the session's tree entry before typing
-   * anything into the fresh terminal, that cwd-matching approach would still
-   * be waiting and never correlate in time, which was exactly the bug this
-   * replaced.
-   *
-   * This used to watch for `fs.watch`'s `rename` event instead of polling —
-   * fires exactly once, specifically when a path is created (confirmed
-   * empirically: appending to an existing file fires `change`, not
-   * `rename`), so in principle a lighter-weight signal than polling. In
-   * practice, on a real `~/.claude/projects` tree (dozens of projects, one of
-   * them potentially *this very Claude Code conversation* being actively
-   * appended to while the user works), that recursive watch reliably dropped
-   * the new file's `rename` event outright — confirmed via output-channel
-   * logging showing only `change` events for an unrelated, already-existing
-   * file, then a full timeout, twice in a row, even though the new session's
-   * file did exist by the time the tree was manually refreshed. This is a
-   * known reliability limitation of Windows' `ReadDirectoryChangesW`-backed
-   * recursive watching under a large/busy tree (its notification buffer can
-   * silently overflow), made worse here by `SessionTreeProvider.watch()`
-   * already running its own independent recursive watcher on the same
-   * directory. Polling sidesteps OS notification delivery entirely: each tick
-   * just re-reads the actual directory structure directly.
-   *
-   * `claimedByCorrelation` guards against two "New Session" clicks in quick
-   * succession both grabbing the same file were one to appear while both
-   * pollers are still active.
-   *
-   * Fire-and-forget from the caller's perspective — gives up silently after
-   * {@link NEW_SESSION_DISCOVERY_TIMEOUT_MS}, in which case a later click on
-   * that session just falls back to a second terminal, no worse than before
-   * this existed.
+   * Polls `~/.claude/projects` for the next brand-new session file, then tracks `terminal` under it.
+   * Doesn't wait for a `cwd` match — `cwd` is only written on a session's first real turn, not at
+   * startup, so matching on it would miss a session opened before anything's been typed. Polls
+   * instead of `fs.watch`, which proved unreliable here on Windows for a large/busy directory tree.
+   * Fire-and-forget: gives up silently after {@link NEW_SESSION_DISCOVERY_TIMEOUT_MS}.
    */
   private correlateNewSession(terminal: vscode.Terminal, projectName: string): Promise<void> {
     const root = getClaudeProjectsDir();
@@ -458,18 +336,9 @@ export class AgentTerminalService implements vscode.Disposable {
   }
 
   /**
-   * Drops the "New: " prefix from the tab name once a session is actually
-   * correlated, so it stops looking like a not-yet-real session. There's no
-   * API to rename a `vscode.Terminal` directly — the only way is the
-   * `workbench.action.terminal.renameWithArg` command, which also switches
-   * the *visible* terminal tab to whichever one it renames (a `show()` side
-   * effect that `preserveFocus` doesn't prevent — it only affects keyboard
-   * focus, not which tab is displayed). Correlation can take several seconds
-   * (a slow-starting shell profile has been observed pushing it past 10s), so
-   * by the time it resolves the user may well have switched to a different
-   * tab; forcibly yanking that back just to fix a label would be a worse
-   * surprise than leaving the stale name. Only renames when nothing would
-   * visibly move.
+   * Drops the "New: " prefix once a session is correlated. No API renames a `vscode.Terminal`
+   * directly — the only way, `workbench.action.terminal.renameWithArg`, also switches the visible
+   * terminal tab, so this only renames if the terminal is still the active one.
    */
   private renameIfStillActive(terminal: vscode.Terminal, projectName: string): void {
     if (vscode.window.activeTerminal !== terminal) {
@@ -557,12 +426,7 @@ export class AgentTerminalService implements vscode.Disposable {
     return check;
   }
 
-  /**
-   * VS Code's extension host often has a trimmed PATH that excludes what a
-   * user's interactive shell profile (~/.zshrc, ~/.bashrc, PowerShell $PROFILE)
-   * adds — falls back to checking through the user's actual configured shell
-   * before concluding the CLI really isn't installed.
-   */
+  /** VS Code's extension host often has a trimmed PATH missing what an interactive shell profile adds — falls back to checking via the user's configured shell before concluding a CLI isn't installed. */
   private async probeBinaryOnPath(command: string): Promise<boolean> {
     const checker = process.platform === 'win32' ? 'where' : 'which';
 
@@ -576,9 +440,7 @@ export class AgentTerminalService implements vscode.Disposable {
         return true;
       } catch {
         try {
-          // execFile (not exec) so vscode.env.shell is invoked directly rather than parsed by
-          // an intermediate shell — only its `-c` argument (a fixed, non-interpolated string) is
-          // ever shell-interpreted.
+          // execFile, not exec — only the shell's -c argument (a fixed string) is shell-interpreted.
           const shell = vscode.env.shell || '/bin/sh';
           await execFileAsync(shell, ['-l', '-c', `${checker} ${command}`]);
           return true;
@@ -614,13 +476,7 @@ interface ExecuteInTerminalDeps {
   readonly onExecutionStarted?: (execution: vscode.TerminalShellExecution) => void;
 }
 
-/**
- * Runs a command in a terminal via shell integration when available, waiting
- * for it to activate first — this avoids a real race where a slow-starting
- * shell (oh-my-zsh update checks, etc.) eats the first characters of a command
- * sent via plain `sendText`. Falls back to `sendText` if shell integration
- * never activates within the timeout.
- */
+/** Runs a command via shell integration once active, avoiding a race where a slow-starting shell eats the first characters sent via plain `sendText`. Falls back to `sendText` if integration never activates. */
 function executeInTerminal(terminal: vscode.Terminal, command: string, deps: ExecuteInTerminalDeps): Promise<void> {
   const { subscribe, onDidStartExecution, log, timeoutMs, onExecutionStarted } = deps;
 

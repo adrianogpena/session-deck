@@ -3,22 +3,10 @@ import { getCopilotSessionEventsLogPath } from '../discovery/copilotStorage';
 import { clearSessionStatus, writeSessionStatus, SessionStatus } from './sessionStatus';
 
 /**
- * Copilot CLI's own `events.jsonl` event `type` strings (pulled from its bundled
- * `session-events.schema.json`), mapped to Session Deck's coarse status. Anything not listed here
- * is ignored — the status just stays whatever it last was, the same tolerance Claude's hook-based
- * tracking already has for hook payloads it doesn't recognize. `.completed` events map to
- * "running" (work resumes right after a permission/elicitation/input request is resolved) rather
- * than being ignored — a distinction Claude's own hook set can't make at all, since it has no
- * "resumed after approval" signal of its own.
- *
- * `permission.requested`/`elicitation.requested`/`user_input.requested` are what the schema
- * documents for "the agent needs you" — but a real interactive session's own built-in
- * clarifying-question tool (`ask_user`) turned out NOT to fire any of these: confirmed against a
- * real transcript, it goes through the perfectly generic `tool.execution_start`/
- * `tool.execution_complete` pair every other tool uses, distinguished only by
- * `data.toolName === "ask_user"` — so that pair is special-cased below too. The schema events are
- * kept as a fallback in case a different flow (a real permission prompt without `--allow-all`, or
- * a genuine MCP elicitation) does use them; this hasn't been observed directly.
+ * Copilot CLI's `events.jsonl` event types mapped to Session Deck's coarse status. Unlisted types
+ * are ignored (status stays as-is). Note: the built-in `ask_user` clarifying-question tool does NOT
+ * fire `*.requested`/`*.completed` despite the schema — it goes through the generic
+ * `tool.execution_start`/`_complete` pair like any other tool, distinguished by `data.toolName`.
  */
 const ASK_USER_TOOL_NAME = 'ask_user';
 const RUNNING_EVENTS = new Set(['assistant.turn_start', 'permission.completed', 'elicitation.completed', 'user_input.completed']);
@@ -62,11 +50,7 @@ export function classifyCopilotEvent(event: CopilotEventLike): CopilotStatusActi
   return undefined;
 }
 
-/**
- * Splits a growing NDJSON stream's newly-read chunk into complete lines plus any trailing partial
- * line to carry into the next read — pure, so a chunk boundary landing mid-line is handled the
- * same regardless of whether the rest of that line arrives in this read or the next `poll()`.
- */
+/** Splits a growing NDJSON chunk into complete lines plus a trailing partial line to carry into the next read. */
 export function splitLines(carry: string, chunk: string): { lines: string[]; carry: string } {
   const combined = carry + chunk;
   const parts = combined.split('\n');
@@ -81,25 +65,15 @@ interface TailState {
   pendingPoll?: NodeJS.Timeout;
 }
 
-/** How long to wait for a resumed session's `events.jsonl` to exist before giving up — see `waitForFile`. In practice this is near-instant, since the file/directory already exists for any session that can be resumed at all; this only guards the rare case of Copilot CLI not having flushed it yet. */
+/** How long to wait for a resumed session's `events.jsonl` to appear before giving up. */
 const FILE_WAIT_TIMEOUT_MS = 15_000;
 const FILE_WAIT_POLL_INTERVAL_MS = 500;
 
 /**
- * Live status for Copilot CLI sessions, without Copilot's own opt-in `hooks` mechanism
- * (`.github/hooks/*.json` / the `hooks` setting) or any settings mutation: Copilot CLI already
- * appends every session's activity to `~/.copilot/session-state/<sessionId>/events.jsonl`
- * unconditionally, for its own IDE/resume support. `start()` tails only the bytes appended *after*
- * tracking begins — never backfills a session's history, the same "baseline on first sight"
- * reasoning as `sessionProvider.ts`'s auto-archive cap — and writes through the same
- * `status/sessionStatus.ts` file `claudeProcessWatcher.ts` writes for Claude, so every downstream consumer
- * (the decoration provider, `WaitingNotifier`, the tree's tooltip) already works unchanged;
- * nothing about them is Copilot-aware.
- *
- * This reads Copilot CLI's own internal, undocumented on-disk format (not its public, versioned
- * `hooks` config) — chosen because it needs zero setup and no per-event subprocess spawn, at the
- * cost of being unversioned: if a future Copilot CLI release changes `events.jsonl`'s shape, this
- * degrades silently (status just stops updating for Copilot sessions) rather than breaking anything.
+ * Live status for Copilot CLI sessions, tailing `events.jsonl` directly (zero setup, no hooks
+ * config). `start()` tails only bytes appended after tracking begins — never backfills history.
+ * Writes through the same status file `claudeProcessWatcher.ts` uses for Claude, so every
+ * downstream consumer (decorations, `WaitingNotifier`, tooltips) works unchanged.
  */
 export class CopilotStatusWatcher {
   private readonly tails = new Map<string, TailState>();
@@ -147,7 +121,7 @@ export class CopilotStatusWatcher {
     state.pendingPoll = setTimeout(() => this.waitForFile(sessionId, state, startedAt), FILE_WAIT_POLL_INTERVAL_MS);
   }
 
-  /** Starts at EOF, not offset 0 — only events appended from this point on are "live", mirroring Claude's hook model where resuming a session shows no status until the next real event. */
+  /** Starts at EOF — only events appended from this point on are "live". */
   private attach(sessionId: string, filePath: string, state: TailState): void {
     try {
       state.offset = fs.statSync(filePath).size;
@@ -168,9 +142,7 @@ export class CopilotStatusWatcher {
     } catch {
       return;
     }
-    // A smaller size than last seen means the file was truncated/replaced from under us (not
-    // expected in normal operation) — resync to the new end rather than re-reading from a stale
-    // offset, which could otherwise throw or replay unrelated bytes as if they were new events.
+    // File was truncated/replaced from under us — resync to the new end instead of a stale offset.
     if (size < state.offset) {
       state.offset = size;
       return;
@@ -209,7 +181,7 @@ export class CopilotStatusWatcher {
     try {
       parsed = JSON.parse(trimmed);
     } catch {
-      return; // Tolerate a malformed/partial line — best-effort, matching this feature's informational (not load-bearing) role.
+      return; // Tolerate a malformed/partial line.
     }
     if (typeof parsed.type !== 'string') {
       return;

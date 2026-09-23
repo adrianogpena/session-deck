@@ -5,18 +5,9 @@ export interface FuzzyMatchResult {
 }
 
 /**
- * Subsequence fuzzy match, case-insensitive: every character of `query` must appear in `text` in
- * order, not necessarily contiguously — the standard "fuzzy find" style (fzf, VS Code's own Quick
- * Open, and the same convention agent-deck's own `/` search uses). `"fnc"` matches `"function"`.
- * An empty query matches everything with the best possible score, so callers don't need a special
- * case for "no query typed yet".
- *
- * Score rewards a tighter, earlier match: the span from the first matched character to the last
- * (shorter is better), with the start position as a tiebreaker (earlier is better) — so `"fn"`
- * scores better against `"function"` than against `"far from concrete"`, even though both match.
- * Deliberately not a more elaborate scoring model (consecutive-run bonuses, word-boundary
- * weighting, etc.) — this is meant to rank a QuickPick list sensibly, not reproduce fzf's own
- * algorithm exactly.
+ * Subsequence fuzzy match, case-insensitive (fzf/Quick Open style): every character of `query`
+ * must appear in `text` in order, not necessarily contiguously. An empty query matches everything.
+ * Score rewards a tighter, earlier match (shorter span, then earlier start) — lower is better.
  */
 export function fuzzyMatch(query: string, text: string): FuzzyMatchResult {
   if (!query) {

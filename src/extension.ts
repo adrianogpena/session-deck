@@ -38,8 +38,7 @@ export function activate(context: vscode.ExtensionContext) {
   const statusDecorationProvider = new SessionStatusDecorationProvider();
   const outputChannel = vscode.window.createOutputChannel('Session Deck');
   const terminalService = new AgentTerminalService(outputChannel, context.extensionUri);
-  // The cap-eviction callback: a session auto-archived because a project went over
-  // MAX_SESSIONS_PER_PROJECT_VIEW shouldn't be left running in a now-hidden tab.
+  // An auto-archived session shouldn't be left running in a now-hidden tab.
   const treeProvider = new SessionTreeProvider(state, context.extensionUri, (sessionIds) => {
     for (const sessionId of sessionIds) {
       terminalService.closeSessionTerminal(sessionId);
@@ -132,9 +131,8 @@ export function activate(context: vscode.ExtensionContext) {
     waitingNotifier.check(terminalService.getOpenSessions(), (sessionId) => terminalService.revealSession(sessionId));
   });
 
-  // Auto-refresh when any workspace folder's project list file is created/edited/deleted
-  // (by us via "Add Project"/"Remove Project", or by hand) — a plain glob string, not a
-  // RelativePattern, so it's watched across every open folder, not just the first.
+  // Auto-refresh when any workspace folder's project list file changes (a plain glob string
+  // watches every open folder, not just the first — see getConfigGlobPattern).
   const configPattern = getConfigGlobPattern();
   if (configPattern) {
     const refreshAll = () => {
@@ -149,17 +147,7 @@ export function activate(context: vscode.ExtensionContext) {
   }
 }
 
-/**
- * Opens a session as a virtual read-only markdown document, in preview mode.
- * VS Code reuses a single "preview" tab (the italicized one) across successive
- * opens as long as it hasn't been pinned/edited — clicking another session swaps
- * that tab's content instead of opening a new one, mirroring agent-deck's
- * single-pane session switching without any custom webview/tab-management code.
- *
- * A secondary action (👁 in the tree, or the context menu) — the primary click
- * now resumes the session in a real terminal instead (`sessionDeck.openSession`,
- * `terminalService.ts`), matching the reference extension's core behavior.
- */
+/** Opens a session as a virtual read-only markdown document, in a reused VS Code preview tab. */
 async function viewTranscript(session: SessionNode): Promise<void> {
   if (!session) {
     return;
@@ -205,22 +193,12 @@ async function openSessionDangerously(
     }
   }
   await ensureSessionActive(session, state, tree);
-  // Always a fresh terminal (never reuses this session's existing terminal, if any) — silently
-  // reusing a non-dangerous terminal here would ignore the flag the user just confirmed.
+  // Always a fresh terminal — reusing an existing one would ignore the flag just confirmed.
   await terminalService.openSessionInNewTerminal(session, { dangerouslySkipPermissions: true });
   acknowledgeAndRefresh(session, tree, statusDecorationProvider, activeSessionProvider);
 }
 
-/**
- * Opening/resuming a session is "looking at it" — a "done"/"error" dot only means "something
- * happened, you haven't looked yet" (see `sessionStatus.ts`), so this clears it the same way
- * selecting the row in the main tree already does (`treeView.onDidChangeSelection` below). Needed
- * as its own step because opening a session doesn't always go through that listener: the Explorer
- * "Open Sessions" view and Search's QuickPick both resume a session without ever selecting its row
- * in the main tree, so relying on tree selection alone left their session's status stuck showing
- * "done"/"error" after you'd already reopened it — reported live against a Copilot session that
- * stayed green after being reopened from the Explorer view.
- */
+/** Opening a session counts as acknowledging its status, same as selecting its row does. */
 function acknowledgeAndRefresh(
   session: SessionNode,
   tree: SessionTreeProvider,
@@ -233,14 +211,7 @@ function acknowledgeAndRefresh(
   activeSessionProvider.refresh();
 }
 
-/**
- * `sessionDeck.confirmDangerousSkipPermissions` (default `true`) — read live on every dangerous-mode
- * launch rather than cached, so toggling it in Settings takes effect immediately, no reload needed.
- * Ported from the reference extension's own setting of the same name/default. A project entry's own
- * `dangerouslySkipPermissions: true` (`.vscode/session-deck.json`) overrides this to `false` for that
- * project specifically — a per-project "I trust this one" exception, never the other way around: there's
- * no way to force confirmation back on for one project while the global setting is off.
- */
+/** Reads the setting live (no caching) so toggling it takes effect immediately; a project's own `dangerouslySkipPermissions: true` overrides it to `false` for that project only. */
 function shouldConfirmDangerousSkipPermissions(rootPath: string): boolean {
   if (getWorkspaceProjectEntry(rootPath)?.dangerouslySkipPermissions) {
     return false;
@@ -333,15 +304,7 @@ interface SearchPickItem extends vscode.QuickPickItem {
   session: SessionNode;
 }
 
-/**
- * Full-text search across every configured project's session content (not just
- * first prompts) — user prompts and assistant replies, extracted the same way
- * the transcript view renders them. The per-session content list is built once,
- * lazily, on the first keystroke (each session already caches its own extracted
- * text by mtime in `claudeStorage.ts`, so repeat searches are effectively free);
- * everything after that is an in-memory substring filter, so typing stays fast.
- */
-/** A leading status filter in Search, same characters as agent-deck: `!running`, `@waiting for input`, `#done`, `~error`. */
+/** A leading status filter in Search: `!running`, `@waiting`, `#done`, `~error`. */
 const SEARCH_STATUS_PREFIXES: Record<string, SessionStatus> = {
   '!': 'running',
   '@': 'waiting',
@@ -349,9 +312,10 @@ const SEARCH_STATUS_PREFIXES: Record<string, SessionStatus> = {
   '~': 'error',
 };
 
-/** Caps how many sessions' full content Search reads at once on first use — unbounded `Promise.all` would read every configured session's transcript/turns simultaneously, fine at personal scale but a real resource spike once there are hundreds. */
+/** Caps how many sessions' content Search reads concurrently on first use. */
 const SEARCH_READ_CONCURRENCY = 8;
 
+/** Full-text search across every session's prompts/replies, with an optional leading status filter. */
 async function searchSessions(tree: SessionTreeProvider): Promise<void> {
   const all = await tree.listAllSessions();
   if (all.length === 0) {
@@ -368,6 +332,7 @@ async function searchSessions(tree: SessionTreeProvider): Promise<void> {
     label: entry.session.displayName,
     description: entry.projectDisplayName,
     session: entry.session,
+    alwaysShow: true,
   });
 
   let searchTextBySessionId: Map<string, string> | undefined;
@@ -398,9 +363,6 @@ async function searchSessions(tree: SessionTreeProvider): Promise<void> {
       .filter((entry) => !statusFilter || readEffectiveSessionStatus(entry.session.sessionId)?.status === statusFilter)
       .map((entry) => ({ entry, match: fuzzyMatch(query, searchTextBySessionId?.get(entry.session.sessionId) ?? '') }))
       .filter((x) => x.match.matched)
-      // A stable sort, so with no query (every match scores 0 — see fuzzyMatch) this preserves
-      // `all`'s own order, same as before fuzzy matching existed; a real query ranks tighter,
-      // earlier matches first, same convention agent-deck's own `/` search uses.
       .sort((a, b) => a.match.score - b.match.score)
       .map((x) => toItem(x.entry));
   });
@@ -409,9 +371,7 @@ async function searchSessions(tree: SessionTreeProvider): Promise<void> {
     const [selected] = quickPick.selectedItems;
     quickPick.hide();
     if (selected) {
-      // Routed through the command itself (not `terminalService.openSession` directly) so this gets
-      // exactly the same `ensureSessionActive`/acknowledge/refresh behavior as clicking the session
-      // anywhere else, with no duplicated logic here.
+      // Routed through the command itself so this gets the same open/acknowledge/refresh behavior.
       void vscode.commands.executeCommand('sessionDeck.openSession', selected.session);
     }
   });
@@ -429,13 +389,7 @@ interface WorkspaceFolderPickItem extends vscode.QuickPickItem {
   folder: vscode.WorkspaceFolder;
 }
 
-/**
- * Every write that targets a *specific* file (a brand-new project entry, or bootstrapping an empty
- * file to hand-edit) needs to know which workspace folder's `.vscode/session-deck.json` that is.
- * With one folder open — the overwhelmingly common case, and the only case before multi-root
- * support existed — there's only one possible answer, so this never prompts at all; existing
- * single-root usage is completely unaffected. Only asks when there's genuine ambiguity.
- */
+/** Which workspace folder's session-deck.json to write to — only prompts when more than one is open. */
 async function pickTargetWorkspaceFolder(promptContext: string): Promise<vscode.WorkspaceFolder | undefined> {
   const folders = vscode.workspace.workspaceFolders;
   if (!folders || folders.length === 0) {
@@ -455,12 +409,7 @@ async function pickTargetWorkspaceFolder(promptContext: string): Promise<vscode.
   return picked?.folder;
 }
 
-/**
- * Lets the user build up this workspace's `.vscode/session-deck.json` list:
- * pick from every project Session Deck has discovered from Claude Code's or
- * Copilot CLI's session history, or browse to a folder that isn't in that list
- * yet (e.g. a project with no sessions from either agent yet).
- */
+/** Pick from discovered Claude/Copilot projects, or browse to a folder not listed yet. */
 async function addProject(tree: SessionTreeProvider): Promise<void> {
   if (!vscode.workspace.workspaceFolders?.length) {
     vscode.window.showErrorMessage('Open a folder or workspace first — the project list is saved per workspace.');
@@ -516,14 +465,7 @@ async function addProject(tree: SessionTreeProvider): Promise<void> {
   tree.refresh();
 }
 
-/**
- * Opens a workspace folder's `.vscode/session-deck.json` for direct hand-editing — of names as
- * well as the project list itself, since it's the single source of truth for both. With more than
- * one workspace folder open, asks which one's file to open (see `pickTargetWorkspaceFolder`) rather
- * than always opening the first. Creates that folder's file first, empty (`{ "projects": [] }`), if
- * it doesn't have one yet — populating it is what "Add Project" and hand-editing are for, not this
- * button.
- */
+/** Opens a workspace folder's session-deck.json for direct hand-editing, creating it empty first if needed. */
 async function editProjectList(): Promise<void> {
   if (!vscode.workspace.workspaceFolders?.length) {
     vscode.window.showErrorMessage('Open a folder or workspace first — the project list is saved per workspace.');
@@ -655,11 +597,7 @@ async function removeProject(node: ProjectGroupNode, tree: SessionTreeProvider):
   tree.refresh();
 }
 
-/**
- * Soft-hide: sets `hidden: true` on the entry rather than removing it (see `WorkspaceProjectEntry.hidden`).
- * No confirmation dialog — it's non-destructive and one hand-edit away from undone — but a project that
- * just vanished from the tree with no visible "Unhide" button anywhere is worth a pointer to how.
- */
+/** Soft-hide: sets `hidden: true` rather than removing the entry — no confirmation, non-destructive. */
 async function hideProject(node: ProjectGroupNode, tree: SessionTreeProvider): Promise<void> {
   if (!node) {
     return;

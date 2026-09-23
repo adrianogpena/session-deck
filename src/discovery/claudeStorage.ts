@@ -28,24 +28,15 @@ export function listSessionFiles(dirName: string): string[] {
 }
 
 /**
- * Claude Code encodes a project's absolute path into its storage folder name by
- * replacing path separators (and other non-alphanumeric characters) with "-",
- * e.g. "C:\Users\me\app" -> "C--Users-me-app". That's lossy — a literal "-" in a
- * real folder name is indistinguishable from an encoded separator — so this is
- * only used as a last resort when a folder has no session with a recorded `cwd`
- * to read the real path from instead.
+ * Reverses Claude Code's "-"-for-path-separator folder-name encoding. Lossy (a literal "-" is
+ * indistinguishable from an encoded separator), so only used as a last resort when no session has
+ * a recorded `cwd` to read the real path from instead.
  */
 export function decodeProjectPath(dirName: string): string {
   return dirName.replace(/^([A-Za-z])--/, '$1:\\').replace(/-/g, '\\');
 }
 
-/**
- * Extracts display text from a message `content` field. Claude Code represents
- * it as a plain string, an array of content blocks (text/thinking/tool_use/
- * tool_result/image/...), or occasionally a single block object — this handles
- * all three uniformly, joining `text`/`thinking` blocks and ignoring the rest
- * (tool_use, tool_result, images contribute nothing to display text).
- */
+/** `content` may be a plain string, an array of content blocks, or a single block object — handles all three, keeping only text/thinking. */
 export function extractText(content: unknown): string {
   if (typeof content === 'string') {
     return content;
@@ -104,11 +95,7 @@ const HIDDEN_USER_PROMPT_PREFIXES = [
   'agentId:',
 ];
 
-/**
- * Filters out synthetic "user" turns that aren't real prompts — slash-command
- * echoes, usage-limit notices, sidechain/subagent markers — so a session's
- * title/search text surfaces what was actually typed, not plumbing.
- */
+/** Filters out synthetic "user" turns (slash-command echoes, usage notices, etc.) that aren't real prompts. */
 export function isDisplayableUserPrompt(rawPrompt: string): boolean {
   const normalized = rawPrompt.replace(/\s+/g, ' ').trim();
   if (!normalized) {
@@ -124,13 +111,7 @@ export interface SessionMeta {
 
 const sessionMetaCache = new Map<string, { mtimeMs: number; meta: SessionMeta }>();
 
-/**
- * Combined, cached read of a session's starting `cwd` and title-worthy first
- * prompt, in a single pass over the file. Cached by mtime so an unchanged
- * session is never re-parsed on refresh — significant once there are more than
- * a handful of sessions, since every tree refresh previously re-scanned every
- * session's transcript from scratch.
- */
+/** Combined, cached read of a session's starting `cwd` and first prompt. Cached by mtime so an unchanged session is never re-parsed. */
 export async function readSessionMeta(filePath: string): Promise<SessionMeta> {
   let mtimeMs: number;
   try {
@@ -198,13 +179,7 @@ async function parseSessionMeta(filePath: string): Promise<SessionMeta> {
 
 const searchTextCache = new Map<string, { mtimeMs: number; text: string }>();
 
-/**
- * Full session content (all displayable user prompts + assistant text, not just
- * the first prompt), for the "Search Sessions" command. Deliberately not part
- * of {@link readSessionMeta} — it's a heavier read that's only ever needed when
- * a search actually runs, not on every tree refresh — and is cached separately
- * by mtime for the same reason.
- */
+/** Full session content (all prompts + assistant text) for the "Search Sessions" command — cached separately from {@link readSessionMeta} since it's a heavier read only needed on search. */
 export async function readSessionSearchText(filePath: string): Promise<string> {
   let mtimeMs: number;
   try {
@@ -263,11 +238,7 @@ async function parseSessionSearchText(filePath: string): Promise<string> {
   return parts.join('\n');
 }
 
-/**
- * The last assistant reply's displayable text — for the "Copy Last Response" command. A full scan like
- * {@link readSessionSearchText}, but deliberately not cached: an on-demand action a user triggers once,
- * not something read on every tree refresh.
- */
+/** The last assistant reply's text, for "Copy Last Response" — not cached, since it's a one-off action. */
 export async function readLastAssistantResponse(filePath: string): Promise<string | undefined> {
   const rl = readline.createInterface({ input: fs.createReadStream(filePath), crlfDelay: Infinity });
   let last: string | undefined;

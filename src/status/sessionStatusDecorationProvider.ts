@@ -8,15 +8,7 @@ export function sessionStatusUri(sessionId: string): vscode.Uri {
   return vscode.Uri.parse(`${SESSION_STATUS_DECORATION_SCHEME}:/${sessionId}`);
 }
 
-/**
- * Colors a session's status via `vscode.FileDecoration` instead of its
- * `TreeItem.iconPath` — a plain `ThemeIcon` colored with a `ThemeColor` gets
- * washed out to the row's plain foreground color when that row is selected
- * (a VS Code tree-rendering quirk: selection highlighting overrides custom
- * icon colors for contrast). File decorations are a separate rendering layer
- * — the same mechanism Git/SCM status colors use — and reliably keep their
- * color regardless of selection state.
- */
+/** Uses `vscode.FileDecoration` instead of `TreeItem.iconPath` — a colored icon washes out to the row's plain foreground color when selected, file decorations don't. */
 export class SessionStatusDecorationProvider implements vscode.FileDecorationProvider {
   private readonly _onDidChangeFileDecorations = new vscode.EventEmitter<vscode.Uri | vscode.Uri[] | undefined>();
   readonly onDidChangeFileDecorations = this._onDidChangeFileDecorations.event;
