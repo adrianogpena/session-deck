@@ -2,19 +2,39 @@
   "name": "session-deck",
   "displayName": "Session Deck",
   "description": "Multi-project AI coding session explorer for Claude Code and GitHub Copilot CLI, with a single, reusable session tab",
-  "version": "0.0.1",
-  "private": true,
-  "publisher": "local",
+  "version": "0.1.0",
+  "private": false,
+  "publisher": "adrianogpena",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/adrianogpena/session-deck.git"
   },
+  "bugs": {
+    "url": "https://github.com/adrianogpena/session-deck/issues"
+  },
+  "homepage": "https://github.com/adrianogpena/session-deck#readme",
   "icon": "resources/icon.png",
   "engines": {
     "vscode": "^1.93.0"
   },
   "categories": [
+    "Chat",
     "Other"
+  ],
+  "keywords": [
+    "claude",
+    "claude code",
+    "copilot",
+    "github copilot",
+    "copilot cli",
+    "ai",
+    "agent",
+    "cli",
+    "terminal",
+    "sessions",
+    "session manager",
+    "multi-root"
   ],
   "activationEvents": [],
   "main": "./out/extension.js",
