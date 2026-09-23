@@ -488,25 +488,63 @@ async function editProjectList(): Promise<void> {
   await vscode.window.showTextDocument(vscode.Uri.file(configPath));
 }
 
-/** Starts a brand-new session (Claude or Copilot, per the node's own agent) rooted at the project's own root path — not any particular worktree/subfolder member. */
-async function newSession(node: ProjectGroupNode, terminalService: AgentTerminalService): Promise<void> {
-  if (!node) {
+interface NewSessionTarget {
+  agent: AgentType;
+  rootPath: string;
+  displayName: string;
+}
+
+/** Invoked with no project node (e.g. from the Command Palette) — prompts for a project, then an agent. */
+async function pickProjectAndAgentForNewSession(): Promise<NewSessionTarget | undefined> {
+  const entries = (readWorkspaceProjectEntries() ?? []).filter((e) => !e.hidden);
+  if (entries.length === 0) {
+    vscode.window.showInformationMessage('No projects configured — add one first with "Session Deck: Add Project to Workspace".');
+    return undefined;
+  }
+
+  const projectItems = entries.map((entry) => ({
+    label: entry.name ?? (path.basename(entry.root) || entry.root),
+    description: entry.root,
+    entry,
+  }));
+  const pickedProject = await vscode.window.showQuickPick(projectItems, { placeHolder: 'Select a project' });
+  if (!pickedProject) {
+    return undefined;
+  }
+
+  const agentItems: (vscode.QuickPickItem & { agent: AgentType })[] = [
+    { label: 'Claude Code', agent: 'claude' },
+    { label: 'GitHub Copilot', agent: 'copilot' },
+  ];
+  const pickedAgent = await vscode.window.showQuickPick(agentItems, { placeHolder: 'Select an agent' });
+  if (!pickedAgent) {
+    return undefined;
+  }
+
+  return { agent: pickedAgent.agent, rootPath: pickedProject.entry.root, displayName: pickedProject.label };
+}
+
+/** Starts a brand-new session rooted at the project's own root path — not any particular worktree/subfolder member. */
+async function newSession(node: ProjectGroupNode | undefined, terminalService: AgentTerminalService): Promise<void> {
+  const target = node ?? (await pickProjectAndAgentForNewSession());
+  if (!target) {
     return;
   }
-  await terminalService.startNewSession(node.agent, node.rootPath, node.displayName);
+  await terminalService.startNewSession(target.agent, target.rootPath, target.displayName);
 }
 
 /** Same reasoning as `openSessionDangerously`: always a fresh terminal, gated behind an explicit confirmation. */
-async function newSessionDangerously(node: ProjectGroupNode, terminalService: AgentTerminalService): Promise<void> {
-  if (!node) {
+async function newSessionDangerously(node: ProjectGroupNode | undefined, terminalService: AgentTerminalService): Promise<void> {
+  const target = node ?? (await pickProjectAndAgentForNewSession());
+  if (!target) {
     return;
   }
-  if (shouldConfirmDangerousSkipPermissions(node.rootPath)) {
+  if (shouldConfirmDangerousSkipPermissions(target.rootPath)) {
     const confirm = await vscode.window.showWarningMessage(
-      `Start a new session in "${node.displayName}" with ${dangerousModeFlag(node.agent)}?`,
+      `Start a new session in "${target.displayName}" with ${dangerousModeFlag(target.agent)}?`,
       {
         modal: true,
-        detail: dangerousModeDetail(node.agent),
+        detail: dangerousModeDetail(target.agent),
       },
       'Start'
     );
@@ -514,7 +552,7 @@ async function newSessionDangerously(node: ProjectGroupNode, terminalService: Ag
       return;
     }
   }
-  await terminalService.startNewSession(node.agent, node.rootPath, node.displayName, { dangerouslySkipPermissions: true });
+  await terminalService.startNewSession(target.agent, target.rootPath, target.displayName, { dangerouslySkipPermissions: true });
 }
 
 /** Claude-only (`claude --resume --fork-session`, no Copilot equivalent) — branches a brand-new session off this one's full history, leaving the original untouched. */
