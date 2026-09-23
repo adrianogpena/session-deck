@@ -134,7 +134,7 @@
       {
         "command": "sessionDeck.removeProject",
         "title": "Session Deck: Remove Project",
-        "icon": "$(trash)"
+        "icon": "$(close)"
       },
       {
         "command": "sessionDeck.hideProject",
