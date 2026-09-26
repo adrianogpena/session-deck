@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Type-check only: esbuild bundles src/extension.ts (plus core and node-notifier) into out/extension.js.
+    "noEmit": true,
+    "rootDir": "src"
+  },
+  "include": ["src"]
+}

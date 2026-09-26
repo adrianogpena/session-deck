@@ -6,10 +6,10 @@
       "type": "extensionHost",
       "request": "launch",
       "args": [
-        "--extensionDevelopmentPath=${workspaceFolder}",
+        "--extensionDevelopmentPath=${workspaceFolder}/packages/vscode",
         "X:\\demo-projects\\acme-storefront"
       ],
-      "outFiles": ["${workspaceFolder}/out/**/*.js"],
+      "outFiles": ["${workspaceFolder}/packages/vscode/out/**/*.js"],
       "preLaunchTask": "${defaultBuildTask}"
     },
     {
@@ -17,11 +17,11 @@
       "type": "extensionHost",
       "request": "launch",
       "args": [
-        "--extensionDevelopmentPath=${workspaceFolder}",
+        "--extensionDevelopmentPath=${workspaceFolder}/packages/vscode",
         "X:\\demo-projects\\acme-storefront"
       ],
       "env": { "SESSION_DECK_DISCOVERY_ROOT": "X:\\demo-projects" },
-      "outFiles": ["${workspaceFolder}/out/**/*.js"],
+      "outFiles": ["${workspaceFolder}/packages/vscode/out/**/*.js"],
       "preLaunchTask": "${defaultBuildTask}"
     }
   ]

@@ -1,0 +1,29 @@
+{
+  "name": "session-deck-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Session Deck in the terminal: background Claude sessions with a live preview and attach/detach, native on Windows",
+  "license": "MIT",
+  "bin": {
+    "sdeck": "out/main.js"
+  },
+  "main": "out/main.js",
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -watch -p .",
+    "start": "node out/main.js",
+    "lint": "eslint src"
+  },
+  "dependencies": {
+    "@session-deck/core": "*",
+    "@xterm/addon-serialize": "^0.14.0",
+    "@xterm/headless": "^6.0.0",
+    "node-pty": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

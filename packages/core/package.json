@@ -1,0 +1,23 @@
+{
+  "name": "@session-deck/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Session discovery, status, commands and shared state used by every Session Deck front end",
+  "license": "MIT",
+  "main": "out/index.js",
+  "types": "out/index.d.ts",
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -watch -p .",
+    "pretest": "npm run build",
+    "test": "node --test out/test/*.test.js",
+    "lint": "eslint src"
+  },
+  "dependencies": {
+    "node-notifier": "^10.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/node-notifier": "^8.0.5"
+  }
+}
