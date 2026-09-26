@@ -12,6 +12,8 @@
     "build": "tsc -p .",
     "watch": "tsc -watch -p .",
     "start": "node out/main.js",
+    "pretest": "npm run build",
+    "test": "node --test out/test/*.test.js",
     "lint": "eslint src"
   },
   "dependencies": {

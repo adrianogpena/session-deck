@@ -178,7 +178,7 @@ These replace the prototype's current `▶ ? ● … ✕ ⧉ ·` mix.
 
 See [section 5](#5-open-decisions).
 
-### Phase 1: shared foundation
+### Phase 1: shared foundation **(done)**
 
 - Monorepo with npm workspaces: `packages/core`, `packages/vscode`, `packages/cli`.
 - Move the vscode-free modules into `core`: discovery, status, command builders, fuzzy match, concurrency, archive
@@ -188,7 +188,7 @@ See [section 5](#5-open-decisions).
   migration.
 - Port the prototype to TypeScript in `packages/cli`, split into store, PTY sessions, status, renderer and input.
 
-### Phase 2: look and feel (TUI)
+### Phase 2: look and feel (TUI) **(done)**
 
 - Tokyo Night palette with dark / light / system.
 - `●◐○✕■⟳` glyphs, accent selection bar, bold active titles.

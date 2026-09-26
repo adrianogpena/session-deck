@@ -8,6 +8,7 @@ export * from './discovery/claudeStorage';
 export * from './discovery/copilotStorage';
 export * from './discovery/gitProject';
 export * from './discovery/pathUtils';
+export * from './format';
 export * from './fuzzyMatch';
 export * from './status/claudeProcessWatcher';
 export * from './status/copilotStatusWatcher';

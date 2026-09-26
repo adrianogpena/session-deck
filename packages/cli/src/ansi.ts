@@ -28,8 +28,15 @@ export function fit(text: string, width: number): string {
       continue;
     }
     if (w + cw > width) {
-      if (w < width) {
-        result = result.slice(0, -1) + '…';
+      // Make room for the ellipsis, measuring in columns (a wide character frees two).
+      const kept = Array.from(result);
+      while (kept.length && w + 1 > width) {
+        w -= charWidth(kept.pop()!.codePointAt(0) ?? 0);
+      }
+      result = kept.join('');
+      if (w + 1 <= width) {
+        result += '…';
+        w += 1;
       }
       break;
     }
@@ -120,4 +127,35 @@ export function renderTerm(term: Terminal, width: number, height: number): strin
     lines.push(`${s}${ESC}0m${' '.repeat(Math.max(0, width - col))}`);
   }
   return lines;
+}
+
+/** Display width in terminal columns of plain text (no escape sequences). */
+export function textWidth(text: string): number {
+  let w = 0;
+  for (const ch of text) {
+    w += charWidth(ch.codePointAt(0) ?? 0);
+  }
+  return w;
+}
+
+/** Like {@link fit}, for a line that contains SGR color sequences: truncates or pads to `width` visible columns, keeping the sequences. */
+export function fitAnsi(line: string, width: number): string {
+  let out = '';
+  let w = 0;
+  // eslint-disable-next-line no-control-regex -- splitting SGR sequences from text is the point
+  for (const part of line.split(/(\x1b\[[0-9;]*m)/)) {
+    if (part.startsWith('\x1b[')) {
+      out += part;
+      continue;
+    }
+    for (const ch of part) {
+      const cw = charWidth(ch.codePointAt(0) ?? 0);
+      if (w + cw > width) {
+        return `${out}${ESC}0m${' '.repeat(Math.max(0, width - w))}`;
+      }
+      out += ch;
+      w += cw;
+    }
+  }
+  return out + ' '.repeat(Math.max(0, width - w));
 }

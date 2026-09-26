@@ -27,3 +27,30 @@ export function findDetachKey(data: string): number {
 
 /** Terminal modes an agent (or ConPTY) may switch on in the real terminal while attached. */
 export const RESET_AGENT_MODES = '\x1b[?9001l\x1b[?2004l\x1b[?1004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1l\x1b[<u\x1b[0m';
+
+/**
+ * One input chunk as individual keys: fast typing, key repeat and pastes arrive as several keys at
+ * once. CSI (`ESC [ … final`) and SS3 (`ESC O x`) sequences stay whole, e.g. arrows and F2.
+ */
+export function splitKeys(data: string): string[] {
+  const keys: string[] = [];
+  const chars = Array.from(data);
+  for (let i = 0; i < chars.length; i++) {
+    if (chars[i] !== '\x1b' || i + 1 >= chars.length) {
+      keys.push(chars[i]);
+    } else if (chars[i + 1] === 'O' && i + 2 < chars.length) {
+      keys.push(chars.slice(i, i + 3).join(''));
+      i += 2;
+    } else if (chars[i + 1] === '[') {
+      let end = i + 2;
+      while (end < chars.length && !/[\x40-\x7e]/.test(chars[end])) {
+        end++;
+      }
+      keys.push(chars.slice(i, end + 1).join(''));
+      i = end;
+    } else {
+      keys.push('\x1b'); // lone Esc (or Alt+key, which we don't bind)
+    }
+  }
+  return keys;
+}

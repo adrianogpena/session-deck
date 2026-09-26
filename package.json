@@ -9,7 +9,7 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces",
-    "test": "npm test -w @session-deck/core",
+    "test": "npm test --workspaces --if-present",
     "lint": "eslint packages/core/src packages/vscode/src packages/cli/src",
     "package:vscode": "npm run package -w session-deck",
     "sdeck": "npm start -w session-deck-cli"

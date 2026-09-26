@@ -9,10 +9,24 @@ export interface SessionPrefs {
   archived?: boolean;
 }
 
+export type ThemePreference = 'dark' | 'light' | 'system';
+
+/** Terminal UI preferences. The extension ignores these, since VS Code has its own theme and layout. */
+export interface UiPrefs {
+  theme?: ThemePreference;
+  /** Sessions panel width, as a percentage of the terminal width. */
+  sidebarPct?: number;
+}
+
 export interface DeckStateFile {
   version: 1;
   sessions: Record<string, SessionPrefs>;
+  ui?: UiPrefs;
 }
+
+const THEMES: readonly ThemePreference[] = ['dark', 'light', 'system'];
+export const SIDEBAR_PCT_MIN = 15;
+export const SIDEBAR_PCT_MAX = 70;
 
 /** `SESSION_DECK_HOME` overrides the location (tests, or keeping a separate state while developing). */
 export function getDeckHomeDir(): string {
@@ -38,8 +52,12 @@ export function parseDeckState(raw: string): DeckStateFile | undefined {
   if (typeof parsed !== 'object' || parsed === null) {
     return undefined;
   }
-  const sessions = (parsed as { sessions?: unknown }).sessions;
+  const { sessions, ui } = parsed as { sessions?: unknown; ui?: unknown };
   const state = emptyState();
+  const uiPrefs = parseUiPrefs(ui);
+  if (uiPrefs) {
+    state.ui = uiPrefs;
+  }
   if (typeof sessions !== 'object' || sessions === null) {
     return state;
   }
@@ -60,6 +78,29 @@ export function parseDeckState(raw: string): DeckStateFile | undefined {
     }
   }
   return state;
+}
+
+function parseUiPrefs(ui: unknown): UiPrefs | undefined {
+  if (typeof ui !== 'object' || ui === null) {
+    return undefined;
+  }
+  const { theme, sidebarPct } = ui as Record<string, unknown>;
+  const prefs: UiPrefs = {};
+  if (THEMES.includes(theme as ThemePreference)) {
+    prefs.theme = theme as ThemePreference;
+  }
+  if (typeof sidebarPct === 'number' && sidebarPct >= SIDEBAR_PCT_MIN && sidebarPct <= SIDEBAR_PCT_MAX) {
+    prefs.sidebarPct = sidebarPct;
+  }
+  return Object.keys(prefs).length ? prefs : undefined;
+}
+
+/** Pure: merges `patch` into the UI prefs. An `undefined` or out-of-range value clears that field. */
+export function applyUiPatch(state: DeckStateFile, patch: Partial<UiPrefs>): DeckStateFile {
+  const next: DeckStateFile = { ...state };
+  delete next.ui;
+  const ui = parseUiPrefs({ ...state.ui, ...patch });
+  return ui ? { ...next, ui } : next;
 }
 
 /** Pure: a `undefined`/`false`/blank value in `patch` clears that field, and an entry left with no fields is removed. */
@@ -126,6 +167,14 @@ export class DeckStore {
 
   getSession(sessionId: string): SessionPrefs | undefined {
     return this.read().sessions[sessionId];
+  }
+
+  getUi(): UiPrefs {
+    return this.read().ui ?? {};
+  }
+
+  async updateUi(patch: Partial<UiPrefs>): Promise<void> {
+    await this.writeAtomic(applyUiPatch(this.readForWrite(), patch));
   }
 
   async updateSession(sessionId: string, patch: Partial<SessionPrefs>): Promise<void> {

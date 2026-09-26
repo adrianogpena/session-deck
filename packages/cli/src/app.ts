@@ -1,33 +1,43 @@
 import * as fs from 'fs';
-import { clearSessionMetaCache, DeckStore, readLastAssistantResponse } from '@session-deck/core';
-import { ESC, fit, oneLine, renderTerm, wrap } from './ansi';
-import { findDetachKey, RESET_AGENT_MODES } from './keys';
-import { disposeLive, resizeLive, spawnClaude } from './liveSession';
+import * as os from 'os';
+import * as path from 'path';
 import {
-  appendRenameRecords,
-  buildRows,
-  ClaudeProcs,
-  DeckSession,
-  discoverSessions,
-  displayTitle,
-  refreshLiveTitle,
-  SessionStatus,
-  SidebarRow,
-} from './sessions';
+  clearSessionMetaCache,
+  DeckStore,
+  humanizeSince,
+  readLastAssistantResponse,
+  SIDEBAR_PCT_MAX,
+  SIDEBAR_PCT_MIN,
+  ThemePreference,
+} from '@session-deck/core';
+import { ESC, fitAnsi, oneLine } from './ansi';
+import { matchesStatusFilter, nextTimeFilter, STATUS_CATEGORIES, StatusCategory, TimeFilter, withinTimeFilter } from './filters';
+import { findDetachKey, RESET_AGENT_MODES, splitKeys } from './keys';
+import { computeLayout, Layout, ptySizeFor, Rect } from './layout';
+import { disposeLive, resizeLive, spawnClaude } from './liveSession';
+import { appendRenameRecords, buildRows, ClaudeProcs, DeckSession, discoverSessions, displayTitle, refreshLiveTitle, SidebarRow } from './sessions';
+import { extractBackgroundReply, OSC11_QUERY, readOsTheme, Theme, ThemeName } from './theme';
+import {
+  helpOverlay,
+  ListRow,
+  renderHeader,
+  renderHelpBar,
+  renderListPanel,
+  renderMessageBar,
+  renderPills,
+  renderPreviewPanel,
+  renderPromptBar,
+  SessionView,
+  themeLabel,
+} from './view';
 
 const out = process.stdout;
-
-const STATUS_BADGE: Record<SessionStatus, string> = {
-  running: `${ESC}32m▶${ESC}0m`,
-  waiting: `${ESC}33;1m?${ESC}0m`,
-  idle: `${ESC}36m●${ESC}0m`,
-  starting: `${ESC}36m…${ESC}0m`,
-  exited: `${ESC}31m✕${ESC}0m`,
-  elsewhere: `${ESC}35m⧉${ESC}0m`,
-  stopped: `${ESC}90m·${ESC}0m`,
-};
-
-const HINTS = '↑↓ select  Enter attach  s start bg  n new here  e rename  x kill  b sidebar  r refresh  q quit   (Ctrl+Q detaches)';
+const VERSION: string = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version;
+const DEFAULT_SIDEBAR_PCT = 35;
+const SIDEBAR_STEP = 5;
+const THEME_CYCLE: readonly ThemePreference[] = ['dark', 'light', 'system'];
+const THEME_POLL_MS = 5000;
+const FILTER_KEYS: Record<string, StatusCategory> = { '!': 'running', '@': 'waiting', '#': 'idle', '&': 'error', '~': 'stopped' };
 
 /** Footer text input while open. */
 interface Prompt {
@@ -44,7 +54,7 @@ interface Prompt {
 export class App {
   private sessions: DeckSession[] = [];
   private rows: SidebarRow[] = [];
-  /** Index into `rows`, always a session row. */
+  /** Index into `rows`, always a session row (or 0 when there are none). */
   private selected = 0;
   private sidebarVisible = true;
   private attached: DeckSession | null = null;
@@ -52,8 +62,25 @@ export class App {
   private messageTimer?: NodeJS.Timeout;
   private renderTimer?: NodeJS.Timeout;
   private prompt: Prompt | null = null;
+  private helpScroll: number | null = null;
+  private statusFilter = new Set<StatusCategory>();
+  private timeFilter: TimeFilter = 'all';
+  /** Shown next to the SESSIONS title for a moment after resizing. */
+  private resizeNote?: { text: string; until: number };
   private readonly procs = new ClaudeProcs();
   private readonly store = new DeckStore();
+  private sidebarPct: number;
+  private themePreference: ThemePreference;
+  private systemTheme: ThemeName = 'dark';
+  /** Once the terminal has answered an OSC 11 query, its background decides "system" (not the OS setting). */
+  private terminalReportsBackground = false;
+  private readonly themes: Record<ThemeName, Theme> = { dark: new Theme('dark'), light: new Theme('light') };
+
+  constructor() {
+    const ui = this.store.getUi();
+    this.sidebarPct = ui.sidebarPct ?? DEFAULT_SIDEBAR_PCT;
+    this.themePreference = ui.theme ?? 'system';
+  }
 
   async run(): Promise<void> {
     await this.discover();
@@ -61,11 +88,13 @@ export class App {
     setInterval(() => this.pollProcs(), 1000);
     // Names/archive flags changed by the VS Code extension (or by us).
     this.store.watch(() => void this.discover().then(() => this.scheduleRender()));
+    void this.refreshSystemTheme();
+    setInterval(() => void this.refreshSystemTheme(), THEME_POLL_MS);
 
     out.write(`${ESC}?1049h${ESC}?25l${ESC}2J`);
     process.stdin.setRawMode(true);
     process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (data: string) => this.onKey(data));
+    process.stdin.on('data', (data: string) => this.onInput(data));
     out.on('resize', () => {
       if (this.attached) {
         resizeLive(this.attached.live, out.columns, out.rows);
@@ -84,6 +113,35 @@ export class App {
   }
 
   // -------------------------------------------------------------------------------------------
+  // Theme
+  // -------------------------------------------------------------------------------------------
+
+  private get theme(): Theme {
+    return this.themes[this.themePreference === 'system' ? this.systemTheme : this.themePreference];
+  }
+
+  /** Asks the terminal for its background (answered via stdin, see {@link onInput}); falls back to the OS setting. */
+  private async refreshSystemTheme(): Promise<void> {
+    if (this.themePreference !== 'system' || this.attached) {
+      return;
+    }
+    out.write(OSC11_QUERY);
+    if (!this.terminalReportsBackground) {
+      const osTheme = await readOsTheme();
+      if (osTheme && !this.terminalReportsBackground) {
+        this.setSystemTheme(osTheme);
+      }
+    }
+  }
+
+  private setSystemTheme(theme: ThemeName): void {
+    if (theme !== this.systemTheme) {
+      this.systemTheme = theme;
+      this.scheduleRender();
+    }
+  }
+
+  // -------------------------------------------------------------------------------------------
   // Sessions
   // -------------------------------------------------------------------------------------------
 
@@ -97,9 +155,14 @@ export class App {
     this.rebuildRows();
   }
 
+  /** Re-applies grouping and filters, keeping the selected session selected when it's still shown. */
   private rebuildRows(): void {
     const current = this.current;
-    this.rows = buildRows(this.sessions);
+    this.rows = buildRows(
+      this.sessions,
+      (s) => matchesStatusFilter(this.procs.categoryOf(s), this.statusFilter) && withinTimeFilter(s.mtime, this.timeFilter),
+      (s) => this.procs.categoryOf(s)
+    );
     const keep = this.rows.findIndex((r) => r.kind === 'session' && r.session === current);
     this.selected = keep >= 0 ? keep : Math.max(0, this.rows.findIndex((r) => r.kind === 'session'));
   }
@@ -115,16 +178,27 @@ export class App {
           s.file = undefined;
         }
         refreshLiveTitle(s, () => this.scheduleRender());
+      } else if (s.file && this.procs.isElsewhere(s)) {
+        // Another terminal keeps writing to it: keep its "5m ago" current.
+        try {
+          s.mtime = fs.statSync(s.file).mtimeMs;
+        } catch {
+          // vanished; keep the last known time
+        }
       }
     }
+    // Statuses (and so filter matches) and relative times move on their own.
+    this.rebuildRows();
     this.scheduleRender();
   }
 
-  private paneSize(): { cols: number; rows: number } {
-    const cols = out.columns || 120;
-    const height = out.rows || 30;
-    const sw = this.sidebarVisible ? sidebarWidth(cols) + 1 : 0;
-    return { cols: Math.max(20, cols - sw), rows: Math.max(5, height - 3) };
+  private layout(): Layout {
+    return computeLayout(out.columns || 120, out.rows || 30, this.sidebarPct, this.sidebarVisible);
+  }
+
+  /** PTY size for background agents: the preview's body. In list-only layout there's no preview, so agents keep their size. */
+  private ptySize(): { cols: number; rows: number } | undefined {
+    return ptySizeFor(this.layout());
   }
 
   private start(s: DeckSession): boolean {
@@ -132,7 +206,7 @@ export class App {
       this.flash(`Folder no longer exists: ${s.cwd}`);
       return false;
     }
-    const { cols, rows } = this.paneSize();
+    const { cols, rows } = this.ptySize() ?? { cols: 80, rows: 24 };
     s.live = spawnClaude(s.id, s.cwd, cols, rows, {
       onData: (data) => {
         if (this.attached === s) {
@@ -158,20 +232,38 @@ export class App {
       disposeLive(s.live);
     }
     s.live = undefined;
-    // A session with an id stays listed (still resumable from disk); one that never got an id is gone.
-    if (!s.id) {
+    // Stays listed only if it's resumable, i.e. its transcript exists (a new session with nothing sent has none).
+    if (!s.id || !s.file || !fs.existsSync(s.file)) {
       this.sessions = this.sessions.filter((x) => x !== s);
-      this.rebuildRows();
     }
+    this.rebuildRows();
   }
 
   private resizeAllToPane(): void {
-    const { cols, rows } = this.paneSize();
+    const size = this.ptySize();
+    if (!size) {
+      return;
+    }
     for (const s of this.sessions) {
       if (s !== this.attached) {
-        resizeLive(s.live, cols, rows);
+        resizeLive(s.live, size.cols, size.rows);
       }
     }
+  }
+
+  private viewOf(s: DeckSession): SessionView {
+    const status = this.procs.statusOf(s);
+    const active = s.live && !s.live.exited && (status === 'running' || status === 'waiting');
+    const home = os.homedir();
+    return {
+      title: displayTitle(s, this.store),
+      status,
+      elsewhere: this.procs.isElsewhere(s),
+      agent: 'claude',
+      timeLabel: active ? 'now' : humanizeSince(s.mtime),
+      cwd: s.cwd.toLowerCase().startsWith(home.toLowerCase()) ? `~${s.cwd.slice(home.length)}` : s.cwd,
+      id: s.id,
+    };
   }
 
   // -------------------------------------------------------------------------------------------
@@ -179,7 +271,7 @@ export class App {
   // -------------------------------------------------------------------------------------------
 
   private attach(s: DeckSession): void {
-    if (this.procs.statusOf(s) === 'elsewhere') {
+    if (this.procs.isElsewhere(s)) {
       this.flash('That session is running in another terminal. Close it there first.');
       return;
     }
@@ -225,15 +317,14 @@ export class App {
     if (!name || name === displayTitle(s, this.store)) {
       return;
     }
-    const status = this.procs.statusOf(s);
-    if (status === 'elsewhere') {
+    if (this.procs.isElsewhere(s)) {
       this.flash('That session is running in another terminal. Rename it there with /rename.');
       return;
     }
     const live = s.live;
     if (live && !live.exited) {
-      if (status !== 'idle') {
-        this.flash('Session is busy or waiting for you. Rename it once it is idle (●).');
+      if (this.procs.statusOf(s) !== 'idle') {
+        this.flash('Session is busy or waiting for you. Rename it once it is idle (○).');
         return;
       }
       // Text and Enter as separate writes, so the input box doesn't treat the Enter as part of a paste.
@@ -280,81 +371,67 @@ export class App {
     if (this.attached) {
       return;
     }
+    const t = this.theme;
     const cols = out.columns || 120;
     const height = out.rows || 30;
-    const pane = this.paneSize();
-    const bodyHeight = height - 2;
-    const current = this.current;
+    const layout = this.layout();
 
-    let frame = `${ESC}?2026h${ESC}H${ESC}0m`;
+    const counts = Object.fromEntries(STATUS_CATEGORIES.map((c) => [c, 0])) as Record<StatusCategory, number>;
+    for (const s of this.sessions) {
+      counts[this.procs.categoryOf(s)]++;
+    }
     const liveCount = this.sessions.filter((s) => s.live && !s.live.exited).length;
-    frame += `${ESC}1;7m${fit(` Session Deck — ${liveCount} live in background`, cols)}${ESC}0m`;
 
-    const side = this.sidebarVisible ? this.renderSidebar(sidebarWidth(cols), bodyHeight) : [];
-    const title = current
-      ? `${STATUS_BADGE[this.procs.statusOf(current)]} ${ESC}1m${fit(displayTitle(current, this.store), pane.cols - 2)}${ESC}0m`
-      : fit('', pane.cols);
-    const preview = this.renderPreview(current, pane.cols, pane.rows);
+    let frame = `${ESC}?2026h${ESC}0m`;
+    // Truncated as a safety net: a wrapped top row would push the whole frame down.
+    frame += `${ESC}1;1H${fitAnsi(renderHeader(t, cols, counts, liveCount, themeLabel(this.themePreference, this.theme.name), VERSION), cols)}`;
+    frame += `${ESC}2;1H${fitAnsi(renderPills(t, cols, this.sessions.length, counts, this.statusFilter, this.timeFilter), cols)}`;
 
-    for (let y = 0; y < bodyHeight; y++) {
-      frame += `${ESC}${y + 2};1H`;
-      if (this.sidebarVisible) {
-        frame += `${side[y]}${ESC}90m│${ESC}0m`;
+    if (layout.list) {
+      const listRows: ListRow[] = this.rows.map((r) => (r.kind === 'group' ? r : { kind: 'session', view: this.viewOf(r.session), isLast: r.isLast }));
+      const filtered = this.statusFilter.size > 0 || this.timeFilter !== 'all';
+      const note = this.resizeNote && Date.now() < this.resizeNote.until ? this.resizeNote.text : filtered ? '· filtered' : '';
+      const empty = this.sessions.length === 0 ? 'No Claude sessions found.' : 'Nothing matches the filter. Press 0 to clear it.';
+      frame += placeLines(layout.list, renderListPanel(t, layout.list, listRows, this.selected, note, empty));
+    }
+    if (layout.preview) {
+      const s = this.current;
+      const content = s
+        ? {
+            view: this.viewOf(s),
+            term: s.live && !s.live.exited ? s.live.term : undefined,
+            exitCode: s.live?.exitCode,
+            lastResponse: this.lastResponseOf(s),
+          }
+        : undefined;
+      frame += placeLines(layout.preview, renderPreviewPanel(t, layout.preview, content));
+    }
+    if (layout.dividerX !== undefined && layout.list) {
+      for (let y = 0; y < layout.list.height; y++) {
+        frame += `${ESC}${layout.list.y + y + 1};${layout.dividerX + 1}H${t.fg('border')}│${ESC}0m`;
       }
-      frame += y === 0 ? title : preview[y - 1] || ' '.repeat(pane.cols);
     }
 
+    frame += `${ESC}${height};1H`;
     if (this.prompt) {
-      const label = this.prompt.label;
-      frame += `${ESC}${height};1H${ESC}1m ${label}: ${ESC}0m${fit(`${this.prompt.value}█`, Math.max(1, cols - label.length - 3))}`;
+      frame += renderPromptBar(t, cols, this.prompt.label, this.prompt.value);
+    } else if (this.message) {
+      frame += renderMessageBar(t, cols, this.message);
     } else {
-      frame += `${ESC}${height};1H${ESC}7m${fit(` ${this.message || HINTS}`, cols)}${ESC}0m`;
+      frame += renderHelpBar(t, cols);
+    }
+
+    if (this.helpScroll !== null) {
+      const overlay = helpOverlay(t, cols, height, this.helpScroll, VERSION);
+      this.helpScroll = Math.min(this.helpScroll, overlay.maxScroll);
+      overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
     }
     frame += `${ESC}?2026l`;
     out.write(frame);
   }
 
-  private renderSidebar(width: number, height: number): string[] {
-    const lines: string[] = [];
-    // keep selection visible
-    const start = Math.max(0, Math.min(this.selected - Math.floor(height / 2), this.rows.length - height));
-    for (let i = 0; i < height; i++) {
-      const r = this.rows[start + i];
-      if (!r) {
-        lines.push(' '.repeat(width));
-      } else if (r.kind === 'group') {
-        lines.push(`${ESC}1;34m${fit(`▾ ${r.label}`, width)}${ESC}0m`);
-      } else {
-        const text = fit(`   ${displayTitle(r.session, this.store)}`, width - 2);
-        const badge = STATUS_BADGE[this.procs.statusOf(r.session)];
-        lines.push(start + i === this.selected ? ` ${badge}${ESC}7m${text}${ESC}0m ` : ` ${badge}${text} `);
-      }
-    }
-    return lines;
-  }
-
-  private renderPreview(s: DeckSession | undefined, width: number, height: number): string[] {
-    if (!s) {
-      return Array.from({ length: height }, () => ' '.repeat(width));
-    }
-    if (s.live && !s.live.exited) {
-      return renderTerm(s.live.term, width, height);
-    }
-    const status = this.procs.statusOf(s);
-    const info = [
-      '',
-      `  ${displayTitle(s, this.store)}`,
-      `  ${s.cwd}`,
-      `  ${s.id || '(new)'}`,
-      '',
-      status === 'elsewhere'
-        ? '  Running in another terminal. Close it there to open it here.'
-        : status === 'exited'
-          ? `  Exited (code ${s.live?.exitCode}). Enter = restart, x = clear.`
-          : '  Not running.  Enter = start + attach    s = start in background',
-      '',
-      '  Last response:',
-    ];
+  /** Starts loading a stopped session's last reply the first time it's previewed. */
+  private lastResponseOf(s: DeckSession): string | null | undefined {
     if (s.lastResponse === undefined && s.file) {
       s.lastResponse = null; // loading
       void readLastAssistantResponse(s.file).then((r) => {
@@ -362,19 +439,34 @@ export class App {
         this.scheduleRender();
       });
     }
-    const lines = info.map((l) => fit(l, width));
-    for (const l of s.lastResponse ? wrap(s.lastResponse, width - 4) : []) {
-      lines.push(`${ESC}90m${fit(`  ${l}`, width)}${ESC}0m`);
-    }
-    while (lines.length < height) {
-      lines.push(' '.repeat(width));
-    }
-    return lines.slice(0, height);
+    return s.lastResponse;
   }
 
   // -------------------------------------------------------------------------------------------
   // Input
   // -------------------------------------------------------------------------------------------
+
+  private onInput(data: string): void {
+    if (this.attached) {
+      this.onKey(data);
+      return;
+    }
+    // Answers to our background-color query arrive mixed into the input.
+    const { theme, rest } = extractBackgroundReply(data);
+    if (theme) {
+      this.terminalReportsBackground = true;
+      this.setSystemTheme(theme);
+    }
+    const keys = splitKeys(rest);
+    for (let i = 0; i < keys.length; i++) {
+      if (this.attached) {
+        // A key (Enter) just attached a session: the rest of the chunk is typed into it as-is.
+        this.onKey(keys.slice(i).join(''));
+        return;
+      }
+      this.onKey(keys[i]);
+    }
+  }
 
   private move(delta: number): void {
     let i = this.selected;
@@ -398,14 +490,46 @@ export class App {
       prompt.value = ''; // Ctrl+U
     } else if (!data.startsWith('\x1b')) {
       // eslint-disable-next-line no-control-regex -- strips control characters from typed/pasted text
-      prompt.value += data.replace(/[\x00-\x1f\x7f]/g, ''); // typed or pasted text
+      prompt.value += data.replace(/[\x00-\x1f\x7f]/g, '');
     }
     this.render();
+  }
+
+  private onHelpKey(data: string): void {
+    if (data === '\x1b' || data === '?' || data === 'q') {
+      this.helpScroll = null;
+      out.write(`${ESC}2J`);
+    } else if (data === '\x1b[A' || data === 'k') {
+      this.helpScroll = Math.max(0, (this.helpScroll ?? 0) - 1);
+    } else if (data === '\x1b[B' || data === 'j') {
+      this.helpScroll = (this.helpScroll ?? 0) + 1;
+    }
+    this.render();
+  }
+
+  private resizeSidebar(delta: number): void {
+    this.sidebarPct = Math.min(SIDEBAR_PCT_MAX, Math.max(SIDEBAR_PCT_MIN, this.sidebarPct + delta));
+    this.resizeNote = { text: `${this.sidebarPct}%`, until: Date.now() + 1500 };
+    setTimeout(() => this.scheduleRender(), 1600);
+    void this.store.updateUi({ sidebarPct: this.sidebarPct });
+    out.write(`${ESC}2J`);
+    this.resizeAllToPane();
+  }
+
+  private cycleTheme(): void {
+    this.themePreference = THEME_CYCLE[(THEME_CYCLE.indexOf(this.themePreference) + 1) % THEME_CYCLE.length];
+    void this.store.updateUi({ theme: this.themePreference });
+    void this.refreshSystemTheme();
+    this.flash(`Theme: ${this.themePreference}`);
   }
 
   private onKey(data: string): void {
     if (this.prompt) {
       this.onPromptKey(this.prompt, data);
+      return;
+    }
+    if (this.helpScroll !== null) {
+      this.onHelpKey(data);
       return;
     }
     const attached = this.attached;
@@ -425,6 +549,15 @@ export class App {
     }
 
     const s = this.current;
+    if (FILTER_KEYS[data]) {
+      const category = FILTER_KEYS[data];
+      if (!this.statusFilter.delete(category)) {
+        this.statusFilter.add(category);
+      }
+      this.rebuildRows();
+      this.render();
+      return;
+    }
     switch (data) {
       case '\x1b[A':
       case 'k':
@@ -440,7 +573,7 @@ export class App {
         }
         return;
       case 's':
-        if (s && this.procs.statusOf(s) === 'elsewhere') {
+        if (s && this.procs.isElsewhere(s)) {
           this.flash('That session is running in another terminal.');
         } else if (s && (!s.live || s.live.exited)) {
           if (s.live) this.kill(s);
@@ -471,11 +604,32 @@ export class App {
           this.flash('Session stopped');
         }
         break;
+      case '*':
+        this.timeFilter = nextTimeFilter(this.timeFilter);
+        this.rebuildRows();
+        break;
+      case '0':
+        this.statusFilter.clear();
+        this.timeFilter = 'all';
+        this.rebuildRows();
+        break;
+      case '<':
+        this.resizeSidebar(-SIDEBAR_STEP);
+        break;
+      case '>':
+        this.resizeSidebar(SIDEBAR_STEP);
+        break;
       case 'b':
       case '\x02': // Ctrl+B
         this.sidebarVisible = !this.sidebarVisible;
         out.write(`${ESC}2J`);
         this.resizeAllToPane();
+        break;
+      case 'T':
+        this.cycleTheme();
+        break;
+      case '?':
+        this.helpScroll = 0;
         break;
       case 'r':
         clearSessionMetaCache();
@@ -507,6 +661,10 @@ export class App {
   }
 }
 
-function sidebarWidth(cols: number): number {
-  return Math.min(44, Math.max(24, Math.floor(cols * 0.3)));
+/** Cursor-positioned lines filling `rect` (each line must already be exactly `rect.width` wide). */
+function placeLines(rect: Rect, lines: string[]): string {
+  return lines
+    .slice(0, rect.height)
+    .map((line, i) => `${ESC}${rect.y + i + 1};${rect.x + 1}H${line}`)
+    .join('');
 }

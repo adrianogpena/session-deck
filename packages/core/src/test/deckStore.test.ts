@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { DeckStore, applySessionPatch, parseDeckState } from '../store/deckStore';
+import { DeckStore, applySessionPatch, applyUiPatch, parseDeckState } from '../store/deckStore';
 
 function tempStorePath(): string {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'session-deck-store-')), 'state.json');
@@ -49,4 +49,28 @@ test('DeckStore backs up an unparseable file instead of overwriting it', async (
   assert.equal(backups.length, 1);
   assert.equal(fs.readFileSync(path.join(path.dirname(file), backups[0]), 'utf8'), '{broken');
   assert.deepEqual(new DeckStore(file).read().sessions, { a: { archived: true } });
+});
+
+test('parseDeckState keeps valid UI prefs and drops invalid ones', () => {
+  const state = parseDeckState(JSON.stringify({ version: 1, sessions: {}, ui: { theme: 'light', sidebarPct: 5 } }));
+  assert.deepEqual(state?.ui, { theme: 'light' });
+  assert.equal(parseDeckState(JSON.stringify({ version: 1, sessions: {}, ui: { theme: 'neon' } }))?.ui, undefined);
+});
+
+test('applyUiPatch merges, clears with undefined, and drops an empty ui section', () => {
+  let state = applyUiPatch({ version: 1, sessions: {} }, { theme: 'dark', sidebarPct: 40 });
+  assert.deepEqual(state.ui, { theme: 'dark', sidebarPct: 40 });
+  state = applyUiPatch(state, { sidebarPct: undefined });
+  assert.deepEqual(state.ui, { theme: 'dark' });
+  state = applyUiPatch(state, { theme: undefined });
+  assert.equal('ui' in state, false);
+});
+
+test('DeckStore keeps UI prefs when a session is updated, and sessions when UI prefs are', async () => {
+  const file = tempStorePath();
+  const store = new DeckStore(file);
+  await store.updateUi({ theme: 'light' });
+  await store.updateSession('a', { name: 'A' });
+  await store.updateUi({ sidebarPct: 30 });
+  assert.deepEqual(new DeckStore(file).read(), { version: 1, sessions: { a: { name: 'A' } }, ui: { theme: 'light', sidebarPct: 30 } });
 });

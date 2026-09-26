@@ -10,6 +10,7 @@ import {
   readSessionMeta,
 } from '@session-deck/core';
 import { oneLine } from './ansi';
+import type { StatusCategory } from './filters';
 import type { LiveSession } from './liveSession';
 
 const MAX_SESSIONS = 30;
@@ -28,9 +29,14 @@ export interface DeckSession {
   titleRefreshing?: boolean;
 }
 
-export type SidebarRow = { kind: 'group'; label: string } | { kind: 'session'; session: DeckSession };
+export type SidebarRow =
+  | { kind: 'group'; label: string; count: number; running: number; waiting: number }
+  | { kind: 'session'; session: DeckSession; isLast: boolean };
 
-export type SessionStatus = 'running' | 'waiting' | 'idle' | 'starting' | 'exited' | 'elsewhere' | 'stopped';
+/** For a session open in another terminal, the status of that other process (see {@link ClaudeProcs.isElsewhere}). */
+export type SessionStatus = 'running' | 'waiting' | 'idle' | 'starting' | 'exited' | 'stopped';
+
+const CLAUDE_STATUS: Record<string, SessionStatus> = { busy: 'running', shell: 'running', waiting: 'waiting', idle: 'idle' };
 
 interface ClaudeProc {
   pid: number;
@@ -83,10 +89,10 @@ export async function discoverSessions(current: DeckSession[], store: DeckStore)
   return [...liveOnes, ...found.filter((s) => !liveOnes.some((l) => l.id === s.id))];
 }
 
-/** Grouped by working folder, in first-seen (most recent) order. */
-export function buildRows(sessions: DeckSession[]): SidebarRow[] {
+/** Grouped by working folder, in first-seen (most recent) order. Groups with no visible session are left out; counts cover visible sessions. */
+export function buildRows(sessions: DeckSession[], include: (s: DeckSession) => boolean, categoryOf: (s: DeckSession) => StatusCategory): SidebarRow[] {
   const groups = new Map<string, { label: string; items: DeckSession[] }>();
-  for (const s of sessions) {
+  for (const s of sessions.filter(include)) {
     const key = s.cwd.toLowerCase();
     let group = groups.get(key);
     if (!group) {
@@ -97,10 +103,15 @@ export function buildRows(sessions: DeckSession[]): SidebarRow[] {
   }
   const rows: SidebarRow[] = [];
   for (const g of groups.values()) {
-    rows.push({ kind: 'group', label: g.label });
-    for (const s of g.items) {
-      rows.push({ kind: 'session', session: s });
-    }
+    const categories = g.items.map(categoryOf);
+    rows.push({
+      kind: 'group',
+      label: g.label,
+      count: g.items.length,
+      running: categories.filter((c) => c === 'running').length,
+      waiting: categories.filter((c) => c === 'waiting').length,
+    });
+    g.items.forEach((s, i) => rows.push({ kind: 'session', session: s, isLast: i === g.items.length - 1 }));
   }
   return rows;
 }
@@ -153,15 +164,20 @@ export class ClaudeProcs {
         return 'exited';
       }
       const rec = this.byPid.get(s.live.pid);
-      if (!rec) {
-        return 'starting';
-      }
-      return ({ busy: 'running', shell: 'running', waiting: 'waiting', idle: 'idle' } as Record<string, SessionStatus>)[rec.status] || 'idle';
+      return rec ? CLAUDE_STATUS[rec.status] || 'idle' : 'starting';
     }
-    if (s.id && this.bySession.has(s.id)) {
-      return 'elsewhere';
-    }
-    return 'stopped';
+    const external = s.id ? this.bySession.get(s.id) : undefined;
+    return external ? CLAUDE_STATUS[external.status] || 'idle' : 'stopped';
+  }
+
+  /** Not running here, but a `claude` process elsewhere (another terminal, VS Code) has it open. */
+  isElsewhere(s: DeckSession): boolean {
+    return !s.live && !!s.id && this.bySession.has(s.id);
+  }
+
+  categoryOf(s: DeckSession): StatusCategory {
+    const status = this.statusOf(s);
+    return status === 'starting' ? 'running' : status === 'exited' ? 'error' : status;
   }
 }
 
@@ -177,6 +193,11 @@ export function refreshLiveTitle(s: DeckSession, onChange: () => void): void {
       return; // brand-new session, nothing written yet
     }
     s.file = path.join(getClaudeProjectsDir(), dir, `${id}.jsonl`);
+  }
+  try {
+    s.mtime = fs.statSync(s.file).mtimeMs; // for the "5m ago" column
+  } catch {
+    // vanished; keep the last known time
   }
   s.titleRefreshing = true;
   readSessionMeta(s.file)
