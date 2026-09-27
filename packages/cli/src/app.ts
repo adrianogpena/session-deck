@@ -6,10 +6,14 @@ import {
   acknowledgeSessionStatus,
   appendClaudeRenameRecords,
   clearSessionStatus,
+  copilotSessionSearchText,
   CopilotStatusWatcher,
   lastCopilotAssistantResponse,
   listTrash,
+  mapWithConcurrency,
   purgeTrash,
+  fuzzyMatch,
+  readSessionSearchText,
   restoreSession,
   trashClaudeSession,
   ClaudeProcessWatcher,
@@ -44,7 +48,7 @@ import { findDetachKey, RESET_AGENT_MODES, splitKeys } from './keys';
 import { computeLayout, Layout, ptySizeFor, Rect } from './layout';
 import { AgentType, clearExecutableCache, disposeLive, resizeLive, spawnAgent, typeLine } from './liveSession';
 import { DeckSession, StatusTracker, discoverSessions, displayTitle, refreshLiveTitle } from './sessions';
-import { buildTree, TreeRow } from './tree';
+import { buildTree, projectLabels, TreeRow } from './tree';
 import { extractBackgroundReply, OSC11_QUERY, readOsTheme, Theme, ThemeName } from './theme';
 import {
   configOverlay,
@@ -61,6 +65,8 @@ import {
   renderPills,
   renderPreviewPanel,
   renderPromptBar,
+  searchOverlay,
+  SearchResultRow,
   SessionView,
   themeLabel,
 } from './view';
@@ -72,6 +78,8 @@ const SIDEBAR_STEP = 5;
 const THEME_CYCLE: readonly ThemePreference[] = ['dark', 'light', 'system'];
 const THEME_POLL_MS = 5000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** Caps how many sessions' content search reads concurrently on first use. */
+const SEARCH_READ_CONCURRENCY = 8;
 const FILTER_KEYS: Record<string, StatusCategory> = { '!': 'running', '@': 'waiting', '#': 'idle', '&': 'error', '~': 'stopped' };
 
 /** Footer text input while open. */
@@ -93,6 +101,16 @@ interface Picker {
 interface Confirm {
   question: string;
   onYes(): void;
+}
+
+/** Global search (`/`) while open: live-filtered as `query` changes, full session content fetched lazily on first use. */
+interface Search {
+  query: string;
+  results: DeckSession[];
+  index: number;
+  /** `undefined` until first needed; keyed by session id. */
+  textBySessionId?: Map<string, string>;
+  loading: boolean;
 }
 
 const PIN_CYCLE: readonly (SessionPin | undefined)[] = [undefined, 'top', 'bottom'];
@@ -123,6 +141,7 @@ export class App {
   private confirm: Confirm | null = null;
   private helpScroll: number | null = null;
   private configSelected: number | null = null;
+  private search: Search | null = null;
   private statusFilter = new Set<StatusCategory>();
   private timeFilter: TimeFilter = 'all';
   /** Shown next to the SESSIONS title for a moment after resizing. */
@@ -638,6 +657,12 @@ export class App {
       const overlay = configOverlay(t, cols, height, this.config, getDeckConfigPath(), this.configSelected);
       overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
     }
+    if (this.search) {
+      const labels = projectLabels(this.sessions.map((s) => s.projectRoot));
+      const rows: SearchResultRow[] = this.search.results.map((s) => ({ view: this.viewOf(s), projectLabel: labels.get(s.projectRoot) ?? s.projectRoot }));
+      const overlay = searchOverlay(t, cols, height, this.search.query, this.search.loading, rows, this.search.index);
+      overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
+    }
     frame += `${ESC}?2026l`;
     out.write(frame);
   }
@@ -775,6 +800,104 @@ export class App {
     this.flash(`${field.label} updated`);
   }
 
+  private openSearch(): void {
+    this.search = { query: '', results: [], index: 0, loading: false };
+  }
+
+  /** Every prompt/reply of every session with a real id, keyed by session id — read once per search, lazily. */
+  private async loadSearchText(): Promise<Map<string, string>> {
+    const searchable = this.sessions.filter((s) => s.id);
+    const pairs = await mapWithConcurrency(searchable, SEARCH_READ_CONCURRENCY, async (s): Promise<[string, string]> => [
+      s.id!,
+      s.agent === 'claude' ? (s.file ? await readSessionSearchText(s.file) : '') : copilotSessionSearchText(s.id!),
+    ]);
+    return new Map(pairs);
+  }
+
+  /** Fetches full session content on first use (once), then re-filters synchronously on every keystroke after that. */
+  private onSearchInput(): void {
+    const search = this.search;
+    if (!search) {
+      return;
+    }
+    if (search.textBySessionId) {
+      this.applySearchFilter();
+      return;
+    }
+    if (search.loading) {
+      return; // already fetching; applySearchFilter runs once it resolves, against the latest query
+    }
+    search.loading = true;
+    void this.loadSearchText().then((text) => {
+      if (this.search !== search) {
+        return; // search was closed (or reopened) while this was loading
+      }
+      search.textBySessionId = text;
+      search.loading = false;
+      this.applySearchFilter();
+      this.render();
+    });
+  }
+
+  /** A leading `!`/`@`/`#`/`&`/`~` filters by status, same as the main filter pills (see `FILTER_KEYS`). */
+  private applySearchFilter(): void {
+    const search = this.search;
+    if (!search) {
+      return;
+    }
+    const trimmed = search.query.trim();
+    if (!trimmed) {
+      search.results = [];
+      search.index = 0;
+      return;
+    }
+    const statusFilter = FILTER_KEYS[trimmed[0]];
+    const query = (statusFilter ? trimmed.slice(1) : trimmed).trim().toLowerCase();
+    const textBySessionId = search.textBySessionId;
+    search.results = textBySessionId
+      ? this.sessions
+          .filter((s) => s.id && (!statusFilter || this.procs.categoryOf(s) === statusFilter))
+          .map((s) => ({ session: s, match: fuzzyMatch(query, textBySessionId.get(s.id!) ?? '') }))
+          .filter((x) => x.match.matched)
+          .sort((a, b) => a.match.score - b.match.score)
+          .map((x) => x.session)
+      : [];
+    search.index = Math.min(search.index, Math.max(0, search.results.length - 1));
+  }
+
+  private onSearchKey(data: string): void {
+    const search = this.search;
+    if (!search) {
+      return;
+    }
+    if (data === '\x1b' || data === '\x03') {
+      this.search = null;
+      out.write(`${ESC}2J`);
+    } else if (data === '\r') {
+      const target = search.results[search.index];
+      this.search = null;
+      out.write(`${ESC}2J`);
+      if (target) {
+        this.jumpToSession(target);
+      }
+    } else if (data === '\x1b[A') {
+      search.index = Math.max(0, search.index - 1);
+    } else if (data === '\x1b[B') {
+      search.index = Math.min(Math.max(0, search.results.length - 1), search.index + 1);
+    } else if (data === '\x7f' || data === '\b') {
+      search.query = Array.from(search.query).slice(0, -1).join('');
+      this.onSearchInput();
+    } else if (data === '\x15') {
+      search.query = ''; // Ctrl+U
+      this.onSearchInput();
+    } else if (!data.startsWith('\x1b')) {
+      // eslint-disable-next-line no-control-regex -- strips control characters from typed/pasted text
+      search.query += data.replace(/[\x00-\x1f\x7f]/g, '');
+      this.onSearchInput();
+    }
+    this.render();
+  }
+
   private resizeSidebar(delta: number): void {
     this.sidebarPct = Math.min(SIDEBAR_PCT_MAX, Math.max(SIDEBAR_PCT_MIN, this.sidebarPct + delta));
     this.resizeNote = { text: `${this.sidebarPct}%`, until: Date.now() + 1500 };
@@ -802,6 +925,10 @@ export class App {
     }
     if (this.configSelected !== null) {
       this.onConfigKey(data);
+      return;
+    }
+    if (this.search) {
+      this.onSearchKey(data);
       return;
     }
     if (this.picker) {
@@ -1006,6 +1133,9 @@ export class App {
       case 'C':
         this.configSelected = 0;
         break;
+      case '/':
+        this.openSearch();
+        break;
       case 'r':
         clearSessionMetaCache();
         void this.discover().then(() => this.render());
@@ -1067,6 +1197,11 @@ export class App {
       this.flash('No previous session.');
       return;
     }
+    this.jumpToSession(target);
+  }
+
+  /** Selects `target` in the tree, expanding its project (and folder) if collapsed. Flashes if a filter still hides it. */
+  private jumpToSession(target: DeckSession): void {
     const isTarget = (r: TreeRow) => r.kind === 'session' && r.session === target;
     if (this.selectWhere(isTarget)) {
       return;
@@ -1080,7 +1215,7 @@ export class App {
       return next;
     });
     if (!this.selectWhere(isTarget)) {
-      this.flash('The previous session is hidden by the filter. Press 0 to clear it.');
+      this.flash('Hidden by the filter. Press 0 to clear it.');
     }
   }
 

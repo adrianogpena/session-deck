@@ -361,6 +361,7 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
       ['← →  Tab', 'Collapse / expand; ← also goes to the parent'],
       ['1-9', 'Jump to a top-level folder or project'],
       ['`', 'Back to the previously selected session'],
+      ['/', "Search every session's prompts and replies"],
     ],
   },
   {
@@ -528,6 +529,63 @@ export function pickerOverlay(t: Theme, cols: number, rows: number, title: strin
       const style = selected ? `${t.bg('accent')}${t.fg('bg')}${BOLD}` : `${s}${t.fg('text')}`;
       return `${border}│${s} ${style}${fit(` ${item}`, inner)}${RESET}${s} ${border}│${RESET}`;
     }),
+    `${border}╰${'─'.repeat(width - 2)}╯${RESET}`,
+  ];
+  return { x: Math.max(0, Math.floor((cols - width) / 2)), y: Math.max(0, Math.floor((rows - lines.length) / 2)), lines };
+}
+
+export interface SearchResultRow {
+  view: SessionView;
+  projectLabel: string;
+}
+
+/** The global search popup (`/`): a live-filtered full-text search across every session's prompts and replies. */
+export function searchOverlay(
+  t: Theme,
+  cols: number,
+  rows: number,
+  query: string,
+  loading: boolean,
+  results: readonly SearchResultRow[],
+  index: number
+): { x: number; y: number; lines: string[] } {
+  const width = Math.min(84, cols - 4);
+  const inner = width - 4;
+  const s = t.bg('surface');
+  const border = `${s}${t.fg('purple')}`;
+  const title = ' SEARCH ';
+  const left = Math.floor((width - 2 - title.length) / 2);
+
+  const resultLine = (row: SearchResultRow, selected: boolean): string => {
+    const v = row.view;
+    const glyphPart = ` ${glyph(t, v.status)} `;
+    const agentPart = ` ${v.agent} `;
+    const projectPart = ` ${row.projectLabel} `;
+    const titleWidth = Math.max(1, inner - textWidth(glyphPart) - textWidth(agentPart) - textWidth(projectPart));
+    const titleText = fit(v.title, titleWidth);
+    if (selected) {
+      const sel = `${t.bg('accent')}${t.fg('bg')}`;
+      return `${sel}${glyphPart}${BOLD}${titleText}${RESET}${sel}${projectPart}${agentPart}${RESET}`;
+    }
+    return `${s}${glyphPart}${t.fg('text')}${titleText}${RESET}${s}${t.fg('textDim')}${projectPart}${t.fg(AGENT_ROLE[v.agent] ?? 'text')}${agentPart}${RESET}`;
+  };
+
+  const maxItems = Math.max(1, rows - 9);
+  const first = Math.max(0, Math.min(index - Math.floor(maxItems / 2), results.length - maxItems));
+  const body: string[] = loading
+    ? [`${s}${t.fg('textDim')}${fit(' Reading session content…', inner)}`]
+    : query.trim() === ''
+      ? [`${s}${t.fg('textDim')}${fit(" Type to search every session's prompts and replies.", inner)}`]
+      : results.length === 0
+        ? [`${s}${t.fg('textDim')}${fit(' No matches.', inner)}`]
+        : results.slice(first, first + maxItems).map((r, i) => resultLine(r, first + i === index));
+
+  const lines = [
+    `${border}╭${'─'.repeat(left)}${BOLD}${title}${RESET}${border}${'─'.repeat(width - 2 - left - title.length)}╮${RESET}`,
+    `${border}│${s}${BOLD}${t.fg('accent')}${fit(` /${query}█`, inner)}${RESET}${border}│${RESET}`,
+    `${border}│${s}${blank(inner)}${border}│${RESET}`,
+    ...body.map((l) => `${border}│${l}${border}│${RESET}`),
+    `${border}│${s}${t.fg('textDim')}${fit(' ↑↓ select · Enter jump · !@#&~ status filter · Esc cancel', inner)}${border}│${RESET}`,
     `${border}╰${'─'.repeat(width - 2)}╯${RESET}`,
   ];
   return { x: Math.max(0, Math.floor((cols - width) / 2)), y: Math.max(0, Math.floor((rows - lines.length) / 2)), lines };

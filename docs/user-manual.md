@@ -191,6 +191,18 @@ repository form one project. Folders let you group projects further, one level d
 - **Clear filters `0`**: removes the status and time filters.
 - The panel title shows "· filtered" while a filter is on.
 
+### Search
+
+- **Search `/`**: opens a full-text search across every session's prompts and replies (not just
+  titles), live-filtered as you type.
+  - Start the query with a status symbol to also filter by status: `!` running, `@` waiting,
+    `#` idle, `&` error, `~` stopped.
+  - The first search reads every session's content once (shown as "Reading session content…");
+    later searches in the same run are instant.
+  - `↑` `↓`: moves the highlighted result. `Enter`: selects that session in the tree (expanding its
+    folder/project if collapsed) and closes search. `Esc`: cancels.
+  - Shared with the extension's own "Search Sessions" command, but read independently.
+
 ### View and look
 
 - **Narrow / widen the sessions panel `<` / `>`**: 5% per press, between 15% and 70% of the width.
