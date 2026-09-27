@@ -27,4 +27,4 @@ npm run lint
 - **Terminal UI:** `npm run sdeck` from a real terminal (Windows Terminal, PowerShell). Ctrl+Q detaches from
   an attached session.
 
-Plans and design notes are in [`docs/`](docs).
+Every command and key is explained in the [user manual](docs/user-manual.md). Plans and design notes are in [`docs/`](docs).
