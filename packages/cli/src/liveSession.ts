@@ -2,6 +2,7 @@ import { execFileSync } from 'child_process';
 import * as pty from 'node-pty';
 import { Terminal } from '@xterm/headless';
 import { SerializeAddon } from '@xterm/addon-serialize';
+import { readDeckConfig } from '@session-deck/core';
 import { detectScreenError, screenLines } from './screenStatus';
 
 /** A running agent: its PTY plus a headless terminal mirroring its screen, so it can be drawn (preview) or repainted (attach) at any time. */
@@ -29,29 +30,50 @@ export type AgentType = 'claude' | 'copilot';
 
 const executables = new Map<AgentType, string>();
 
-/** The agent's real executable (`where.exe` on Windows, so ConPTY runs the .exe rather than an npm .cmd shim). */
+/** Forgets the resolved `tools.*.command` executables, so the next spawn re-reads the config file (used after editing it from the config popup). */
+export function clearExecutableCache(): void {
+  executables.clear();
+}
+
+/**
+ * The agent's real executable: the `tools.<agent>.command` override from `~/.session-deck/config.json`
+ * if set (used as-is, whether a bare name or a full path), otherwise `where.exe` on Windows (so ConPTY
+ * runs the .exe rather than an npm .cmd shim), otherwise the bare agent name.
+ */
 function resolveExecutable(agent: AgentType): string {
   let exe = executables.get(agent);
   if (!exe) {
-    exe = agent;
-    if (process.platform === 'win32') {
+    const configured = readDeckConfig().tools[agent].command;
+    if (configured) {
+      exe = configured;
+    } else if (process.platform === 'win32') {
       try {
         exe = execFileSync('where.exe', [`${agent}.exe`], { encoding: 'utf8' }).split(/\r?\n/)[0].trim();
       } catch {
         exe = `${agent}.exe`;
       }
+    } else {
+      exe = agent;
     }
     executables.set(agent, exe);
   }
   return exe;
 }
 
-/** Command-line arguments to resume `sessionId`, or to start a new session (Copilot takes a pre-assigned id, Claude assigns its own). */
+/**
+ * Command-line arguments to resume `sessionId`, or to start a new session (Copilot takes a pre-assigned
+ * id, Claude assigns its own), followed by any extra `tools.<agent>.args` from the config file.
+ */
 function agentArgs(agent: AgentType, sessionId: string | null, isNew: boolean): string[] {
-  if (agent === 'copilot') {
-    return sessionId ? [isNew ? `--session-id=${sessionId}` : `--resume=${sessionId}`] : [];
-  }
-  return sessionId && !isNew ? ['--resume', sessionId] : [];
+  const base =
+    agent === 'copilot'
+      ? sessionId
+        ? [isNew ? `--session-id=${sessionId}` : `--resume=${sessionId}`]
+        : []
+      : sessionId && !isNew
+        ? ['--resume', sessionId]
+        : [];
+  return [...base, ...(readDeckConfig().tools[agent].args ?? [])];
 }
 
 /** Vars a parent Claude Code process sets for its children — inherited, they make the agent think it's a sub-session (e.g. transcript saving off) when sdeck is run from inside Claude Code. */

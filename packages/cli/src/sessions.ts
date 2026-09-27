@@ -12,6 +12,7 @@ import {
   listSessionFiles,
   mapWithConcurrency,
   normalizeFsPath,
+  readDeckConfig,
   readSessionMeta,
   readSessionStatus,
   resolveProjectRoot,
@@ -19,8 +20,6 @@ import {
 import { oneLine } from './ansi';
 import type { StatusCategory } from './filters';
 import type { AgentType, LiveSession } from './liveSession';
-
-const MAX_SESSIONS = 30;
 
 export interface DeckSession {
   agent: AgentType;
@@ -71,14 +70,18 @@ export function displayTitle(s: DeckSession, store: DeckStore): string {
  * with the live ones (kept, with their PTYs).
  */
 export async function discoverSessions(current: DeckSession[]): Promise<DeckSession[]> {
+  const config = readDeckConfig();
+  const maxSessions = config.ui.maxSessionsListed;
   const files: { full: string; dir: string; id: string; mtime: number }[] = [];
-  for (const dir of listProjectDirNames()) {
-    for (const f of listSessionFiles(dir)) {
-      const full = path.join(getClaudeProjectsDir(), dir, f);
-      try {
-        files.push({ full, dir, id: f.slice(0, -'.jsonl'.length), mtime: fs.statSync(full).mtimeMs });
-      } catch {
-        // vanished mid-scan
+  if (config.tools.claude.enabled !== false) {
+    for (const dir of listProjectDirNames()) {
+      for (const f of listSessionFiles(dir)) {
+        const full = path.join(getClaudeProjectsDir(), dir, f);
+        try {
+          files.push({ full, dir, id: f.slice(0, -'.jsonl'.length), mtime: fs.statSync(full).mtimeMs });
+        } catch {
+          // vanished mid-scan
+        }
       }
     }
   }
@@ -86,7 +89,7 @@ export async function discoverSessions(current: DeckSession[]): Promise<DeckSess
 
   const found: DeckSession[] = [];
   for (const f of files) {
-    if (found.length >= MAX_SESSIONS) {
+    if (found.length >= maxSessions) {
       break;
     }
     const meta = await readSessionMeta(f.full);
@@ -106,7 +109,9 @@ export async function discoverSessions(current: DeckSession[]): Promise<DeckSess
       mtime: f.mtime,
     });
   }
-  found.push(...discoverCopilotSessions());
+  if (config.tools.copilot.enabled !== false) {
+    found.push(...discoverCopilotSessions(maxSessions));
+  }
   await assignProjects(found);
 
   // Known sessions are updated in place, not replaced: the UI tracks the selection (and the previous
@@ -128,7 +133,7 @@ export async function discoverSessions(current: DeckSession[]): Promise<DeckSess
 }
 
 /** Copilot's own session list (its `session-store.db`), most recent first; sessions without a summary never got a turn. */
-function discoverCopilotSessions(): DeckSession[] {
+function discoverCopilotSessions(maxSessions: number): DeckSession[] {
   let rows;
   try {
     rows = listCopilotSessions();
@@ -137,7 +142,7 @@ function discoverCopilotSessions(): DeckSession[] {
   }
   return rows
     .filter((r) => r.summary)
-    .slice(0, MAX_SESSIONS)
+    .slice(0, maxSessions)
     .map((r) => ({
       agent: 'copilot' as const,
       onDisk: true,

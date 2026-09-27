@@ -1,5 +1,7 @@
 import type { Terminal } from '@xterm/headless';
+import type { DeckConfig } from '@session-deck/core';
 import { fit, fitAnsi, renderTerm, textWidth, wrap } from './ansi';
+import { CONFIG_FIELDS } from './configFields';
 import { STATUS_CATEGORIES, StatusCategory, TimeFilter } from './filters';
 import { PANEL_HEADER_ROWS, Rect } from './layout';
 import type { SessionStatus } from './sessions';
@@ -407,7 +409,14 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
       ['T', 'Theme: dark · light · system'],
     ],
   },
-  { title: 'OTHER', keys: [['?', 'This help'], ['q  Ctrl+C', 'Quit (stops background sessions)']] },
+  {
+    title: 'OTHER',
+    keys: [
+      ['?', 'This help'],
+      ['C', 'Show the config file in use'],
+      ['q  Ctrl+C', 'Quit (stops background sessions)'],
+    ],
+  },
 ];
 
 const KEY_COLUMN = 14;
@@ -442,6 +451,57 @@ export function helpOverlay(t: Theme, cols: number, rows: number, scroll: number
     `${border}╰${'─'.repeat(width - 2)}╯${RESET}`,
   ];
   return { x: Math.max(0, Math.floor((cols - width) / 2)), y: Math.max(0, Math.floor((rows - lines.length) / 2)), lines, maxScroll };
+}
+
+const CONFIG_LABEL_COLUMN = 22;
+
+/**
+ * The settings popup (`C`): every value from `~/.session-deck/config.json` Session Deck is actually
+ * using, editable in place. `selected` indexes into `CONFIG_FIELDS` and is drawn like a picker's
+ * highlighted row.
+ */
+export function configOverlay(
+  t: Theme,
+  cols: number,
+  rows: number,
+  config: DeckConfig,
+  configPath: string,
+  selected: number
+): { x: number; y: number; lines: string[] } {
+  const width = Math.min(72, cols - 4);
+  const inner = width - 6; // borders + two spaces of padding on each side
+  const s = t.bg('surface');
+  const fieldRow = (index: number): string => {
+    const field = CONFIG_FIELDS[index];
+    const value = field.display(config);
+    if (index === selected) {
+      return `${t.bg('accent')}${t.fg('bg')}${BOLD}${fit(field.label, CONFIG_LABEL_COLUMN)}${fit(value, inner - CONFIG_LABEL_COLUMN)}`;
+    }
+    return `${BOLD}${t.fg('purple')}${fit(field.label, CONFIG_LABEL_COLUMN)}${RESET}${s}${t.fg('text')}${fit(value, inner - CONFIG_LABEL_COLUMN)}`;
+  };
+  // A blank line before each new group of fields (their label shares everything up to the last '.').
+  const groupOf = (label: string) => label.slice(0, label.lastIndexOf('.'));
+  const content: string[] = [`${t.fg('textDim')}${fit(configPath, inner)}`, blank(inner)];
+  CONFIG_FIELDS.forEach((field, index) => {
+    if (index > 0 && groupOf(field.label) !== groupOf(CONFIG_FIELDS[index - 1].label)) {
+      content.push(blank(inner));
+    }
+    content.push(fieldRow(index));
+  });
+  content.push(blank(inner), `${t.fg('textDim')}${fit('↑↓ select · Enter toggle/edit · Esc or C to close', inner)}`);
+
+  const maxBody = Math.max(3, rows - 5);
+  const visible = content.slice(0, maxBody);
+  const border = `${s}${t.fg('purple')}`;
+  const title = ' CONFIG ';
+  const left = Math.floor((width - 2 - title.length) / 2);
+  const lines = [
+    `${border}╭${'─'.repeat(left)}${BOLD}${title}${RESET}${border}${'─'.repeat(width - 2 - left - title.length)}╮${RESET}`,
+    `${border}│${s}${blank(width - 2)}${border}│${RESET}`,
+    ...visible.map((l) => `${border}│${s}  ${l}${RESET}${s}  ${border}│${RESET}`),
+    `${border}╰${'─'.repeat(width - 2)}╯${RESET}`,
+  ];
+  return { x: Math.max(0, Math.floor((cols - width) / 2)), y: Math.max(0, Math.floor((rows - lines.length) / 2)), lines };
 }
 
 export function themeLabel(preference: string, resolved: ThemeName): string {

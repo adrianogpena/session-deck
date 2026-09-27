@@ -20,10 +20,12 @@ import {
   folderNodeKey,
   humanizeSince,
   markSessionUnseen,
+  getDeckConfigPath,
   moveFolder,
   moveProject,
   moveProjectToFolder,
   projectNodeKey,
+  readDeckConfig,
   readLastAssistantResponse,
   renameFolder,
   SessionPin,
@@ -33,16 +35,19 @@ import {
   ThemePreference,
   TreePrefs,
   WaitingNotifier,
+  writeDeckConfig,
 } from '@session-deck/core';
 import { ESC, fitAnsi, oneLine } from './ansi';
+import { CONFIG_FIELDS } from './configFields';
 import { matchesStatusFilter, nextTimeFilter, STATUS_CATEGORIES, StatusCategory, TimeFilter, withinTimeFilter } from './filters';
 import { findDetachKey, RESET_AGENT_MODES, splitKeys } from './keys';
 import { computeLayout, Layout, ptySizeFor, Rect } from './layout';
-import { AgentType, disposeLive, resizeLive, spawnAgent, typeLine } from './liveSession';
+import { AgentType, clearExecutableCache, disposeLive, resizeLive, spawnAgent, typeLine } from './liveSession';
 import { DeckSession, StatusTracker, discoverSessions, displayTitle, refreshLiveTitle } from './sessions';
 import { buildTree, TreeRow } from './tree';
 import { extractBackgroundReply, OSC11_QUERY, readOsTheme, Theme, ThemeName } from './theme';
 import {
+  configOverlay,
   GroupPreview,
   helpOverlay,
   ListRow,
@@ -66,6 +71,7 @@ const DEFAULT_SIDEBAR_PCT = 35;
 const SIDEBAR_STEP = 5;
 const THEME_CYCLE: readonly ThemePreference[] = ['dark', 'light', 'system'];
 const THEME_POLL_MS = 5000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const FILTER_KEYS: Record<string, StatusCategory> = { '!': 'running', '@': 'waiting', '#': 'idle', '&': 'error', '~': 'stopped' };
 
 /** Footer text input while open. */
@@ -116,6 +122,7 @@ export class App {
   private picker: Picker | null = null;
   private confirm: Confirm | null = null;
   private helpScroll: number | null = null;
+  private configSelected: number | null = null;
   private statusFilter = new Set<StatusCategory>();
   private timeFilter: TimeFilter = 'all';
   /** Shown next to the SESSIONS title for a moment after resizing. */
@@ -128,6 +135,8 @@ export class App {
   /** Ids moved to the trash this run, newest last, for Ctrl+Z. */
   private deleted: string[] = [];
   private readonly store = new DeckStore();
+  /** Settings from `~/.session-deck/config.json` — edited in place by the config popup (`C`), or by hand (restart to pick up a hand-made change). */
+  private config = readDeckConfig();
   private sidebarPct: number;
   private themePreference: ThemePreference;
   private systemTheme: ThemeName = 'dark';
@@ -135,7 +144,8 @@ export class App {
   private terminalReportsBackground = false;
   private readonly themes: Record<ThemeName, Theme> = { dark: new Theme('dark'), light: new Theme('light') };
   /** Toasts for sessions that need you, except the one you're attached to. The extension notifies too; claims keep it to one toast. */
-  private readonly notifier = new WaitingNotifier({ statuses: ['waiting', 'done', 'error'], skip: (id) => this.attached?.id === id });
+  /** `notifyChanges()` always passes `config.ui.notifyStatuses`, so this constructor doesn't set a default. */
+  private readonly notifier = new WaitingNotifier({ skip: (id) => this.attached?.id === id });
   /** Last terminal title written, so it's only rewritten when the waiting count changes. */
   private lastTitle = '';
 
@@ -150,7 +160,7 @@ export class App {
     // Turns Claude's live process status into Session Deck's status files ("done" after a turn, etc.),
     // the same way the extension does. Both can run at once: the watcher skips writes already made.
     new ClaudeProcessWatcher(() => undefined).start();
-    purgeTrash();
+    purgeTrash(Date.now(), this.config.trash.retentionDays * DAY_MS);
     await this.discover();
     this.pollProcs();
     setInterval(() => this.pollProcs(), 1000);
@@ -405,14 +415,21 @@ export class App {
   }
 
   private notifyChanges(): void {
+    if (!this.config.ui.notifications) {
+      return;
+    }
     const watched = this.sessions
       .filter((s) => s.id && ((s.live && !s.live.exited) || this.procs.isElsewhere(s)))
       .map((s) => ({ sessionId: s.id!, label: displayTitle(s, this.store) }));
     // Clicking the toast selects that session here (the terminal can't be brought to the front from Node).
-    this.notifier.check(watched, (id) => {
-      this.selectWhere((r) => r.kind === 'session' && r.session.id === id);
-      this.scheduleRender();
-    });
+    this.notifier.check(
+      watched,
+      (id) => {
+        this.selectWhere((r) => r.kind === 'session' && r.session.id === id);
+        this.scheduleRender();
+      },
+      this.config.ui.notifyStatuses
+    );
   }
 
   /** "Session Deck · ◐ 2 need you" in the terminal's title bar/tab, so it's visible from other windows. */
@@ -617,6 +634,10 @@ export class App {
       const overlay = pickerOverlay(t, cols, height, this.picker.title, this.picker.items, this.picker.index);
       overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
     }
+    if (this.configSelected !== null) {
+      const overlay = configOverlay(t, cols, height, this.config, getDeckConfigPath(), this.configSelected);
+      overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
+    }
     frame += `${ESC}?2026l`;
     out.write(frame);
   }
@@ -717,6 +738,43 @@ export class App {
     this.render();
   }
 
+  private onConfigKey(data: string): void {
+    if (data === '\x1b[A' || data === 'k') {
+      this.configSelected = Math.max(0, (this.configSelected ?? 0) - 1);
+    } else if (data === '\x1b[B' || data === 'j') {
+      this.configSelected = Math.min(CONFIG_FIELDS.length - 1, (this.configSelected ?? 0) + 1);
+    } else if (data === '\r') {
+      this.editConfigField(this.configSelected ?? 0);
+    } else if (data === '\x1b' || data === 'C' || data === 'q') {
+      this.configSelected = null;
+      out.write(`${ESC}2J`);
+    }
+    this.render();
+  }
+
+  /** `toggle` fields flip themselves right away; the rest open a prompt pre-filled with their current value. */
+  private editConfigField(index: number): void {
+    const field = CONFIG_FIELDS[index];
+    if (field.kind === 'toggle') {
+      this.applyConfigField(index, '');
+      return;
+    }
+    this.prompt = { label: field.label, value: field.editValue(this.config), onSubmit: (value) => this.applyConfigField(index, value) };
+  }
+
+  private applyConfigField(index: number, input: string): void {
+    const field = CONFIG_FIELDS[index];
+    const next = field.apply(this.config, input);
+    if (!next) {
+      this.flash(`Invalid value for ${field.label}`);
+      return;
+    }
+    this.config = next;
+    writeDeckConfig(next);
+    clearExecutableCache(); // a tools.*.command edit shouldn't need a restart to take effect
+    this.flash(`${field.label} updated`);
+  }
+
   private resizeSidebar(delta: number): void {
     this.sidebarPct = Math.min(SIDEBAR_PCT_MAX, Math.max(SIDEBAR_PCT_MIN, this.sidebarPct + delta));
     this.resizeNote = { text: `${this.sidebarPct}%`, until: Date.now() + 1500 };
@@ -740,6 +798,10 @@ export class App {
     }
     if (this.helpScroll !== null) {
       this.onHelpKey(data);
+      return;
+    }
+    if (this.configSelected !== null) {
+      this.onConfigKey(data);
       return;
     }
     if (this.picker) {
@@ -941,6 +1003,9 @@ export class App {
       case '?':
         this.helpScroll = 0;
         break;
+      case 'C':
+        this.configSelected = 0;
+        break;
       case 'r':
         clearSessionMetaCache();
         void this.discover().then(() => this.render());
@@ -1020,6 +1085,11 @@ export class App {
   }
 
   private newSession(agent: AgentType): void {
+    if (this.config.tools[agent].enabled === false) {
+      this.flash(`${agent === 'claude' ? 'Claude' : 'Copilot'} is disabled (tools.${agent}.enabled: false in the config).`);
+      this.render();
+      return;
+    }
     const s = this.current;
     const project = this.selectedProject;
     if (!project) {

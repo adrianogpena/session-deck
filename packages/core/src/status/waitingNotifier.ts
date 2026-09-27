@@ -38,8 +38,9 @@ export class WaitingNotifier {
     this.options = typeof options === 'string' ? { iconPath: options } : options;
   }
 
-  check(sessions: readonly WatchedSession[], onActivated?: (sessionId: string) => void): void {
-    const statuses = this.options.statuses ?? DEFAULT_STATUSES;
+  /** `statusesOverride` wins over the constructor's `statuses` option, for a caller whose notified statuses can change at runtime (e.g. a config setting). */
+  check(sessions: readonly WatchedSession[], onActivated?: (sessionId: string) => void, statusesOverride?: readonly SessionStatus[]): void {
+    const statuses = statusesOverride ?? this.options.statuses ?? DEFAULT_STATUSES;
     const stillWatched = new Set(sessions.map((s) => s.sessionId));
     for (const knownId of [...this.lastStatus.keys()]) {
       if (!stillWatched.has(knownId)) {

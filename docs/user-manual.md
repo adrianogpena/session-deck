@@ -16,7 +16,8 @@ A change in one shows up in the other.
 1. [Statuses](#1-statuses)
 2. [Terminal UI](#2-terminal-ui)
 3. [VS Code extension](#3-vs-code-extension)
-4. [Files Session Deck uses](#4-files-session-deck-uses)
+4. [Global config](#4-global-config-sessiondeckconfigjson)
+5. [Files Session Deck uses](#5-files-session-deck-uses)
 
 ---
 
@@ -200,6 +201,10 @@ repository form one project. Folders let you group projects further, one level d
     terminal doesn't report it.
 - **Refresh `r`**: reloads the session list from disk.
 - **Help `?`**: shows every key. `↑` `↓` scroll it; `Esc`, `?` or `q` close it.
+- **Config `C`**: shows and edits the settings from `~/.session-deck/config.json` (see
+  [section 4](#4-global-config-sessiondeckconfigjson)). `↑` `↓` selects a setting; `Enter` toggles it
+  (`ui.notifications`) or opens a text prompt pre-filled with its current value (everything else) —
+  submitting saves straight to the file. `Esc`, `C` or `q` close it.
 
 ### Text input, lists and questions
 
@@ -354,11 +359,54 @@ In a multi-root workspace, each folder can have its own file; the tree shows all
 
 ---
 
-## 4. Files Session Deck uses
+## 4. Global config (`~/.session-deck/config.json`)
+
+Global settings, mainly for the terminal UI (the extension has no equivalent yet). Press `C` in the
+terminal UI to view and edit it directly (see **Config `C`** above), or edit the file by hand — either
+way, a missing field keeps that setting's default. Editing through `C` takes effect right away, except
+for `trash.retentionDays` (checked only at startup) and any hand-made change to the file (`sdeck` picks
+it up next time it starts).
+
+```jsonc
+{
+  "ui": {
+    "maxSessionsListed": 30,
+    "notifications": true,
+    "notifyStatuses": ["waiting", "done", "error"]
+  },
+  "tools": {
+    "claude": { "command": "claude-nightly", "args": ["--model", "opus"] },
+    "copilot": { "enabled": false }
+  },
+  "trash": {
+    "retentionDays": 30
+  }
+}
+```
+
+- **`ui.maxSessionsListed`**: how many of the most recent Claude and Copilot sessions the terminal UI
+  loads from disk. Default: 30.
+- **`ui.notifications`**: turns desktop notifications off entirely. Default: on.
+- **`ui.notifyStatuses`**: which statuses `notifications` fires for, space-separated: `running`,
+  `waiting`, `done`, `error`. Default: `waiting done error` (not `running`).
+- **`tools.claude` / `tools.copilot`**:
+  - **`enabled`**: `false` hides that agent entirely — its sessions aren't discovered, and its `n`/`N`
+    new-session key just flashes a message instead of starting one. Default: on.
+  - **`command`**: replaces the executable Session Deck spawns for that agent (a bare name resolved on
+    PATH, or a full path). Skips the default `where.exe` lookup on Windows.
+  - **`args`**: extra arguments appended after the ones Session Deck builds itself (`--resume <id>`,
+    etc).
+- **`trash.retentionDays`**: how many days a deleted session stays restorable in
+  `~/.session-deck/trash/` before being purged at startup. Default: 30.
+
+---
+
+## 5. Files Session Deck uses
 
 | Location | What's there |
 |---|---|
 | `~/.session-deck/state.json` | Shared by both front ends: names, archive flags, pins, seen marks, folders, order, sort, collapsed state, and the terminal UI's theme and panel width. |
+| `~/.session-deck/config.json` | Global, hand-edited settings — mainly for the terminal UI. |
 | `~/.session-deck/trash/` | Sessions deleted in the terminal UI (restorable for 30 days). |
 | `~/.claude/session-deck-status/` | Each session's current status, written by both front ends. |
 | `<workspace>/.vscode/session-deck.json` | The extension's project list for that workspace. |
