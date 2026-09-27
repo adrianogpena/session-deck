@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { DeckStore } from '@session-deck/core';
+import { DeckStore, SessionPin, TreePrefs } from '@session-deck/core';
 
 const LEGACY_KEY_SESSION_NAMES = 'sessionDeck.sessionNameOverrides';
 const LEGACY_KEY_ARCHIVED_SESSIONS = 'sessionDeck.archivedSessions';
@@ -61,5 +61,22 @@ export class DeckState {
 
   async setSessionArchived(sessionId: string, archived: boolean): Promise<void> {
     await this.store.updateSession(sessionId, { archived });
+  }
+
+  getSessionPin(sessionId: string): SessionPin | undefined {
+    return this.store.getSession(sessionId)?.pin;
+  }
+
+  async setSessionPin(sessionId: string, pin: SessionPin | undefined): Promise<void> {
+    await this.store.updateSession(sessionId, { pin });
+  }
+
+  /** Folders, project order, collapsed nodes and sort, shared with the terminal UI. */
+  getTree(): TreePrefs {
+    return this.store.getTree();
+  }
+
+  async updateTree(change: (tree: TreePrefs) => TreePrefs): Promise<void> {
+    await this.store.updateTree(change);
   }
 }

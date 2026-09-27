@@ -45,6 +45,10 @@ terminal, running the real CLI, with live status at a glance.
   fills up.
 - **Rename, hide, or remove** projects and sessions; per-project overrides for emoji, color,
   session cap, and permission prompts.
+- **Folders and order** — group projects into folders (Work, Personal…), move folders and projects
+  up or down, pin sessions to the top or bottom of their project, and sort sessions by most recent
+  or by what needs attention. Shared with the Session Deck terminal UI, as are names, archive and
+  which folders/projects are collapsed.
 - **View a transcript**, or copy a session's last response or full details to the clipboard.
 - **Multi-root workspace support.**
 - **Open Sessions view in Explorer** — a flat, cross-project list of your currently open sessions

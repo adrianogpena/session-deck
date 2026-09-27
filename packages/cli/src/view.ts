@@ -40,9 +40,17 @@ export interface SessionView {
   id: string | null;
 }
 
+interface GroupCounts {
+  count: number;
+  running: number;
+  waiting: number;
+}
+
 export type ListRow =
-  | { kind: 'group'; label: string; count: number; running: number; waiting: number }
-  | { kind: 'session'; view: SessionView; isLast: boolean };
+  | ({ kind: 'folder'; name: string; collapsed: boolean; hotkey?: number } & GroupCounts)
+  | ({ kind: 'project'; label: string; collapsed: boolean; depth: number; hotkey?: number } & GroupCounts)
+  | { kind: 'session'; view: SessionView; isLast: boolean; depth: number; pin?: 'top' | 'bottom' }
+  | { kind: 'divider'; label: string };
 
 function glyph(t: Theme, status: SessionStatus): string {
   const g = GLYPHS[status];
@@ -113,22 +121,38 @@ function panelHeader(t: Theme, width: number, title: string, note: string): stri
   return [titleLine, `${t.fg('border')}${'─'.repeat(width)}${RESET}`];
 }
 
-function renderGroupRow(t: Theme, width: number, row: Extract<ListRow, { kind: 'group' }>): string {
+/** Folder and project rows: `1▾ name (n) ●r ◐w`. The leading column shows the 1–9 jump key on top-level rows. */
+function renderGroupRow(t: Theme, width: number, row: Extract<ListRow, { kind: 'folder' | 'project' }>, selected: boolean): string {
+  const depth = row.kind === 'project' ? row.depth : 0;
+  const hotkey = row.hotkey === undefined ? ' ' : String(row.hotkey);
+  const arrow = row.collapsed ? '▸' : '▾';
+  const lead = `${hotkey}${'  '.repeat(depth)}${arrow} `;
+  const name = row.kind === 'folder' ? row.name : row.label;
   const counts = `${row.running ? ` ●${row.running}` : ''}${row.waiting ? ` ◐${row.waiting}` : ''}`;
   const suffix = ` (${row.count})${counts}`;
-  const labelWidth = Math.max(1, width - 3 - textWidth(suffix));
-  const label = fit(row.label, labelWidth).trimEnd();
-  const pad = blank(width - 3 - textWidth(label) - textWidth(suffix));
+  const label = fit(name, Math.max(1, width - textWidth(lead) - textWidth(suffix))).trimEnd();
+  const pad = blank(width - textWidth(lead) - textWidth(label) - textWidth(suffix));
+  if (selected) {
+    const sel = `${t.bg('accent')}${t.fg('bg')}`;
+    return `${sel}${lead}${BOLD}${label}${RESET}${sel}${suffix}${pad}${RESET}`;
+  }
+  const nameRole: Role = row.kind === 'folder' ? 'purple' : 'cyan';
   const running = row.running ? ` ${t.fg('green')}●${row.running}` : '';
   const waiting = row.waiting ? ` ${t.fg('yellow')}◐${row.waiting}` : '';
-  return ` ${t.fg('text')}▾ ${BOLD}${t.fg('cyan')}${label}${RESET}${t.fg('text')} (${row.count})${running}${waiting}${RESET}${pad}`;
+  return (
+    `${t.fg('textDim')}${hotkey}${t.fg('text')}${'  '.repeat(depth)}${arrow} ` +
+    `${BOLD}${t.fg(nameRole)}${label}${RESET}${t.fg('text')} (${row.count})${running}${waiting}${RESET}${pad}`
+  );
 }
 
 function renderSessionRow(t: Theme, width: number, row: Extract<ListRow, { kind: 'session' }>, selected: boolean): string {
   const v = row.view;
+  const indent = '  '.repeat(row.depth);
   const connector = row.isLast ? '└─' : '├─';
-  const marker = v.elsewhere ? '↗ ' : '';
-  const leftPlain = `  ${connector} ${GLYPHS[v.status].char} ${marker}`;
+  // Narrow glyphs only: emoji are one column wide in some terminals and two in others.
+  const pinMark = row.pin === 'top' ? '↑ ' : row.pin === 'bottom' ? '↓ ' : '';
+  const markers = `${pinMark}${v.elsewhere ? '↗ ' : ''}`;
+  const leftPlain = `${indent}${connector} ${GLYPHS[v.status].char} ${markers}`;
   // Right-hand columns shrink away on narrow lists: first the agent, then the time.
   const right = width >= 44 ? ` ${v.agent} ${v.timeLabel} ` : width >= 34 ? ` ${v.timeLabel} ` : ' ';
   const titleWidth = Math.max(1, width - textWidth(leftPlain) - textWidth(right));
@@ -142,9 +166,14 @@ function renderSessionRow(t: Theme, width: number, row: Extract<ListRow, { kind:
   const titleStyle = `${active ? BOLD : ''}${v.status === 'exited' ? UNDERLINE : ''}${t.fg('text')}`;
   const agentPart = width >= 44 ? ` ${t.fg(AGENT_ROLE[v.agent] ?? 'text')}${v.agent} ${t.fg('textDim')}${v.timeLabel} ` : `${t.fg('textDim')}${right}`;
   return (
-    `  ${t.fg('border')}${connector}${RESET} ${glyph(t, v.status)} ${v.elsewhere ? `${t.fg('purple')}↗ ` : ''}${RESET}` +
+    `${indent}${t.fg('border')}${connector}${RESET} ${glyph(t, v.status)} ${pinMark ? `${t.fg('accent')}${pinMark}` : ''}${v.elsewhere ? `${t.fg('purple')}↗ ` : ''}${RESET}` +
     `${titleStyle}${title}${RESET}${agentPart}${RESET}`
   );
+}
+
+function renderDividerRow(t: Theme, width: number, label: string): string {
+  const text = fit(` ${label} `, Math.max(0, width - 2));
+  return `${t.fg('border')}──${t.fg('textDim')}${text}${t.fg('border')}${'─'.repeat(Math.max(0, width - 2 - textWidth(text)))}${RESET}`;
 }
 
 /** Lines for the sessions panel, exactly `rect.width` columns each, `rect.height` lines. */
@@ -158,18 +187,58 @@ export function renderListPanel(t: Theme, rect: Rect, rows: ListRow[], selected:
   const start = Math.max(0, Math.min(selected - Math.floor(height / 2), rows.length - height));
   for (let i = 0; i < height && lines.length < rect.height; i++) {
     const row = rows[start + i];
+    const isSelected = start + i === selected;
     if (!row) {
       lines.push(blank(rect.width));
-    } else if (row.kind === 'group') {
-      lines.push(renderGroupRow(t, rect.width, row));
+    } else if (row.kind === 'session') {
+      lines.push(renderSessionRow(t, rect.width, row, isSelected));
+    } else if (row.kind === 'divider') {
+      lines.push(renderDividerRow(t, rect.width, row.label));
     } else {
-      lines.push(renderSessionRow(t, rect.width, row, start + i === selected));
+      lines.push(renderGroupRow(t, rect.width, row, isSelected));
     }
   }
   while (lines.length < rect.height) {
     lines.push(blank(rect.width));
   }
   return lines;
+}
+
+/** What the preview shows when a folder or project row is selected. */
+export interface GroupPreview {
+  kind: 'folder' | 'project';
+  name: string;
+  /** Project path, or "3 projects" for a folder. */
+  detail: string;
+  counts: GroupCounts;
+  sessions: SessionView[];
+}
+
+export function renderGroupPreviewPanel(t: Theme, rect: Rect, group: GroupPreview): string[] {
+  const nameRole: Role = group.kind === 'folder' ? 'purple' : 'cyan';
+  const heading = `${group.kind === 'folder' ? 'Folder' : 'Project'} · ${group.name}`;
+  const titleLine = `${BOLD}${t.fg(nameRole)}${fit(heading, rect.width)}${RESET}`;
+  const { count, running, waiting } = group.counts;
+  const plural = count === 1 ? '' : 's';
+  const meta = ` ${count} session${plural}${running ? ` · ${running} running` : ''}${waiting ? ` · ${waiting} waiting` : ''} · ${group.detail} `;
+  const metaFit = fit(meta, Math.max(0, rect.width - 2)).trimEnd();
+  const metaLine = `${t.fg('border')}─${t.fg('textDim')}${metaFit}${t.fg('border')}${'─'.repeat(Math.max(0, rect.width - 1 - textWidth(metaFit)))}${RESET}`;
+  const key = (k: string) => `${BOLD}${t.fg('accent')}${k}${RESET}${t.fg('textDim')}`;
+  const hints =
+    group.kind === 'folder'
+      ? `${key('Enter')} collapse/expand · ${key('K J')} reorder · ${key('e')} rename · ${key('d')} delete`
+      : `${key('Enter')} collapse/expand · ${key('M')} move to folder · ${key('K J')} reorder · ${key('n')} new session`;
+  const body = [blank(rect.width), fitAnsi(`  ${t.fg('textDim')}${hints}${RESET}`, rect.width), blank(rect.width)];
+  for (const s of group.sessions) {
+    const right = ` ${s.timeLabel} `;
+    const title = fit(s.title, Math.max(1, rect.width - 4 - textWidth(right)));
+    body.push(`  ${glyph(t, s.status)} ${t.fg('text')}${title}${t.fg('textDim')}${right}${RESET}`);
+  }
+  const bodyHeight = rect.height - PANEL_HEADER_ROWS;
+  while (body.length < bodyHeight) {
+    body.push(blank(rect.width));
+  }
+  return [titleLine, metaLine, ...body.slice(0, bodyHeight)];
 }
 
 const STATUS_TEXT: Record<SessionStatus, string> = {
@@ -241,7 +310,7 @@ type Hint = [key: string, label: string];
 
 /** Widest first; the first variant that fits is shown. */
 const HELP_VARIANTS: Hint[][] = [
-  [['↑↓', 'select'], ['⏎', 'attach'], ['s', 'start'], ['n', 'new'], ['e', 'rename'], ['x', 'stop'], ['< >', 'resize'], ['b', 'sidebar'], ['T', 'theme'], ['?', 'help'], ['q', 'quit']],
+  [['↑↓', 'select'], ['⏎', 'attach'], ['n', 'new'], ['e', 'rename'], ['x', 'stop'], ['g', 'folder'], ['M', 'move'], ['K J', 'reorder'], [',', 'pin'], ['?', 'help'], ['q', 'quit']],
   [['↑↓', 'select'], ['⏎', 'attach'], ['n', 'new'], ['e', 'rename'], ['x', 'stop'], ['?', 'help'], ['q', 'quit']],
   [['⏎', 'attach'], ['?', 'help'], ['q', 'quit']],
   [['?', 'help']],
@@ -275,15 +344,35 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
       ['Ctrl+Q', 'Detach back here; the session keeps running'],
     ],
   },
-  { title: 'NAVIGATION', keys: [['↑ ↓  j k', 'Select session (preview follows)']] },
+  {
+    title: 'NAVIGATION',
+    keys: [
+      ['↑ ↓  j k', 'Select (preview follows)'],
+      ['← →  Tab', 'Collapse / expand; ← also goes to the parent'],
+      ['1-9', 'Jump to a top-level folder or project'],
+      ['`', 'Back to the previously selected session'],
+    ],
+  },
   {
     title: 'SESSIONS',
     keys: [
       ['s', 'Start in the background'],
-      ['n', "New session in the selected session's folder"],
+      ['n', 'New session in the selected project'],
       ['e  F2', "Rename (same as Claude's /rename)"],
       ['x', 'Stop the selected session'],
+      [',', 'Pin: top · bottom · off'],
       ['r', 'Refresh the list'],
+    ],
+  },
+  {
+    title: 'FOLDERS & ORDER',
+    keys: [
+      ['g', 'New folder'],
+      ['M', 'Move the project to a folder'],
+      ['K J', 'Move the folder / project up or down'],
+      ['e  d', 'Rename / delete the selected folder'],
+      ['S', 'Sort sessions: recent · actionable'],
+      ['t', 'View: normal · active on top'],
     ],
   },
   {
@@ -342,4 +431,29 @@ export function helpOverlay(t: Theme, cols: number, rows: number, scroll: number
 
 export function themeLabel(preference: string, resolved: ThemeName): string {
   return preference === 'system' ? `system (${resolved})` : resolved;
+}
+
+export function renderConfirmBar(t: Theme, cols: number, question: string): string {
+  return `${BOLD}${t.fg('yellow')}${fit(` ${question} (y/N)`, cols)}${RESET}`;
+}
+
+/** A small centered list to choose from (↑↓, Enter, Esc), e.g. the target folder for a move. */
+export function pickerOverlay(t: Theme, cols: number, rows: number, title: string, items: string[], index: number): { x: number; y: number; lines: string[] } {
+  const width = Math.min(cols - 4, Math.max(textWidth(title) + 8, ...items.map((i) => textWidth(i) + 8), 30));
+  const inner = width - 4;
+  const maxItems = Math.max(1, rows - 6);
+  const first = Math.max(0, Math.min(index - Math.floor(maxItems / 2), items.length - maxItems));
+  const s = t.bg('surface');
+  const border = `${s}${t.fg('purple')}`;
+  const heading = fit(` ${title} `, width - 4).trimEnd();
+  const lines = [
+    `${border}╭─${BOLD}${heading}${RESET}${border}${'─'.repeat(Math.max(0, width - 3 - textWidth(heading)))}╮${RESET}`,
+    ...items.slice(first, first + maxItems).map((item, i) => {
+      const selected = first + i === index;
+      const style = selected ? `${t.bg('accent')}${t.fg('bg')}${BOLD}` : `${s}${t.fg('text')}`;
+      return `${border}│${s} ${style}${fit(` ${item}`, inner)}${RESET}${s} ${border}│${RESET}`;
+    }),
+    `${border}╰${'─'.repeat(width - 2)}╯${RESET}`,
+  ];
+  return { x: Math.max(0, Math.floor((cols - width) / 2)), y: Math.max(0, Math.floor((rows - lines.length) / 2)), lines };
 }

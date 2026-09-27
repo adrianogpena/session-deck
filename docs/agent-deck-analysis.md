@@ -195,7 +195,7 @@ See [section 5](#5-open-decisions).
 - Header, filter pills, 35/65 split with `<` `>`, adaptive help bar, `?` overlay.
 - Row format with connectors, agent color and relative time.
 
-### Phase 3: tree model (both front ends)
+### Phase 3: tree model (both front ends) **(done)**
 
 - Hybrid groups: automatic projects plus manual folders.
 - `g` create folder, `M` move, `K` / `J` reorder, `,` pin.

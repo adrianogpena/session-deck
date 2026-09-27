@@ -9,6 +9,7 @@ import {
   readSessionMeta,
 } from '@session-deck/core';
 import { CopilotSessionRow, getCopilotHomeDir, listCopilotSessions } from '@session-deck/core';
+import { arrangeProjects, folderNodeKey, FolderPrefs, projectNodeKey, SessionCategory, sortSessions } from '@session-deck/core';
 import { resolveProjectRoot } from '@session-deck/core';
 import { normalizeFsPath, isInside } from '@session-deck/core';
 import { mapWithConcurrency } from '@session-deck/core';
@@ -60,6 +61,16 @@ export class AgentFolderNode {
   constructor(public readonly agent: AgentType) {}
 }
 
+/** A Session Deck folder (shared with the terminal UI) holding some of this agent's projects. */
+export class FolderNode {
+  readonly kind = 'folder' as const;
+  constructor(
+    public readonly agent: AgentType,
+    public readonly folder: FolderPrefs,
+    public readonly projects: ProjectGroupNode[]
+  ) {}
+}
+
 export class ProjectGroupNode {
   readonly kind = 'project' as const;
   constructor(
@@ -103,7 +114,18 @@ export class ArchiveFolderNode {
   ) {}
 }
 
-export type ClaudeDeckNode = AgentFolderNode | ProjectGroupNode | SessionNode | ArchiveFolderNode;
+export type ClaudeDeckNode = AgentFolderNode | FolderNode | ProjectGroupNode | SessionNode | ArchiveFolderNode;
+
+/** The project's key in the shared tree prefs, same as the terminal UI's (`normalizeFsPath` of the root). */
+export function projectKeyOf(node: ProjectGroupNode): string {
+  return normalizeFsPath(node.rootPath);
+}
+
+/** Maps the extension's status files onto the categories shared with the terminal UI (for the "actionable" sort). */
+function categoryOf(sessionId: string): SessionCategory {
+  const status = readEffectiveSessionStatus(sessionId)?.status;
+  return status === 'running' || status === 'waiting' || status === 'error' ? status : status === 'done' ? 'idle' : 'stopped';
+}
 
 export interface SessionWithProject {
   session: SessionNode;
@@ -175,11 +197,20 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
       return item;
     }
 
+    if (element.kind === 'folder') {
+      const item = new vscode.TreeItem(element.folder.name, this.collapsibleState(folderNodeKey(element.folder.id)));
+      item.contextValue = 'sessionDeckFolder';
+      item.iconPath = new vscode.ThemeIcon('folder');
+      item.description = `${element.projects.length} project${element.projects.length === 1 ? '' : 's'}`;
+      item.tooltip = 'Session Deck folder (shared with the terminal UI)';
+      return item;
+    }
+
     if (element.kind === 'project') {
       const swatch = element.emoji ?? (element.color ? COLOR_SWATCH_EMOJI[element.color] : undefined);
       const item = new vscode.TreeItem(
         swatch ? `${swatch} ${element.displayName}` : element.displayName,
-        vscode.TreeItemCollapsibleState.Collapsed
+        this.collapsibleState(projectNodeKey(projectKeyOf(element)))
       );
       item.contextValue = 'sessionDeckProject';
       item.iconPath = new vscode.ThemeIcon('briefcase');
@@ -205,11 +236,12 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
     }
 
     const archived = this.state.isSessionArchived(element.sessionId);
-    const item = new vscode.TreeItem(element.displayName, vscode.TreeItemCollapsibleState.None);
+    const pin = archived ? undefined : this.state.getSessionPin(element.sessionId);
+    const item = new vscode.TreeItem(pin ? `📌 ${element.displayName}` : element.displayName, vscode.TreeItemCollapsibleState.None);
     const relSubpath = relativeSubpath(element.projectRoot, element.cwd);
     item.description = relSubpath ? `${relSubpath} · ${timeAgo(element.lastModified)}` : timeAgo(element.lastModified);
     const status = readEffectiveSessionStatus(element.sessionId);
-    item.tooltip = [`${element.cwd}`, element.sessionId, element.filePath ?? '', statusTooltipLine(status)]
+    item.tooltip = [`${element.cwd}`, element.sessionId, element.filePath ?? '', statusTooltipLine(status), pin ? `Pinned to the ${pin} of the project` : '']
       .filter(Boolean)
       .join('\n');
     item.iconPath = agentIconPath(this.extensionUri, element.agent);
@@ -229,15 +261,28 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
       return this.getRootNodes();
     }
     if (element.kind === 'agentFolder') {
-      return this.getProjectGroups(element.agent);
+      return this.getTopLevel(element.agent);
+    }
+    if (element.kind === 'folder') {
+      return element.projects;
     }
     if (element.kind === 'project') {
       const candidates = await this.gatherCandidates(element);
       const active = candidates.filter((c) => !this.state.isSessionArchived(c.sessionId));
       const archivedCount = candidates.length - active.length;
       // Anything beyond the cap moves to "Archived" (see enforceArchiveCap); listAllSessions()
-      // (Search, Open Sessions) is uncapped, so nothing is ever unfindable.
-      const sessions = await this.toSessionNodes(active.slice(0, element.maxSessionsShown), element);
+      // (Search, Open Sessions) is uncapped, so nothing is ever unfindable. Pinned sessions don't
+      // count toward the cap.
+      const pinned = active.filter((c) => this.state.getSessionPin(c.sessionId));
+      const unpinned = active.filter((c) => !this.state.getSessionPin(c.sessionId)).slice(0, element.maxSessionsShown);
+      const nodes = await this.toSessionNodes([...pinned, ...unpinned], element);
+      const sessions = sortSessions(
+        nodes,
+        this.state.getTree().sort,
+        (n) => this.state.getSessionPin(n.sessionId),
+        (n) => n.lastModified.getTime(),
+        (n) => categoryOf(n.sessionId)
+      );
       return archivedCount > 0 ? [...sessions, new ArchiveFolderNode(element, archivedCount)] : sessions;
     }
     if (element.kind === 'archiveFolder') {
@@ -252,9 +297,37 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
   private async getRootNodes(): Promise<ClaudeDeckNode[]> {
     const agentsInUse = this.detectAgentsInUse();
     if (agentsInUse.length <= 1) {
-      return this.getProjectGroups(agentsInUse[0] ?? 'claude');
+      return this.getTopLevel(agentsInUse[0] ?? 'claude');
     }
     return AGENTS.filter((a) => agentsInUse.includes(a)).map((a) => new AgentFolderNode(a));
+  }
+
+  /**
+   * One agent's projects, placed by the shared tree prefs: folders first (those holding at least one of
+   * this workspace's projects), then top-level projects in their manual order, the rest by name.
+   */
+  private async getTopLevel(agent: AgentType): Promise<(FolderNode | ProjectGroupNode)[]> {
+    const projects = await this.getProjectGroups(agent);
+    const byKey = new Map(projects.map((p) => [projectKeyOf(p), p]));
+    const arranged = arrangeProjects(this.state.getTree(), [...byKey.keys()]);
+    const folders = arranged.folders
+      .filter((f) => f.projects.length > 0)
+      .map((f) => new FolderNode(agent, f.folder, f.projects.map((k) => byKey.get(k)!)));
+    return [...folders, ...arranged.root.map((k) => byKey.get(k)!)];
+  }
+
+  /** Project keys in the order shown inside `folderId` (or at the top level for `null`), for Move Up/Down. */
+  async displayedProjectOrder(agent: AgentType, folderId: string | null): Promise<string[]> {
+    const top = await this.getTopLevel(agent);
+    const nodes = folderId === null ? top.filter((n) => n.kind === 'project') : (top.find((n) => n.kind === 'folder' && n.folder.id === folderId) as FolderNode | undefined)?.projects ?? [];
+    return nodes.map((n) => projectKeyOf(n as ProjectGroupNode));
+  }
+
+  /** Folders and projects start expanded unless collapsed here or in the terminal UI. */
+  private collapsibleState(nodeKey: string): vscode.TreeItemCollapsibleState {
+    return this.state.getTree().collapsed.includes(nodeKey)
+      ? vscode.TreeItemCollapsibleState.Collapsed
+      : vscode.TreeItemCollapsibleState.Expanded;
   }
 
   private detectAgentsInUse(): AgentType[] {
@@ -425,8 +498,9 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
     }
 
     const newlyDiscovered = new Set([...currentIds].filter((id) => !known.has(id)));
+    // Pinned sessions are never auto-archived, and don't count toward the cap.
     const activeIdsByRecency = candidates
-      .filter((c) => !this.state.isSessionArchived(c.sessionId))
+      .filter((c) => !this.state.isSessionArchived(c.sessionId) && !this.state.getSessionPin(c.sessionId))
       .map((c) => c.sessionId);
     const toArchive = selectSessionsToArchive(activeIdsByRecency, group.maxSessionsShown, newlyDiscovered);
     if (toArchive.length === 0) {

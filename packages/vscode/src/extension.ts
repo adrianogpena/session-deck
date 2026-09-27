@@ -2,7 +2,20 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { mapWithConcurrency } from '@session-deck/core';
 import { fuzzyMatch } from '@session-deck/core';
-import { AgentType, SessionTreeProvider, ProjectGroupNode, SessionNode, SessionWithProject } from './tree/sessionProvider';
+import { AgentType, ClaudeDeckNode, FolderNode, projectKeyOf, SessionTreeProvider, ProjectGroupNode, SessionNode, SessionWithProject } from './tree/sessionProvider';
+import {
+  createFolder,
+  deleteFolder,
+  folderNodeKey,
+  moveFolder,
+  moveProject,
+  moveProjectToFolder,
+  projectNodeKey,
+  renameFolder,
+  SessionPin,
+  SessionSort,
+  setCollapsed,
+} from '@session-deck/core';
 import { ActiveSessionProvider } from './tree/activeSessionProvider';
 import { SessionContentProvider, SESSION_SCHEME } from './content/sessionContentProvider';
 import {
@@ -130,6 +143,18 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('sessionDeck.renameSession', (node: SessionNode) =>
       renameSession(node, state, treeProvider)
     ),
+    vscode.commands.registerCommand('sessionDeck.newFolder', () => newFolder(state, treeProvider)),
+    vscode.commands.registerCommand('sessionDeck.renameFolder', (node: FolderNode) => node && renameFolderNode(node, state, treeProvider)),
+    vscode.commands.registerCommand('sessionDeck.deleteFolder', (node: FolderNode) => node && deleteFolderNode(node, state, treeProvider)),
+    vscode.commands.registerCommand('sessionDeck.moveProjectToFolder', (node: ProjectGroupNode) =>
+      node && moveProjectNodeToFolder(node, state, treeProvider)
+    ),
+    vscode.commands.registerCommand('sessionDeck.moveUp', (node: FolderNode | ProjectGroupNode) => node && moveTreeNode(node, -1, state, treeProvider)),
+    vscode.commands.registerCommand('sessionDeck.moveDown', (node: FolderNode | ProjectGroupNode) => node && moveTreeNode(node, 1, state, treeProvider)),
+    vscode.commands.registerCommand('sessionDeck.pinSession', (node: SessionNode) => node && pinSessionNode(node, state, treeProvider)),
+    vscode.commands.registerCommand('sessionDeck.changeSort', () => changeSessionSort(state, treeProvider)),
+    treeView.onDidCollapseElement((e) => rememberCollapsed(e.element, true, state)),
+    treeView.onDidExpandElement((e) => rememberCollapsed(e.element, false, state)),
     vscode.commands.registerCommand('sessionDeck.forkSession', (session: SessionNode) => forkSession(session, terminalService)),
     vscode.commands.registerCommand('sessionDeck.forkSessionDangerously', (session: SessionNode) =>
       forkSessionDangerously(session, terminalService)
@@ -683,3 +708,118 @@ async function renameSession(node: SessionNode, state: DeckState, tree: SessionT
 }
 
 export function deactivate() {}
+
+// ---------------------------------------------------------------------------------------------
+// Folders, order, pins and sort: shared with the terminal UI through ~/.session-deck/state.json
+// ---------------------------------------------------------------------------------------------
+
+async function newFolder(state: DeckState, tree: SessionTreeProvider, project?: ProjectGroupNode): Promise<void> {
+  const name = (await vscode.window.showInputBox({ prompt: 'New folder', placeHolder: 'e.g. Work', ignoreFocusOut: true }))?.trim();
+  if (!name) {
+    return;
+  }
+  // The id is made once, so the folder written to disk is the one a project gets moved into.
+  const { tree: created, folderId } = createFolder(state.getTree(), name);
+  const folder = created.folders.find((f) => f.id === folderId)!;
+  await state.updateTree((t) => {
+    const withFolder = { ...t, folders: [...t.folders, folder] };
+    return project ? moveProjectToFolder(withFolder, projectKeyOf(project), folderId) : withFolder;
+  });
+  tree.refresh();
+}
+
+async function renameFolderNode(node: FolderNode, state: DeckState, tree: SessionTreeProvider): Promise<void> {
+  const name = (await vscode.window.showInputBox({ prompt: 'Rename folder', value: node.folder.name, ignoreFocusOut: true }))?.trim();
+  if (!name || name === node.folder.name) {
+    return;
+  }
+  await state.updateTree((t) => renameFolder(t, node.folder.id, name));
+  tree.refresh();
+}
+
+async function deleteFolderNode(node: FolderNode, state: DeckState, tree: SessionTreeProvider): Promise<void> {
+  const choice = await vscode.window.showWarningMessage(
+    `Delete folder "${node.folder.name}"? Its projects move back to the top level.`,
+    { modal: true },
+    'Delete'
+  );
+  if (choice !== 'Delete') {
+    return;
+  }
+  await state.updateTree((t) => deleteFolder(t, node.folder.id));
+  tree.refresh();
+}
+
+async function moveProjectNodeToFolder(node: ProjectGroupNode, state: DeckState, tree: SessionTreeProvider): Promise<void> {
+  const key = projectKeyOf(node);
+  const folders = state.getTree().folders;
+  const current = folders.find((f) => f.projects.includes(key));
+  type Pick = vscode.QuickPickItem & { folderId: string | null | 'new' };
+  const items: Pick[] = [
+    { label: '$(root-folder) Top level (no folder)', folderId: null, description: current ? undefined : 'current' },
+    ...folders.map((f): Pick => ({ label: `$(folder) ${f.name}`, folderId: f.id, description: f === current ? 'current' : undefined })),
+    { label: '$(new-folder) New folder…', folderId: 'new' },
+  ];
+  const picked = await vscode.window.showQuickPick(items, { placeHolder: `Move ${node.displayName} to` });
+  if (!picked) {
+    return;
+  }
+  if (picked.folderId === 'new') {
+    await newFolder(state, tree, node);
+    return;
+  }
+  const target = picked.folderId;
+  await state.updateTree((t) => moveProjectToFolder(t, key, target));
+  tree.refresh();
+}
+
+async function moveTreeNode(node: FolderNode | ProjectGroupNode, delta: number, state: DeckState, tree: SessionTreeProvider): Promise<void> {
+  if (node.kind === 'folder') {
+    await state.updateTree((t) => moveFolder(t, node.folder.id, delta));
+  } else {
+    const key = projectKeyOf(node);
+    const folderId = state.getTree().folders.find((f) => f.projects.includes(key))?.id ?? null;
+    const displayed = await tree.displayedProjectOrder(node.agent, folderId);
+    await state.updateTree((t) => moveProject(t, key, delta, displayed));
+  }
+  tree.refresh();
+}
+
+async function pinSessionNode(node: SessionNode, state: DeckState, tree: SessionTreeProvider): Promise<void> {
+  const current = state.getSessionPin(node.sessionId);
+  type Pick = vscode.QuickPickItem & { pin: SessionPin | undefined };
+  const items: Pick[] = [
+    { label: '$(arrow-up) Pin to top', pin: 'top', description: current === 'top' ? 'current' : undefined },
+    { label: '$(arrow-down) Pin to bottom', pin: 'bottom', description: current === 'bottom' ? 'current' : undefined },
+    { label: '$(pinned-dirty) Unpin', pin: undefined, description: current ? undefined : 'current' },
+  ];
+  const picked = await vscode.window.showQuickPick(items, { placeHolder: `Pin "${node.displayName}" within its project` });
+  if (!picked) {
+    return;
+  }
+  await state.setSessionPin(node.sessionId, picked.pin);
+  tree.refresh();
+}
+
+async function changeSessionSort(state: DeckState, tree: SessionTreeProvider): Promise<void> {
+  const current = state.getTree().sort;
+  type Pick = vscode.QuickPickItem & { sort: SessionSort };
+  const items: Pick[] = [
+    { label: 'Most recent first', sort: 'recent', description: current === 'recent' ? 'current' : undefined },
+    { label: 'Needs attention first', detail: 'Error, waiting, running, idle, then the rest', sort: 'actionable', description: current === 'actionable' ? 'current' : undefined },
+  ];
+  const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Sort sessions within each project' });
+  if (!picked) {
+    return;
+  }
+  await state.updateTree((t) => ({ ...t, sort: picked.sort }));
+  tree.refresh();
+}
+
+/** Remembers a folder/project being collapsed or expanded, in the store the terminal UI reads too. */
+function rememberCollapsed(node: ClaudeDeckNode, collapsed: boolean, state: DeckState): void {
+  const key = node.kind === 'folder' ? folderNodeKey(node.folder.id) : node.kind === 'project' ? projectNodeKey(projectKeyOf(node)) : undefined;
+  if (key && state.getTree().collapsed.includes(key) !== collapsed) {
+    void state.updateTree((t) => setCollapsed(t, key, collapsed));
+  }
+}

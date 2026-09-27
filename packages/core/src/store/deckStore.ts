@@ -1,12 +1,15 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { defaultTreePrefs, isDefaultTree, parseTreePrefs, SessionPin, TreePrefs } from './treePrefs';
 
 /** Per-session preferences shared by every Session Deck front end (VS Code extension, terminal UI), keyed by session id. */
 export interface SessionPrefs {
   /** Session Deck's own name override. Wins over the agent's own title. */
   name?: string;
   archived?: boolean;
+  /** Kept at the top or bottom of its project, above/below the sort order. */
+  pin?: SessionPin;
 }
 
 export type ThemePreference = 'dark' | 'light' | 'system';
@@ -22,6 +25,7 @@ export interface DeckStateFile {
   version: 1;
   sessions: Record<string, SessionPrefs>;
   ui?: UiPrefs;
+  tree?: TreePrefs;
 }
 
 const THEMES: readonly ThemePreference[] = ['dark', 'light', 'system'];
@@ -52,11 +56,15 @@ export function parseDeckState(raw: string): DeckStateFile | undefined {
   if (typeof parsed !== 'object' || parsed === null) {
     return undefined;
   }
-  const { sessions, ui } = parsed as { sessions?: unknown; ui?: unknown };
+  const { sessions, ui, tree } = parsed as { sessions?: unknown; ui?: unknown; tree?: unknown };
   const state = emptyState();
   const uiPrefs = parseUiPrefs(ui);
   if (uiPrefs) {
     state.ui = uiPrefs;
+  }
+  const treePrefs = parseTreePrefs(tree);
+  if (treePrefs) {
+    state.tree = treePrefs;
   }
   if (typeof sessions !== 'object' || sessions === null) {
     return state;
@@ -65,13 +73,16 @@ export function parseDeckState(raw: string): DeckStateFile | undefined {
     if (typeof value !== 'object' || value === null) {
       continue;
     }
-    const { name, archived } = value as Record<string, unknown>;
+    const { name, archived, pin } = value as Record<string, unknown>;
     const prefs: SessionPrefs = {};
     if (typeof name === 'string' && name.trim()) {
       prefs.name = name;
     }
     if (archived === true) {
       prefs.archived = true;
+    }
+    if (pin === 'top' || pin === 'bottom') {
+      prefs.pin = pin;
     }
     if (Object.keys(prefs).length) {
       state.sessions[id] = prefs;
@@ -118,6 +129,13 @@ export function applySessionPatch(state: DeckStateFile, sessionId: string, patch
       next.archived = true;
     } else {
       delete next.archived;
+    }
+  }
+  if ('pin' in patch) {
+    if (patch.pin) {
+      next.pin = patch.pin;
+    } else {
+      delete next.pin;
     }
   }
   const sessions = { ...state.sessions };
@@ -175,6 +193,21 @@ export class DeckStore {
 
   async updateUi(patch: Partial<UiPrefs>): Promise<void> {
     await this.writeAtomic(applyUiPatch(this.readForWrite(), patch));
+  }
+
+  getTree(): TreePrefs {
+    return this.read().tree ?? defaultTreePrefs();
+  }
+
+  /** `change` gets the tree as it is on disk right now (not the cached copy), so edits from the other front end are kept. */
+  async updateTree(change: (tree: TreePrefs) => TreePrefs): Promise<void> {
+    const state = this.readForWrite();
+    const tree = change(state.tree ?? defaultTreePrefs());
+    const next: DeckStateFile = { ...state, tree };
+    if (isDefaultTree(tree)) {
+      delete next.tree;
+    }
+    await this.writeAtomic(next);
   }
 
   async updateSession(sessionId: string, patch: Partial<SessionPrefs>): Promise<void> {

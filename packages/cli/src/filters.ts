@@ -1,5 +1,7 @@
+import type { SessionCategory } from '@session-deck/core';
+
 /** What the filter pills count and toggle. `starting` counts as running, a crashed/exited agent as error. */
-export type StatusCategory = 'running' | 'waiting' | 'idle' | 'error' | 'stopped';
+export type StatusCategory = SessionCategory;
 
 export const STATUS_CATEGORIES: readonly StatusCategory[] = ['running', 'waiting', 'idle', 'error', 'stopped'];
 

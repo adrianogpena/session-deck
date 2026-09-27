@@ -7,7 +7,10 @@ import {
   getClaudeProjectsDir,
   listProjectDirNames,
   listSessionFiles,
+  mapWithConcurrency,
+  normalizeFsPath,
   readSessionMeta,
+  resolveProjectRoot,
 } from '@session-deck/core';
 import { oneLine } from './ansi';
 import type { StatusCategory } from './filters';
@@ -20,6 +23,9 @@ export interface DeckSession {
   id: string | null;
   file?: string;
   cwd: string;
+  /** Git root of `cwd` (worktrees and subfolders share one), and its `normalizeFsPath` key, as in the extension. */
+  projectRoot: string;
+  projectKey: string;
   /** Claude's own title (`/rename`, AI title) or the first prompt. See {@link displayTitle} for what's shown. */
   title: string;
   mtime: number;
@@ -28,10 +34,6 @@ export interface DeckSession {
   lastResponse?: string | null;
   titleRefreshing?: boolean;
 }
-
-export type SidebarRow =
-  | { kind: 'group'; label: string; count: number; running: number; waiting: number }
-  | { kind: 'session'; session: DeckSession; isLast: boolean };
 
 /** For a session open in another terminal, the status of that other process (see {@link ClaudeProcs.isElsewhere}). */
 export type SessionStatus = 'running' | 'waiting' | 'idle' | 'starting' | 'exited' | 'stopped';
@@ -76,44 +78,38 @@ export async function discoverSessions(current: DeckSession[], store: DeckStore)
     if (!meta.firstPrompt) {
       continue; // empty/aborted sessions
     }
-    found.push({ id: f.id, file: f.full, cwd: meta.cwd || decodeProjectPath(f.dir), title: oneLine(meta.title || meta.firstPrompt), mtime: f.mtime });
+    const cwd = meta.cwd || decodeProjectPath(f.dir);
+    found.push({ id: f.id, file: f.full, cwd, projectRoot: cwd, projectKey: normalizeFsPath(cwd), title: oneLine(meta.title || meta.firstPrompt), mtime: f.mtime });
   }
+  await assignProjects(found);
 
-  const liveOnes = current.filter((s) => s.live);
-  for (const s of found) {
-    const existing = liveOnes.find((l) => l.id === s.id);
-    if (existing) {
-      Object.assign(existing, { title: s.title, file: s.file, mtime: s.mtime });
+  // Known sessions are updated in place, not replaced: the UI tracks the selection (and the previous
+  // session) by object, and live ones carry their PTY. Live sessions not found on disk (new, or older
+  // than the cutoff) stay listed.
+  const byId = new Map(current.filter((s) => s.id).map((s) => [s.id, s]));
+  const merged = found.map((s) => {
+    const existing = byId.get(s.id);
+    if (!existing) {
+      return s;
     }
-  }
-  return [...liveOnes, ...found.filter((s) => !liveOnes.some((l) => l.id === s.id))];
+    if (existing.mtime !== s.mtime && !existing.live) {
+      existing.lastResponse = undefined; // transcript changed since it was loaded
+    }
+    const { title, file, mtime, cwd, projectRoot, projectKey } = s;
+    return Object.assign(existing, { title, file, mtime, cwd, projectRoot, projectKey });
+  });
+  return [...current.filter((s) => s.live && !merged.includes(s)), ...merged];
 }
 
-/** Grouped by working folder, in first-seen (most recent) order. Groups with no visible session are left out; counts cover visible sessions. */
-export function buildRows(sessions: DeckSession[], include: (s: DeckSession) => boolean, categoryOf: (s: DeckSession) => StatusCategory): SidebarRow[] {
-  const groups = new Map<string, { label: string; items: DeckSession[] }>();
-  for (const s of sessions.filter(include)) {
-    const key = s.cwd.toLowerCase();
-    let group = groups.get(key);
-    if (!group) {
-      group = { label: path.basename(s.cwd) || s.cwd, items: [] };
-      groups.set(key, group);
-    }
-    group.items.push(s);
-  }
-  const rows: SidebarRow[] = [];
-  for (const g of groups.values()) {
-    const categories = g.items.map(categoryOf);
-    rows.push({
-      kind: 'group',
-      label: g.label,
-      count: g.items.length,
-      running: categories.filter((c) => c === 'running').length,
-      waiting: categories.filter((c) => c === 'waiting').length,
-    });
-    g.items.forEach((s, i) => rows.push({ kind: 'session', session: s, isLast: i === g.items.length - 1 }));
-  }
-  return rows;
+const GIT_RESOLVE_CONCURRENCY = 8;
+
+/** Sets each session's project to the git root of its cwd (cached per cwd by `resolveProjectRoot`). */
+async function assignProjects(sessions: DeckSession[]): Promise<void> {
+  const roots = await mapWithConcurrency(sessions, GIT_RESOLVE_CONCURRENCY, (s) => resolveProjectRoot(s.cwd));
+  sessions.forEach((s, i) => {
+    s.projectRoot = roots[i].root;
+    s.projectKey = normalizeFsPath(roots[i].root);
+  });
 }
 
 function isAlive(pid: number): boolean {

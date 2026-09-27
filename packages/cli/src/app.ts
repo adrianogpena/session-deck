@@ -3,23 +3,39 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   clearSessionMetaCache,
+  createFolder,
   DeckStore,
+  deleteFolder,
+  folderNodeKey,
   humanizeSince,
+  moveFolder,
+  moveProject,
+  moveProjectToFolder,
+  projectNodeKey,
   readLastAssistantResponse,
+  renameFolder,
+  SessionPin,
+  setCollapsed,
   SIDEBAR_PCT_MAX,
   SIDEBAR_PCT_MIN,
   ThemePreference,
+  TreePrefs,
 } from '@session-deck/core';
 import { ESC, fitAnsi, oneLine } from './ansi';
 import { matchesStatusFilter, nextTimeFilter, STATUS_CATEGORIES, StatusCategory, TimeFilter, withinTimeFilter } from './filters';
 import { findDetachKey, RESET_AGENT_MODES, splitKeys } from './keys';
 import { computeLayout, Layout, ptySizeFor, Rect } from './layout';
 import { disposeLive, resizeLive, spawnClaude } from './liveSession';
-import { appendRenameRecords, buildRows, ClaudeProcs, DeckSession, discoverSessions, displayTitle, refreshLiveTitle, SidebarRow } from './sessions';
+import { appendRenameRecords, ClaudeProcs, DeckSession, discoverSessions, displayTitle, refreshLiveTitle } from './sessions';
+import { buildTree, TreeRow } from './tree';
 import { extractBackgroundReply, OSC11_QUERY, readOsTheme, Theme, ThemeName } from './theme';
 import {
+  GroupPreview,
   helpOverlay,
   ListRow,
+  pickerOverlay,
+  renderConfirmBar,
+  renderGroupPreviewPanel,
   renderHeader,
   renderHelpBar,
   renderListPanel,
@@ -46,6 +62,22 @@ interface Prompt {
   onSubmit(value: string): void;
 }
 
+/** Centered list to choose from while open. */
+interface Picker {
+  title: string;
+  items: string[];
+  index: number;
+  onPick(index: number): void;
+}
+
+/** Footer yes/no question while open: `y` confirms, any other key cancels. */
+interface Confirm {
+  question: string;
+  onYes(): void;
+}
+
+const PIN_CYCLE: readonly (SessionPin | undefined)[] = [undefined, 'top', 'bottom'];
+
 /**
  * Claude sessions run in background PTYs owned by this process, each mirrored into a headless xterm
  * so the preview pane can redraw any of them instantly. Enter attaches full-screen (raw passthrough),
@@ -53,15 +85,23 @@ interface Prompt {
  */
 export class App {
   private sessions: DeckSession[] = [];
-  private rows: SidebarRow[] = [];
-  /** Index into `rows`, always a session row (or 0 when there are none). */
+  private rows: TreeRow[] = [];
+  /** Displayed project order per container (`''` = top level, else folder id), for K/J. */
+  private containers = new Map<string, string[]>();
+  /** Index into `rows`: any row but a divider (or 0 when there are none). */
   private selected = 0;
+  /** For ` (back to the previous session). */
+  private lastSession?: DeckSession;
+  private previousSession?: DeckSession;
+  private tree: TreePrefs;
   private sidebarVisible = true;
   private attached: DeckSession | null = null;
   private message = '';
   private messageTimer?: NodeJS.Timeout;
   private renderTimer?: NodeJS.Timeout;
   private prompt: Prompt | null = null;
+  private picker: Picker | null = null;
+  private confirm: Confirm | null = null;
   private helpScroll: number | null = null;
   private statusFilter = new Set<StatusCategory>();
   private timeFilter: TimeFilter = 'all';
@@ -80,6 +120,7 @@ export class App {
     const ui = this.store.getUi();
     this.sidebarPct = ui.sidebarPct ?? DEFAULT_SIDEBAR_PCT;
     this.themePreference = ui.theme ?? 'system';
+    this.tree = this.store.getTree();
   }
 
   async run(): Promise<void> {
@@ -145,26 +186,66 @@ export class App {
   // Sessions
   // -------------------------------------------------------------------------------------------
 
+  private get selectedRow(): TreeRow | undefined {
+    return this.rows[this.selected];
+  }
+
   private get current(): DeckSession | undefined {
-    const row = this.rows[this.selected];
+    const row = this.selectedRow;
     return row?.kind === 'session' ? row.session : undefined;
+  }
+
+  /** The project the selection belongs to: the project row itself, or a session's project. */
+  private get selectedProject(): { key: string; root: string } | undefined {
+    const row = this.selectedRow;
+    if (row?.kind === 'project') {
+      return { key: row.projectKey, root: row.root };
+    }
+    return row?.kind === 'session' ? { key: row.session.projectKey, root: row.session.projectRoot } : undefined;
   }
 
   private async discover(): Promise<void> {
     this.sessions = await discoverSessions(this.sessions, this.store);
+    this.tree = this.store.getTree();
     this.rebuildRows();
   }
 
-  /** Re-applies grouping and filters, keeping the selected session selected when it's still shown. */
+  private isVisible(s: DeckSession): boolean {
+    return matchesStatusFilter(this.procs.categoryOf(s), this.statusFilter) && withinTimeFilter(s.mtime, this.timeFilter);
+  }
+
+  private get filtering(): boolean {
+    return this.statusFilter.size > 0 || this.timeFilter !== 'all';
+  }
+
+  /** Re-applies the tree, sort and filters, keeping the selected row selected when it's still shown. */
   private rebuildRows(): void {
-    const current = this.current;
-    this.rows = buildRows(
-      this.sessions,
-      (s) => matchesStatusFilter(this.procs.categoryOf(s), this.statusFilter) && withinTimeFilter(s.mtime, this.timeFilter),
-      (s) => this.procs.categoryOf(s)
-    );
-    const keep = this.rows.findIndex((r) => r.kind === 'session' && r.session === current);
+    const previous = this.selectedRow;
+    const built = buildTree(this.sessions, this.tree, {
+      include: (s) => this.isVisible(s),
+      categoryOf: (s) => this.procs.categoryOf(s),
+      pinOf: (s) => (s.id ? this.store.getSession(s.id)?.pin : undefined),
+      filtering: this.filtering,
+    });
+    this.rows = built.rows;
+    this.containers = built.containers;
+    const keep = previous ? this.rows.findIndex((r) => sameRow(r, previous)) : -1;
     this.selected = keep >= 0 ? keep : Math.max(0, this.rows.findIndex((r) => r.kind === 'session'));
+  }
+
+  /** Applies a tree change right away, and to the shared store (on the tree as it is on disk). */
+  private changeTree(change: (tree: TreePrefs) => TreePrefs): void {
+    this.tree = change(this.tree);
+    this.rebuildRows();
+    void this.store.updateTree(change);
+  }
+
+  private selectWhere(match: (row: TreeRow) => boolean): boolean {
+    const i = this.rows.findIndex(match);
+    if (i >= 0) {
+      this.selected = i;
+    }
+    return i >= 0;
   }
 
   private pollProcs(): void {
@@ -251,17 +332,21 @@ export class App {
     }
   }
 
+  private shortPath(p: string): string {
+    const home = os.homedir();
+    return p.toLowerCase().startsWith(home.toLowerCase()) ? `~${p.slice(home.length)}` : p;
+  }
+
   private viewOf(s: DeckSession): SessionView {
     const status = this.procs.statusOf(s);
     const active = s.live && !s.live.exited && (status === 'running' || status === 'waiting');
-    const home = os.homedir();
     return {
       title: displayTitle(s, this.store),
       status,
       elsewhere: this.procs.isElsewhere(s),
       agent: 'claude',
       timeLabel: active ? 'now' : humanizeSince(s.mtime),
-      cwd: s.cwd.toLowerCase().startsWith(home.toLowerCase()) ? `~${s.cwd.slice(home.length)}` : s.cwd,
+      cwd: this.shortPath(s.cwd),
       id: s.id,
     };
   }
@@ -371,6 +456,11 @@ export class App {
     if (this.attached) {
       return;
     }
+    const current = this.current;
+    if (current && current !== this.lastSession) {
+      this.previousSession = this.lastSession;
+      this.lastSession = current;
+    }
     const t = this.theme;
     const cols = out.columns || 120;
     const height = out.rows || 30;
@@ -388,13 +478,20 @@ export class App {
     frame += `${ESC}2;1H${fitAnsi(renderPills(t, cols, this.sessions.length, counts, this.statusFilter, this.timeFilter), cols)}`;
 
     if (layout.list) {
-      const listRows: ListRow[] = this.rows.map((r) => (r.kind === 'group' ? r : { kind: 'session', view: this.viewOf(r.session), isLast: r.isLast }));
-      const filtered = this.statusFilter.size > 0 || this.timeFilter !== 'all';
-      const note = this.resizeNote && Date.now() < this.resizeNote.until ? this.resizeNote.text : filtered ? '· filtered' : '';
+      const listRows: ListRow[] = this.rows.map((r) =>
+        r.kind === 'session' ? { kind: 'session', view: this.viewOf(r.session), isLast: r.isLast, depth: r.depth, pin: r.pin } : r
+      );
+      const modes = [this.filtering ? 'filtered' : '', this.tree.sort === 'actionable' ? 'actionable' : '', this.tree.view === 'active' ? 'active on top' : '']
+        .filter(Boolean)
+        .join(' · ');
+      const note = this.resizeNote && Date.now() < this.resizeNote.until ? this.resizeNote.text : modes ? `· ${modes}` : '';
       const empty = this.sessions.length === 0 ? 'No Claude sessions found.' : 'Nothing matches the filter. Press 0 to clear it.';
       frame += placeLines(layout.list, renderListPanel(t, layout.list, listRows, this.selected, note, empty));
     }
-    if (layout.preview) {
+    const group = this.groupPreview();
+    if (layout.preview && group) {
+      frame += placeLines(layout.preview, renderGroupPreviewPanel(t, layout.preview, group));
+    } else if (layout.preview) {
       const s = this.current;
       const content = s
         ? {
@@ -415,6 +512,8 @@ export class App {
     frame += `${ESC}${height};1H`;
     if (this.prompt) {
       frame += renderPromptBar(t, cols, this.prompt.label, this.prompt.value);
+    } else if (this.confirm) {
+      frame += renderConfirmBar(t, cols, this.confirm.question);
     } else if (this.message) {
       frame += renderMessageBar(t, cols, this.message);
     } else {
@@ -424,6 +523,10 @@ export class App {
     if (this.helpScroll !== null) {
       const overlay = helpOverlay(t, cols, height, this.helpScroll, VERSION);
       this.helpScroll = Math.min(this.helpScroll, overlay.maxScroll);
+      overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
+    }
+    if (this.picker) {
+      const overlay = pickerOverlay(t, cols, height, this.picker.title, this.picker.items, this.picker.index);
       overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
     }
     frame += `${ESC}?2026l`;
@@ -472,10 +575,27 @@ export class App {
     let i = this.selected;
     do {
       i += delta;
-    } while (this.rows[i] && this.rows[i].kind !== 'session');
+    } while (this.rows[i] && this.rows[i].kind === 'divider');
     if (this.rows[i]) {
       this.selected = i;
     }
+  }
+
+  /** Summary shown in the preview while a folder or project row is selected. */
+  private groupPreview(): GroupPreview | undefined {
+    const row = this.selectedRow;
+    if (row?.kind !== 'folder' && row?.kind !== 'project') {
+      return undefined;
+    }
+    const keys = row.kind === 'project' ? [row.projectKey] : (this.containers.get(row.folderId) ?? []);
+    // From the sessions themselves, not the rows: a collapsed group has no session rows.
+    const sessions = this.sessions
+      .filter((s) => keys.includes(s.projectKey) && this.isVisible(s))
+      .sort((x, y) => y.mtime - x.mtime)
+      .map((s) => this.viewOf(s));
+    const detail = row.kind === 'project' ? this.shortPath(row.root) : `${keys.length} project${keys.length === 1 ? '' : 's'}`;
+    const { count, running, waiting } = row;
+    return { kind: row.kind, name: row.kind === 'project' ? row.label : row.name, detail, counts: { count, running, waiting }, sessions };
   }
 
   private onPromptKey(prompt: Prompt, data: string): void {
@@ -532,6 +652,19 @@ export class App {
       this.onHelpKey(data);
       return;
     }
+    if (this.picker) {
+      this.onPickerKey(this.picker, data);
+      return;
+    }
+    if (this.confirm) {
+      const { onYes } = this.confirm;
+      this.confirm = null;
+      if (data === 'y' || data === 'Y') {
+        onYes();
+      }
+      this.render();
+      return;
+    }
     const attached = this.attached;
     if (attached) {
       const live = attached.live;
@@ -549,12 +682,19 @@ export class App {
     }
 
     const s = this.current;
+    const row = this.selectedRow;
     if (FILTER_KEYS[data]) {
       const category = FILTER_KEYS[data];
       if (!this.statusFilter.delete(category)) {
         this.statusFilter.add(category);
       }
       this.rebuildRows();
+      this.render();
+      return;
+    }
+    if (/^[1-9]$/.test(data)) {
+      const n = Number(data);
+      this.selectWhere((r) => (r.kind === 'folder' || r.kind === 'project') && r.hotkey === n);
       this.render();
       return;
     }
@@ -567,11 +707,31 @@ export class App {
       case 'j':
         this.move(1);
         break;
+      case '\x1b[D': // ←
+      case 'h':
+        this.collapseOrParent();
+        break;
+      case '\x1b[C': // →
+      case 'l':
+        this.expandOrChild();
+        break;
+      case '\t':
+        if (row?.kind === 'folder' || row?.kind === 'project') {
+          this.toggleCollapsed(row);
+        }
+        break;
       case '\r':
         if (s) {
           this.attach(s);
+          return;
         }
-        return;
+        if (row?.kind === 'folder' || row?.kind === 'project') {
+          this.toggleCollapsed(row);
+        }
+        break;
+      case '`':
+        this.selectPreviousSession();
+        break;
       case 's':
         if (s && this.procs.isElsewhere(s)) {
           this.flash('That session is running in another terminal.');
@@ -581,28 +741,52 @@ export class App {
         }
         break;
       case 'n':
-        if (s) {
-          const fresh: DeckSession = { id: null, cwd: s.cwd, title: '(new session)', mtime: Date.now() };
-          this.sessions.unshift(fresh);
-          this.rebuildRows();
-          this.selected = this.rows.findIndex((r) => r.kind === 'session' && r.session === fresh);
-          this.attach(fresh);
-          return;
-        }
-        break;
+        this.newSession();
+        return;
       case 'e':
       case '\x1bOQ': // F2
       case '\x1b[12~': // F2 (some terminals)
-        if (s) {
-          const title = displayTitle(s, this.store);
-          this.prompt = { label: 'Rename', value: title === '(new session)' ? '' : title, onSubmit: (value) => this.renameSession(s, value) };
-        }
+        this.rename();
         break;
       case 'x':
         if (s && s.live) {
           this.kill(s);
           this.flash('Session stopped');
         }
+        break;
+      case ',':
+        this.cyclePin();
+        break;
+      case 'g':
+        this.prompt = { label: 'New folder', value: '', onSubmit: (name) => this.newFolder(name) };
+        break;
+      case 'M':
+        this.openMovePicker();
+        break;
+      case 'K':
+      case '\x1b[1;2A': // Shift+↑
+        this.reorder(-1);
+        break;
+      case 'J':
+      case '\x1b[1;2B': // Shift+↓
+        this.reorder(1);
+        break;
+      case 'd':
+        if (row?.kind === 'folder') {
+          const folderId = row.folderId;
+          this.confirm = {
+            question: `Delete folder "${row.name}"? Its projects move back to the top level.`,
+            onYes: () => this.changeTree((t) => deleteFolder(t, folderId)),
+          };
+        }
+        break;
+      case 'S':
+        this.changeTree((t) => ({ ...t, sort: t.sort === 'recent' ? 'actionable' : 'recent' }));
+        this.flash(this.tree.sort === 'actionable' ? 'Sessions: needs attention first (error, waiting, running, idle)' : 'Sessions: most recent first');
+        break;
+      case 't':
+        this.changeTree((t) => ({ ...t, view: t.view === 'normal' ? 'active' : 'normal' }));
+        this.flash(this.tree.view === 'active' ? 'View: groups with running or waiting sessions on top' : 'View: normal');
         break;
       case '*':
         this.timeFilter = nextTimeFilter(this.timeFilter);
@@ -645,6 +829,199 @@ export class App {
     this.render();
   }
 
+  // -------------------------------------------------------------------------------------------
+  // Tree actions
+  // -------------------------------------------------------------------------------------------
+
+  private toggleCollapsed(row: Extract<TreeRow, { kind: 'folder' | 'project' }>): void {
+    const key = row.kind === 'folder' ? folderNodeKey(row.folderId) : projectNodeKey(row.projectKey);
+    this.changeTree((t) => setCollapsed(t, key, !row.collapsed));
+  }
+
+  /** ←: collapse an expanded group, otherwise go up to the parent row (session → project → folder). */
+  private collapseOrParent(): void {
+    const row = this.selectedRow;
+    if ((row?.kind === 'folder' || row?.kind === 'project') && !row.collapsed) {
+      this.toggleCollapsed(row);
+      return;
+    }
+    const depth = row?.kind === 'session' ? row.depth : row?.kind === 'project' ? row.depth : 0;
+    for (let i = this.selected - 1; i >= 0 && depth > 0; i--) {
+      const r = this.rows[i];
+      const d = r.kind === 'project' ? r.depth : r.kind === 'folder' ? 0 : Infinity;
+      if (d < depth) {
+        this.selected = i;
+        return;
+      }
+    }
+  }
+
+  /** →: expand a collapsed group, otherwise step into its first child. */
+  private expandOrChild(): void {
+    const row = this.selectedRow;
+    if (row?.kind !== 'folder' && row?.kind !== 'project') {
+      return;
+    }
+    if (row.collapsed) {
+      this.toggleCollapsed(row);
+    } else if (this.rows[this.selected + 1] && this.rows[this.selected + 1].kind !== 'divider') {
+      this.selected++;
+    }
+  }
+
+  /** `: back to the session selected before the current one, expanding its groups if they're collapsed. */
+  private selectPreviousSession(): void {
+    const target = this.previousSession;
+    if (!target || !this.sessions.includes(target)) {
+      this.flash('No previous session.');
+      return;
+    }
+    const isTarget = (r: TreeRow) => r.kind === 'session' && r.session === target;
+    if (this.selectWhere(isTarget)) {
+      return;
+    }
+    const folder = this.tree.folders.find((f) => f.projects.includes(target.projectKey));
+    this.changeTree((t) => {
+      let next = setCollapsed(t, projectNodeKey(target.projectKey), false);
+      if (folder) {
+        next = setCollapsed(next, folderNodeKey(folder.id), false);
+      }
+      return next;
+    });
+    if (!this.selectWhere(isTarget)) {
+      this.flash('The previous session is hidden by the filter. Press 0 to clear it.');
+    }
+  }
+
+  private newSession(): void {
+    const s = this.current;
+    const project = this.selectedProject;
+    if (!project) {
+      this.flash('Select a project or session to start a new session in.');
+      this.render();
+      return;
+    }
+    const cwd = s ? s.cwd : project.root;
+    const fresh: DeckSession = { id: null, cwd, projectRoot: project.root, projectKey: project.key, title: '(new session)', mtime: Date.now() };
+    this.sessions.unshift(fresh);
+    this.rebuildRows();
+    this.selectWhere((r) => r.kind === 'session' && r.session === fresh);
+    this.attach(fresh);
+  }
+
+  private rename(): void {
+    const row = this.selectedRow;
+    const s = this.current;
+    if (s) {
+      const title = displayTitle(s, this.store);
+      this.prompt = { label: 'Rename', value: title === '(new session)' ? '' : title, onSubmit: (value) => this.renameSession(s, value) };
+    } else if (row?.kind === 'folder') {
+      const folderId = row.folderId;
+      this.prompt = {
+        label: 'Rename folder',
+        value: row.name,
+        onSubmit: (value) => value.trim() && this.changeTree((t) => renameFolder(t, folderId, value)),
+      };
+    } else if (row?.kind === 'project') {
+      this.flash('Projects are named after their folder on disk.');
+    }
+  }
+
+  private cyclePin(): void {
+    const s = this.current;
+    if (!s?.id) {
+      this.flash(s ? 'Send something first: a new session has nothing to pin yet.' : 'Select a session to pin.');
+      return;
+    }
+    const pin = PIN_CYCLE[(PIN_CYCLE.indexOf(this.store.getSession(s.id)?.pin) + 1) % PIN_CYCLE.length];
+    void this.store.updateSession(s.id, { pin }).then(() => {
+      this.rebuildRows();
+      this.scheduleRender();
+    });
+    this.flash(pin ? `Pinned to the ${pin} of its project` : 'Unpinned');
+  }
+
+  /** Creates the folder, moving `projectKey` into it when given. The id is made once, so the local and on-disk trees agree. */
+  private newFolder(rawName: string, projectKey?: string): void {
+    const name = oneLine(rawName);
+    if (!name) {
+      return;
+    }
+    const { tree, folderId } = createFolder(this.tree, name);
+    const folder = tree.folders.find((f) => f.id === folderId)!;
+    this.changeTree((t) => {
+      const withFolder = { ...t, folders: [...t.folders, folder] };
+      return projectKey ? moveProjectToFolder(withFolder, projectKey, folderId) : withFolder;
+    });
+    if (!projectKey) {
+      this.selectWhere((r) => r.kind === 'folder' && r.folderId === folderId);
+    }
+    this.flash(projectKey ? `Moved to "${name}"` : `Folder "${name}" created. Press M on a project to move it in.`);
+  }
+
+  private openMovePicker(): void {
+    const project = this.selectedProject;
+    if (!project) {
+      this.flash('Select a project (or one of its sessions) to move it to a folder.');
+      return;
+    }
+    const folders = this.tree.folders;
+    const current = folders.findIndex((f) => f.projects.includes(project.key));
+    const label = path.basename(project.root) || project.root;
+    this.picker = {
+      title: `Move ${label} to`,
+      items: ['Top level (no folder)', ...folders.map((f) => f.name), '+ New folder…'],
+      index: current + 1,
+      onPick: (i) => {
+        if (i === 0) {
+          this.changeTree((t) => moveProjectToFolder(t, project.key, null));
+        } else if (i <= folders.length) {
+          const folderId = folders[i - 1].id;
+          this.changeTree((t) => moveProjectToFolder(t, project.key, folderId));
+        } else {
+          this.prompt = { label: 'New folder', value: '', onSubmit: (name) => this.newFolder(name, project.key) };
+        }
+      },
+    };
+  }
+
+  /** K/J: moves the selected folder, or the selected project (a session moves its project), up or down. */
+  private reorder(delta: number): void {
+    const row = this.selectedRow;
+    if (this.tree.view === 'active') {
+      this.flash('Switch to the normal view (t) to reorder.');
+      return;
+    }
+    if (row?.kind === 'folder') {
+      const folderId = row.folderId;
+      this.changeTree((t) => moveFolder(t, folderId, delta));
+      return;
+    }
+    const project = this.selectedProject;
+    if (!project) {
+      return;
+    }
+    const container = this.tree.folders.find((f) => f.projects.includes(project.key))?.id ?? '';
+    const displayed = this.containers.get(container) ?? [];
+    this.changeTree((t) => moveProject(t, project.key, delta, displayed));
+  }
+
+  private onPickerKey(picker: Picker, data: string): void {
+    if (data === '\x1b[A' || data === 'k') {
+      picker.index = Math.max(0, picker.index - 1);
+    } else if (data === '\x1b[B' || data === 'j') {
+      picker.index = Math.min(picker.items.length - 1, picker.index + 1);
+    } else if (data === '\r') {
+      this.picker = null;
+      out.write(`${ESC}2J`);
+      picker.onPick(picker.index);
+    } else if (data === '\x1b' || data === 'q' || data === '\x03') {
+      this.picker = null;
+      out.write(`${ESC}2J`);
+    }
+    this.render();
+  }
+
   private quit(): void {
     for (const s of this.sessions) {
       if (s.live && !s.live.exited) {
@@ -667,4 +1044,15 @@ function placeLines(rect: Rect, lines: string[]): string {
     .slice(0, rect.height)
     .map((line, i) => `${ESC}${rect.y + i + 1};${rect.x + 1}H${line}`)
     .join('');
+}
+
+/** Same logical row across rebuilds (rows are recreated each time). */
+function sameRow(a: TreeRow, b: TreeRow): boolean {
+  if (a.kind === 'session' && b.kind === 'session') {
+    return a.session === b.session;
+  }
+  if (a.kind === 'project' && b.kind === 'project') {
+    return a.projectKey === b.projectKey;
+  }
+  return a.kind === 'folder' && b.kind === 'folder' && a.folderId === b.folderId;
 }

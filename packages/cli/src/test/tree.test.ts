@@ -1,0 +1,70 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { defaultTreePrefs, folderNodeKey, projectNodeKey, SessionCategory, TreePrefs } from '@session-deck/core';
+import type { DeckSession } from '../sessions';
+import { buildTree, projectLabels, TreeRow } from '../tree';
+
+function session(id: string, project: string, mtime: number): DeckSession {
+  const root = `C:\\repos\\${project}`;
+  return { id, cwd: root, projectRoot: root, projectKey: root.toLowerCase(), title: id, mtime };
+}
+
+const key = (project: string) => `c:\\repos\\${project}`;
+
+/** Compact picture of the rows: "F:Work(2)", "P:api", "  s:a1", "--". */
+function outline(rows: TreeRow[]): string[] {
+  return rows.map((r) => {
+    if (r.kind === 'folder') return `${r.hotkey ?? ' '}F:${r.name}(${r.count})${r.collapsed ? '+' : ''}`;
+    if (r.kind === 'project') return `${r.hotkey ?? ' '}${'  '.repeat(r.depth)}P:${r.label}${r.collapsed ? '+' : ''}`;
+    if (r.kind === 'session') return `${'  '.repeat(r.depth)}s:${r.session.id}${r.pin ? '^' : ''}`;
+    return '--';
+  });
+}
+
+const sessions = [session('a1', 'api', 50), session('a2', 'api', 10), session('w1', 'web', 40), session('d1', 'docs', 30)];
+const categories: Record<string, SessionCategory> = { a1: 'idle', a2: 'stopped', w1: 'running', d1: 'stopped' };
+const opts = (overrides: Partial<Parameters<typeof buildTree>[2]> = {}) => ({
+  include: () => true,
+  categoryOf: (s: DeckSession) => categories[s.id!],
+  pinOf: () => undefined,
+  filtering: false,
+  ...overrides,
+});
+const workTree = (): TreePrefs => ({ ...defaultTreePrefs(), folders: [{ id: 'f1', name: 'Work', projects: [key('web'), key('docs')] }] });
+
+test('buildTree puts folders first, then top-level projects by most recent activity, numbering top-level rows', () => {
+  const { rows, containers } = buildTree(sessions, workTree(), opts());
+  assert.deepEqual(outline(rows), ['1F:Work(2)', '   P:web', '    s:w1', '   P:docs', '    s:d1', '2P:api', '  s:a1', '  s:a2']);
+  assert.deepEqual(containers.get('f1'), [key('web'), key('docs')]);
+  assert.deepEqual(containers.get(''), [key('api')]);
+});
+
+test('buildTree hides the children of collapsed folders and projects', () => {
+  const tree = { ...workTree(), collapsed: [folderNodeKey('f1'), projectNodeKey(key('api'))] };
+  assert.deepEqual(outline(buildTree(sessions, tree, opts()).rows), ['1F:Work(2)+', '2P:api+']);
+});
+
+test('buildTree with a filter hides projects and folders with nothing visible', () => {
+  const tree = { ...workTree(), folders: [...workTree().folders, { id: 'f2', name: 'Empty', projects: [] }] };
+  assert.deepEqual(outline(buildTree(sessions, tree, opts()).rows).slice(5, 6), ['2F:Empty(0)']); // shown without a filter
+  const running = buildTree(sessions, tree, opts({ include: (s) => categories[s.id!] === 'running', filtering: true }));
+  assert.deepEqual(outline(running.rows), ['1F:Work(1)', '   P:web', '    s:w1']);
+});
+
+test('buildTree "active" view hoists groups with running/waiting sessions above an idle / done divider', () => {
+  const tree: TreePrefs = { ...defaultTreePrefs(), view: 'active' };
+  const rows = buildTree(sessions, tree, opts()).rows;
+  assert.deepEqual(outline(rows), ['1P:web', '  s:w1', '--', '2P:api', '  s:a1', '  s:a2', '3P:docs', '  s:d1']);
+});
+
+test('buildTree orders pinned sessions around the rest', () => {
+  const rows = buildTree(sessions, defaultTreePrefs(), opts({ pinOf: (s) => (s.id === 'a2' ? 'top' : undefined) })).rows;
+  assert.deepEqual(outline(rows).slice(0, 3), ['1P:api', '  s:a2^', '  s:a1']);
+});
+
+test('projectLabels adds the parent folder only when two projects share a name', () => {
+  const labels = projectLabels(['C:\\repos\\api', 'X:\\demo\\shop', 'C:\\work\\shop']);
+  assert.equal(labels.get('C:\\repos\\api'), 'api');
+  assert.equal(labels.get('X:\\demo\\shop'), 'shop · demo');
+  assert.equal(labels.get('C:\\work\\shop'), 'shop · work');
+});

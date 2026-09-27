@@ -2,6 +2,18 @@
 
 All notable changes to Session Deck are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Folders for projects, manual order for folders and projects (Move Up / Move Down), pinned sessions, and a sort order for sessions (most recent, or needs attention first). All of it is shared with the Session Deck terminal UI.
+- Session names, archive flags and collapsed folders/projects are stored in `~/.session-deck/state.json`, shared with the terminal UI. Existing names and archive flags are copied over on first start.
+
+### Changed
+
+- Projects start expanded unless collapsed (the collapsed state is now remembered, in both front ends).
+- Claude sessions are titled with Claude Code's own title (`/rename` or its AI-generated title) instead of the first prompt.
+
 ## [0.1.0] - 2026-09-23
 
 Initial release.
