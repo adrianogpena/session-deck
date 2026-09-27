@@ -48,8 +48,9 @@ a colored status dot on each session.
 
 ### Starting it
 
-- **Run**: `npm run sdeck` from the repository root, in a real terminal (Windows Terminal,
-  PowerShell, the VS Code terminal). It needs Node 22.5 or newer.
+- **Install**: `npm install -g sdeck`, then run `sdeck` from any terminal. Needs Node 22.5 or newer.
+- **Run from a clone instead**: `npm run sdeck` from the repository root (after `npm install` and
+  `npm run build`), in a real terminal (Windows Terminal, PowerShell, the VS Code terminal).
 - **Quit `q` or `Ctrl+C`**: closes Session Deck.
   - Every session running inside it is stopped too; they can be resumed later.
 
