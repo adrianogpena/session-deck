@@ -2,7 +2,7 @@
   "name": "session-deck-cli",
   "version": "0.1.0",
   "private": true,
-  "description": "Session Deck in the terminal: background Claude sessions with a live preview and attach/detach, native on Windows",
+  "description": "Session Deck in the terminal: background Claude Code and Copilot CLI sessions with a live preview and attach/detach, native on Windows",
   "license": "MIT",
   "bin": {
     "sdeck": "out/main.js"

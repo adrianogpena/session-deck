@@ -12,6 +12,7 @@ All notable changes to Session Deck are documented in this file.
 
 ### Changed
 
+- Renaming a Claude session now sets Claude's own title (what `/rename` does), so the new name also shows in Claude's `/resume` and in the terminal UI. A session running in another terminal keeps a Session Deck-only name; Copilot sessions keep using a Session Deck name.
 - Which finished sessions you have already looked at is remembered across restarts, and shared with the terminal UI (it used to reset when VS Code restarted).
 - With the terminal UI running too, each desktop notification is shown once, not by both.
 - Projects start expanded unless collapsed (the collapsed state is now remembered, in both front ends).

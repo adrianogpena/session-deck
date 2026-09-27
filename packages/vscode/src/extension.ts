@@ -27,6 +27,7 @@ import {
 import { copilotSessionSearchText, lastCopilotAssistantResponse } from '@session-deck/core';
 import { resolveProjectRoot, clearProjectRootCache } from '@session-deck/core';
 import { acknowledgeSessionStatus, markSessionUnseen, readEffectiveSessionStatus, SessionStatus } from '@session-deck/core';
+import { appendClaudeRenameRecords, listLiveClaudeProcesses } from '@session-deck/core';
 import { SessionStatusDecorationProvider } from './status/sessionStatusDecorationProvider';
 import { ClaudeProcessWatcher } from '@session-deck/core';
 import { WaitingNotifier } from '@session-deck/core';
@@ -143,7 +144,7 @@ export async function activate(context: vscode.ExtensionContext) {
     ),
     vscode.commands.registerCommand('sessionDeck.hideProject', (node: ProjectGroupNode) => hideProject(node, treeProvider)),
     vscode.commands.registerCommand('sessionDeck.renameSession', (node: SessionNode) =>
-      renameSession(node, state, treeProvider)
+      renameSession(node, state, treeProvider, terminalService)
     ),
     vscode.commands.registerCommand('sessionDeck.newFolder', () => newFolder(state, treeProvider)),
     vscode.commands.registerCommand('sessionDeck.renameFolder', (node: FolderNode) => node && renameFolderNode(node, state, treeProvider)),
@@ -701,19 +702,54 @@ async function hideProject(node: ProjectGroupNode, tree: SessionTreeProvider): P
   );
 }
 
-async function renameSession(node: SessionNode, state: DeckState, tree: SessionTreeProvider): Promise<void> {
+/**
+ * Claude sessions get the same title Claude's own `/rename` sets, so it shows in Claude's `/resume` and
+ * the terminal UI too: typed into its terminal when it's running idle here, appended to the transcript
+ * when it isn't running. Copilot sessions (no `/rename`), and Claude sessions running in another
+ * terminal, get a Session Deck name instead.
+ */
+async function renameSession(
+  node: SessionNode,
+  state: DeckState,
+  tree: SessionTreeProvider,
+  terminalService: AgentTerminalService
+): Promise<void> {
   if (!node) {
     return;
   }
-  const name = await vscode.window.showInputBox({
-    prompt: 'Rename session',
-    value: node.displayName,
-    ignoreFocusOut: true,
-  });
+  const name = (await vscode.window.showInputBox({ prompt: 'Rename session', value: node.displayName, ignoreFocusOut: true }))
+    ?.replace(/\s+/g, ' ')
+    .trim();
   if (!name || name === node.displayName) {
     return;
   }
-  await state.setSessionName(node.sessionId, name);
+  if (node.agent === 'copilot') {
+    await state.setSessionName(node.sessionId, name);
+    tree.refresh();
+    return;
+  }
+  const running = listLiveClaudeProcesses().find((p) => p.sessionId === node.sessionId);
+  if (running && running.status !== 'idle') {
+    void vscode.window.showInformationMessage(`"${node.displayName}" is busy. Rename it once it's idle.`);
+    return;
+  }
+  if (running && !terminalService.sendLineToSession(node.sessionId, `/rename ${name}`)) {
+    // Running in a terminal Session Deck doesn't own: a running Claude would overwrite a transcript edit.
+    await state.setSessionName(node.sessionId, name);
+    tree.refresh();
+    void vscode.window.showInformationMessage(
+      `"${node.displayName}" is running in another terminal, so the new name is saved in Session Deck only. Run /rename there to rename it in Claude too.`
+    );
+    return;
+  }
+  if (!running) {
+    if (!node.filePath) {
+      return;
+    }
+    appendClaudeRenameRecords(node.filePath, node.sessionId, name);
+  }
+  // Claude's own title now carries the name: drop any Session Deck name so it doesn't shadow it.
+  await state.setSessionName(node.sessionId, '');
   tree.refresh();
 }
 

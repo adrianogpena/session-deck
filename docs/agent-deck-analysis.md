@@ -208,7 +208,7 @@ See [section 5](#5-open-decisions).
 - Screen-reading fallback for errors (401, `/login`).
 - Toast notifications; waiting count in the terminal title.
 
-### Phase 5: session actions
+### Phase 5: session actions **(done)**
 
 - `o` one-line prompt, `c` copy last response, `R` restart.
 - Archive / unarchive, delete with undo.

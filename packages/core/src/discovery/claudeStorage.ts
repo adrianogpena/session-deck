@@ -336,6 +336,35 @@ export async function readLastAssistantResponse(filePath: string): Promise<strin
   return last;
 }
 
+/**
+ * Renames a Claude session that isn't running, by appending the records Claude's own `/rename` writes:
+ * `custom-title` is what `/resume` and Session Deck list, `agent-name` is what a resumed Claude shows on
+ * its input box border (writing only the first leaves the old name there). A running Claude keeps its
+ * title in memory and re-writes it, so rename a running session through Claude itself instead.
+ */
+export function appendClaudeRenameRecords(file: string, sessionId: string, name: string): void {
+  let prefix = '';
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const { size } = fs.fstatSync(fd);
+      const last = Buffer.alloc(1);
+      if (size > 0 && fs.readSync(fd, last, 0, 1, size - 1) === 1 && last[0] !== 0x0a) {
+        prefix = '\n'; // never glue our record onto a partial last line
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    // unreadable: append anyway, the write below reports real errors
+  }
+  const records = [
+    { type: 'custom-title', customTitle: name, sessionId },
+    { type: 'agent-name', agentName: name, sessionId },
+  ];
+  fs.appendFileSync(file, prefix + records.map((r) => `${JSON.stringify(r)}\n`).join(''));
+}
+
 function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }

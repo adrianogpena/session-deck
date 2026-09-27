@@ -45,6 +45,36 @@ function parseClaudeProcessFile(raw: string): ClaudeProcessFile | undefined {
 }
 
 /** Whether `pid` still refers to a live process — `process.kill(pid, 0)` probes without sending a real signal. A `<pid>.json` file isn't guaranteed to be cleaned up on exit, so a stale file should read as "gone". */
+export interface LiveClaudeProcess {
+  pid: number;
+  sessionId: string;
+  /** Claude's own value: `busy`, `waiting`, `idle`, `shell`... */
+  status: string;
+}
+
+/** Every `claude` process running right now, on any terminal (from its pid file, checked for liveness). */
+export function listLiveClaudeProcesses(): LiveClaudeProcess[] {
+  const dir = getClaudeSessionsStateDir();
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir).filter((name) => name.endsWith('.json'));
+  } catch {
+    return [];
+  }
+  const live: LiveClaudeProcess[] = [];
+  for (const name of names) {
+    try {
+      const parsed = parseClaudeProcessFile(fs.readFileSync(path.join(dir, name), 'utf8'));
+      if (parsed && isProcessAlive(parsed.pid)) {
+        live.push(parsed);
+      }
+    } catch {
+      // deleted between readdir and read
+    }
+  }
+  return live;
+}
+
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);

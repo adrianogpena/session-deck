@@ -1,8 +1,17 @@
+import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
   acknowledgeSessionStatus,
+  appendClaudeRenameRecords,
+  clearSessionStatus,
+  CopilotStatusWatcher,
+  lastCopilotAssistantResponse,
+  listTrash,
+  purgeTrash,
+  restoreSession,
+  trashClaudeSession,
   ClaudeProcessWatcher,
   clearSessionMetaCache,
   createFolder,
@@ -29,8 +38,8 @@ import { ESC, fitAnsi, oneLine } from './ansi';
 import { matchesStatusFilter, nextTimeFilter, STATUS_CATEGORIES, StatusCategory, TimeFilter, withinTimeFilter } from './filters';
 import { findDetachKey, RESET_AGENT_MODES, splitKeys } from './keys';
 import { computeLayout, Layout, ptySizeFor, Rect } from './layout';
-import { disposeLive, resizeLive, spawnClaude } from './liveSession';
-import { appendRenameRecords, ClaudeProcs, DeckSession, discoverSessions, displayTitle, refreshLiveTitle } from './sessions';
+import { AgentType, disposeLive, resizeLive, spawnAgent, typeLine } from './liveSession';
+import { DeckSession, StatusTracker, discoverSessions, displayTitle, refreshLiveTitle } from './sessions';
 import { buildTree, TreeRow } from './tree';
 import { extractBackgroundReply, OSC11_QUERY, readOsTheme, Theme, ThemeName } from './theme';
 import {
@@ -111,7 +120,13 @@ export class App {
   private timeFilter: TimeFilter = 'all';
   /** Shown next to the SESSIONS title for a moment after resizing. */
   private resizeNote?: { text: string; until: number };
-  private readonly procs = new ClaudeProcs();
+  private readonly procs = new StatusTracker();
+  /** Tails the events log of Copilot sessions running here, writing their status files. */
+  private readonly copilotWatcher = new CopilotStatusWatcher(() => undefined);
+  /** `^`: show archived sessions (only) instead of the active ones. */
+  private archivedView = false;
+  /** Ids moved to the trash this run, newest last, for Ctrl+Z. */
+  private deleted: string[] = [];
   private readonly store = new DeckStore();
   private sidebarPct: number;
   private themePreference: ThemePreference;
@@ -135,6 +150,7 @@ export class App {
     // Turns Claude's live process status into Session Deck's status files ("done" after a turn, etc.),
     // the same way the extension does. Both can run at once: the watcher skips writes already made.
     new ClaudeProcessWatcher(() => undefined).start();
+    purgeTrash();
     await this.discover();
     this.pollProcs();
     setInterval(() => this.pollProcs(), 1000);
@@ -216,13 +232,17 @@ export class App {
   }
 
   private async discover(): Promise<void> {
-    this.sessions = await discoverSessions(this.sessions, this.store);
+    this.sessions = await discoverSessions(this.sessions);
     this.tree = this.store.getTree();
     this.rebuildRows();
   }
 
   private isVisible(s: DeckSession): boolean {
-    return matchesStatusFilter(this.procs.categoryOf(s), this.statusFilter) && withinTimeFilter(s.mtime, this.timeFilter);
+    return this.isArchived(s) === this.archivedView && matchesStatusFilter(this.procs.categoryOf(s), this.statusFilter) && withinTimeFilter(s.mtime, this.timeFilter);
+  }
+
+  private isArchived(s: DeckSession): boolean {
+    return !!s.id && this.store.getSession(s.id)?.archived === true;
   }
 
   private get filtering(): boolean {
@@ -270,6 +290,7 @@ export class App {
           s.file = undefined;
         }
         refreshLiveTitle(s, () => this.scheduleRender());
+        this.sendPendingPrompt(s);
       } else if (s.file && this.procs.isElsewhere(s)) {
         // Another terminal keeps writing to it: keep its "5m ago" current.
         try {
@@ -300,7 +321,8 @@ export class App {
       return false;
     }
     const { cols, rows } = this.ptySize() ?? { cols: 80, rows: 24 };
-    s.live = spawnClaude(s.id, s.cwd, cols, rows, {
+    const sessionId = s.id;
+    s.live = spawnAgent(s.agent, sessionId, !!s.isNew, s.cwd, cols, rows, {
       onData: (data) => {
         if (this.attached === s) {
           out.write(data);
@@ -310,6 +332,9 @@ export class App {
       },
       isAttached: () => this.attached === s,
       onExit: (exitCode) => {
+        if (s.agent === 'copilot' && sessionId) {
+          this.copilotWatcher.stop(sessionId);
+        }
         if (this.attached === s) {
           this.detach(`Session exited (code ${exitCode})`);
         } else {
@@ -317,6 +342,10 @@ export class App {
         }
       },
     });
+    if (s.agent === 'copilot' && sessionId) {
+      this.copilotWatcher.start(sessionId);
+    }
+    s.isNew = false; // from now on it resumes its own id
     return true;
   }
 
@@ -324,9 +353,13 @@ export class App {
     if (s.live) {
       disposeLive(s.live);
     }
+    if (s.agent === 'copilot' && s.id) {
+      this.copilotWatcher.stop(s.id);
+    }
     s.live = undefined;
-    // Stays listed only if it's resumable, i.e. its transcript exists (a new session with nothing sent has none).
-    if (!s.id || !s.file || !fs.existsSync(s.file)) {
+    // Stays listed only if it's resumable: found on disk, or (Claude) its transcript exists by now. A new
+    // session with nothing sent has neither.
+    if (!s.id || !(s.onDisk || (s.file && fs.existsSync(s.file)))) {
       this.sessions = this.sessions.filter((x) => x !== s);
     }
     this.rebuildRows();
@@ -356,7 +389,7 @@ export class App {
       title: displayTitle(s, this.store),
       status,
       elsewhere: this.procs.isElsewhere(s),
-      agent: 'claude',
+      agent: s.agent,
       timeLabel: active ? 'now' : humanizeSince(s.mtime),
       cwd: this.shortPath(s.cwd),
       id: s.id,
@@ -448,6 +481,14 @@ export class App {
     if (!name || name === displayTitle(s, this.store)) {
       return;
     }
+    if (s.agent === 'copilot') {
+      // Copilot has no /rename: a Session Deck name, shared with the extension.
+      if (s.id) {
+        void this.store.updateSession(s.id, { name }).then(() => this.scheduleRender());
+        this.flash(`Renamed to "${name}"`);
+      }
+      return;
+    }
     if (this.procs.isElsewhere(s)) {
       this.flash('That session is running in another terminal. Rename it there with /rename.');
       return;
@@ -459,11 +500,9 @@ export class App {
         this.flash('Session is busy or waiting for you. Rename it once it is idle (○).');
         return;
       }
-      // Text and Enter as separate writes, so the input box doesn't treat the Enter as part of a paste.
-      live.pty.write(`/rename ${name}`);
-      setTimeout(() => !live.exited && live.pty.write('\r'), 150);
+      typeLine(live, `/rename ${name}`);
     } else if (s.id && s.file) {
-      appendRenameRecords(s.file, s.id, name);
+      appendClaudeRenameRecords(s.file, s.id, name);
     } else {
       this.flash('Nothing to rename yet.');
       return;
@@ -514,7 +553,8 @@ export class App {
     const layout = this.layout();
 
     const counts = Object.fromEntries(STATUS_CATEGORIES.map((c) => [c, 0])) as Record<StatusCategory, number>;
-    for (const s of this.sessions) {
+    const inView = this.sessions.filter((s) => this.isArchived(s) === this.archivedView);
+    for (const s of inView) {
       counts[this.procs.categoryOf(s)]++;
     }
     const liveCount = this.sessions.filter((s) => s.live && !s.live.exited).length;
@@ -523,13 +563,13 @@ export class App {
     let frame = `${ESC}?2026h${ESC}0m`;
     // Truncated as a safety net: a wrapped top row would push the whole frame down.
     frame += `${ESC}1;1H${fitAnsi(renderHeader(t, cols, counts, liveCount, themeLabel(this.themePreference, this.theme.name), VERSION), cols)}`;
-    frame += `${ESC}2;1H${fitAnsi(renderPills(t, cols, this.sessions.length, counts, this.statusFilter, this.timeFilter), cols)}`;
+    frame += `${ESC}2;1H${fitAnsi(renderPills(t, cols, inView.length, counts, this.statusFilter, this.timeFilter), cols)}`;
 
     if (layout.list) {
       const listRows: ListRow[] = this.rows.map((r) =>
         r.kind === 'session' ? { kind: 'session', view: this.viewOf(r.session), isLast: r.isLast, depth: r.depth, pin: r.pin } : r
       );
-      const modes = [this.filtering ? 'filtered' : '', this.tree.sort === 'actionable' ? 'actionable' : '', this.tree.view === 'active' ? 'active on top' : '']
+      const modes = [this.archivedView ? 'archived' : '', this.filtering ? 'filtered' : '', this.tree.sort === 'actionable' ? 'actionable' : '', this.tree.view === 'active' ? 'active on top' : '']
         .filter(Boolean)
         .join(' · ');
       const note = this.resizeNote && Date.now() < this.resizeNote.until ? this.resizeNote.text : modes ? `· ${modes}` : '';
@@ -583,7 +623,9 @@ export class App {
 
   /** Starts loading a stopped session's last reply the first time it's previewed. */
   private lastResponseOf(s: DeckSession): string | null | undefined {
-    if (s.lastResponse === undefined && s.file) {
+    if (s.lastResponse === undefined && s.agent === 'copilot' && s.id) {
+      s.lastResponse = lastCopilotAssistantResponse(s.id) ?? '';
+    } else if (s.lastResponse === undefined && s.file) {
       s.lastResponse = null; // loading
       void readLastAssistantResponse(s.file).then((r) => {
         s.lastResponse = r || '';
@@ -789,8 +831,34 @@ export class App {
         }
         break;
       case 'n':
-        this.newSession();
+        this.newSession('claude');
         return;
+      case 'N':
+        this.newSession('copilot');
+        return;
+      case 'o':
+        this.openPromptInput();
+        break;
+      case 'c':
+        this.copyLastResponse();
+        break;
+      case 'R':
+        this.restart();
+        break;
+      case 'A':
+        this.toggleArchived();
+        break;
+      case '^':
+        this.archivedView = !this.archivedView;
+        this.rebuildRows();
+        this.flash(this.archivedView ? 'Archived sessions (A to unarchive, ^ to go back)' : 'Active sessions');
+        break;
+      case '\x1a': // Ctrl+Z
+        this.undoDelete();
+        break;
+      case 'Z':
+        this.openTrashPicker();
+        break;
       case 'e':
       case '\x1bOQ': // F2
       case '\x1b[12~': // F2 (some terminals)
@@ -828,7 +896,9 @@ export class App {
         this.reorder(1);
         break;
       case 'd':
-        if (row?.kind === 'folder') {
+        if (s) {
+          this.deleteSession(s);
+        } else if (row?.kind === 'folder') {
           const folderId = row.folderId;
           this.confirm = {
             question: `Delete folder "${row.name}"? Its projects move back to the top level.`,
@@ -949,7 +1019,7 @@ export class App {
     }
   }
 
-  private newSession(): void {
+  private newSession(agent: AgentType): void {
     const s = this.current;
     const project = this.selectedProject;
     if (!project) {
@@ -958,11 +1028,210 @@ export class App {
       return;
     }
     const cwd = s ? s.cwd : project.root;
-    const fresh: DeckSession = { id: null, cwd, projectRoot: project.root, projectKey: project.key, title: '(new session)', mtime: Date.now() };
+    // Copilot takes a pre-assigned id; Claude reports its own once started.
+    const fresh: DeckSession = {
+      agent,
+      id: agent === 'copilot' ? randomUUID() : null,
+      isNew: agent === 'copilot',
+      cwd,
+      projectRoot: project.root,
+      projectKey: project.key,
+      title: agent === 'copilot' ? '(new Copilot session)' : '(new session)',
+      mtime: Date.now(),
+    };
     this.sessions.unshift(fresh);
     this.rebuildRows();
     this.selectWhere((r) => r.kind === 'session' && r.session === fresh);
     this.attach(fresh);
+  }
+
+  /** `o`: a one-line prompt, sent without attaching. A stopped session is started first and gets it once ready. */
+  private openPromptInput(): void {
+    const s = this.current;
+    if (!s) {
+      this.flash('Select a session to send a prompt to.');
+      return;
+    }
+    if (this.procs.isElsewhere(s)) {
+      this.flash('That session is running in another terminal. Send it from there.');
+      return;
+    }
+    if (this.procs.statusOf(s) === 'waiting') {
+      this.flash('It is waiting for an answer. Attach (Enter) to reply.');
+      return;
+    }
+    this.prompt = { label: `Prompt for ${displayTitle(s, this.store)}`, value: '', onSubmit: (text) => this.sendPrompt(s, text) };
+  }
+
+  private sendPrompt(s: DeckSession, rawText: string): void {
+    const text = oneLine(rawText);
+    if (!text) {
+      return;
+    }
+    if (!s.live || s.live.exited) {
+      if (s.live) {
+        this.kill(s);
+      }
+      if (!this.start(s)) {
+        return;
+      }
+    }
+    s.pendingPrompt = text;
+    this.sendPendingPrompt(s);
+    this.flash(s.pendingPrompt ? 'Starting… the prompt is sent once it is ready' : 'Prompt sent');
+  }
+
+  /**
+   * Types a queued prompt once the agent is ready for input: idle (or just done), and quiet for a
+   * moment so a freshly started agent has drawn its input box. Never into a "waiting" prompt.
+   */
+  private sendPendingPrompt(s: DeckSession): void {
+    const live = s.live;
+    const status = this.procs.statusOf(s);
+    if (!s.pendingPrompt || !live || live.exited || (status !== 'idle' && status !== 'done') || Date.now() - live.lastOutputAt < 1000) {
+      return;
+    }
+    typeLine(live, s.pendingPrompt);
+    s.pendingPrompt = undefined;
+    this.markSeen(s);
+  }
+
+  /** `c`: copies the last response through the terminal (OSC 52), which works in Windows Terminal and over SSH. */
+  private copyLastResponse(): void {
+    const s = this.current;
+    if (!s) {
+      this.flash('Select a session to copy its last response.');
+      return;
+    }
+    const copy = (text: string | undefined) => {
+      if (!text) {
+        this.flash('No response to copy yet.');
+        return;
+      }
+      out.write(`\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x07`);
+      this.flash(`Copied the last response (${text.length} characters)`);
+    };
+    if (s.agent === 'copilot') {
+      copy(s.id ? lastCopilotAssistantResponse(s.id) : undefined);
+    } else if (s.file) {
+      void readLastAssistantResponse(s.file).then(copy);
+    } else {
+      copy(undefined);
+    }
+  }
+
+  /** `R`: a fresh agent process on the same conversation (e.g. to pick up changed settings or MCP servers). */
+  private restart(): void {
+    const s = this.current;
+    if (!s || this.procs.isElsewhere(s)) {
+      this.flash(s ? 'That session is running in another terminal.' : 'Select a session to restart.');
+      return;
+    }
+    if (s.live) {
+      disposeLive(s.live);
+      if (s.agent === 'copilot' && s.id) {
+        this.copilotWatcher.stop(s.id);
+      }
+      s.live = undefined;
+    }
+    if (s.agent === 'claude' && s.id && !(s.file && fs.existsSync(s.file))) {
+      s.id = null; // nothing was sent yet: there's no conversation to resume, start a new one
+    }
+    if (this.start(s)) {
+      this.flash('Restarted');
+    }
+  }
+
+  /** `A`: archive (hide) or, in the archived view, unarchive. Shared with the extension. */
+  private toggleArchived(): void {
+    const s = this.current;
+    if (!s?.id) {
+      this.flash('Select a session to archive.');
+      return;
+    }
+    const archive = !this.isArchived(s);
+    if (archive && s.live && !s.live.exited) {
+      const status = this.procs.statusOf(s);
+      if (status === 'running' || status === 'waiting') {
+        this.flash('It is still working. Stop it (x) or wait until it is idle to archive it.');
+        return;
+      }
+      this.kill(s);
+    }
+    void this.store.updateSession(s.id, { archived: archive }).then(() => {
+      this.rebuildRows();
+      this.scheduleRender();
+    });
+    this.flash(archive ? 'Archived (^ shows archived sessions)' : 'Unarchived');
+  }
+
+  /** `d` on a session: moves its transcript to the trash (Ctrl+Z or Z to bring it back). */
+  private deleteSession(s: DeckSession): void {
+    if (s.agent === 'copilot') {
+      this.flash('Copilot sessions live in its own database: archive them (A) instead.');
+      return;
+    }
+    if ((s.live && !s.live.exited) || this.procs.isElsewhere(s)) {
+      this.flash('Stop the session before deleting it.');
+      return;
+    }
+    if (!s.id || !s.file || !fs.existsSync(s.file)) {
+      this.flash('Nothing on disk to delete.');
+      return;
+    }
+    try {
+      trashClaudeSession(s.file, s.id, displayTitle(s, this.store));
+    } catch (err) {
+      this.flash(`Could not move it to the trash: ${(err as Error).message}`);
+      return;
+    }
+    clearSessionStatus(s.id);
+    this.deleted.push(s.id);
+    if (s.live) {
+      disposeLive(s.live);
+    }
+    this.sessions = this.sessions.filter((x) => x !== s);
+    this.rebuildRows();
+    this.flash('Moved to the trash · Ctrl+Z to undo · Z to see the trash');
+  }
+
+  private undoDelete(): void {
+    const id = this.deleted.pop();
+    if (!id) {
+      this.flash('Nothing to undo. Z shows the trash.');
+      return;
+    }
+    this.restoreFromTrash(id);
+  }
+
+  private restoreFromTrash(sessionId: string): void {
+    try {
+      const entry = restoreSession(sessionId);
+      this.deleted = this.deleted.filter((d) => d !== sessionId);
+      clearSessionMetaCache();
+      void this.discover().then(() => {
+        this.selectWhere((r) => r.kind === 'session' && r.session.id === sessionId);
+        this.scheduleRender();
+      });
+      this.flash(`Restored "${entry.title}"`);
+    } catch (err) {
+      this.flash((err as Error).message);
+    }
+  }
+
+  /** `Z`: the trash, newest first; Enter restores. Items older than 30 days are removed on startup. */
+  private openTrashPicker(): void {
+    const entries = listTrash();
+    if (entries.length === 0) {
+      this.flash('The trash is empty.');
+      return;
+    }
+    this.picker = {
+      title: 'Trash · Enter restores',
+      items: entries.map((e) => `${e.title} · ${humanizeSince(e.trashedAt)}`),
+      index: 0,
+      onPick: (i) => this.restoreFromTrash(entries[i].sessionId),
+    };
   }
 
   private rename(): void {
@@ -1079,6 +1348,7 @@ export class App {
   }
 
   private quit(): void {
+    this.copilotWatcher.dispose();
     for (const s of this.sessions) {
       if (s.live && !s.live.exited) {
         try {

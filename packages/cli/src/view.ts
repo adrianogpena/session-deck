@@ -318,7 +318,7 @@ type Hint = [key: string, label: string];
 
 /** Widest first; the first variant that fits is shown. */
 const HELP_VARIANTS: Hint[][] = [
-  [['↑↓', 'select'], ['⏎', 'attach'], ['n', 'new'], ['e', 'rename'], ['x', 'stop'], ['g', 'folder'], ['M', 'move'], ['K J', 'reorder'], [',', 'pin'], ['?', 'help'], ['q', 'quit']],
+  [['↑↓', 'select'], ['⏎', 'attach'], ['n', 'new'], ['o', 'prompt'], ['e', 'rename'], ['x', 'stop'], ['A', 'archive'], ['d', 'delete'], ['M', 'move'], ['?', 'help'], ['q', 'quit']],
   [['↑↓', 'select'], ['⏎', 'attach'], ['n', 'new'], ['e', 'rename'], ['x', 'stop'], ['?', 'help'], ['q', 'quit']],
   [['⏎', 'attach'], ['?', 'help'], ['q', 'quit']],
   [['?', 'help']],
@@ -365,10 +365,16 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
     title: 'SESSIONS',
     keys: [
       ['s', 'Start in the background'],
-      ['n', 'New session in the selected project'],
+      ['R', 'Restart (a fresh process, same conversation)'],
+      ['n  N', 'New Claude / Copilot session in the project'],
+      ['o', 'Send a one-line prompt without attaching'],
+      ['c', 'Copy the last response'],
       ['e  F2', "Rename (same as Claude's /rename)"],
       ['x', 'Stop the selected session'],
       ['u', 'Mark as unread (finished, not seen)'],
+      ['A', 'Archive / unarchive (^ shows archived)'],
+      ['d', 'Delete: move to the trash'],
+      ['Ctrl+Z  Z', 'Undo the delete / open the trash'],
       [',', 'Pin: top · bottom · off'],
       ['r', 'Refresh the list'],
     ],

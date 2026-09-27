@@ -121,6 +121,21 @@ export class AgentTerminalService implements vscode.Disposable {
     this.sessionTerminals.get(sessionId)?.dispose();
   }
 
+  /**
+   * Types a line into this session's terminal and submits it, e.g. `/rename`. Text and Enter go as
+   * separate writes, so the agent's input box doesn't take the Enter as part of a paste. `false` if the
+   * session has no terminal here.
+   */
+  public sendLineToSession(sessionId: string, text: string): boolean {
+    const terminal = this.sessionTerminals.get(sessionId);
+    if (!terminal) {
+      return false;
+    }
+    terminal.sendText(text, false);
+    setTimeout(() => terminal.sendText('\r', false), 150);
+    return true;
+  }
+
   private trackTerminal(sessionId: string, terminal: vscode.Terminal, label: string, agent: AgentType): void {
     this.sessionTerminals.set(sessionId, terminal);
     this.sessionLabels.set(sessionId, label);

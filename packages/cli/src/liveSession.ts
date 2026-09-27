@@ -14,6 +14,8 @@ export interface LiveSession {
   exitCode?: number;
   /** An error only visible on the screen (e.g. a failed sign-in), see `detectScreenError`. */
   screenError?: string;
+  /** When the agent last printed anything: a prompt is typed only once its output has settled. */
+  lastOutputAt: number;
 }
 
 export interface LiveSessionHandlers {
@@ -23,21 +25,33 @@ export interface LiveSessionHandlers {
   onExit(exitCode: number): void;
 }
 
-let claudeExe: string | undefined;
+export type AgentType = 'claude' | 'copilot';
 
-function resolveClaudeExe(): string {
-  if (claudeExe) {
-    return claudeExe;
-  }
-  claudeExe = 'claude';
-  if (process.platform === 'win32') {
-    try {
-      claudeExe = execFileSync('where.exe', ['claude.exe'], { encoding: 'utf8' }).split(/\r?\n/)[0].trim();
-    } catch {
-      claudeExe = 'claude.exe';
+const executables = new Map<AgentType, string>();
+
+/** The agent's real executable (`where.exe` on Windows, so ConPTY runs the .exe rather than an npm .cmd shim). */
+function resolveExecutable(agent: AgentType): string {
+  let exe = executables.get(agent);
+  if (!exe) {
+    exe = agent;
+    if (process.platform === 'win32') {
+      try {
+        exe = execFileSync('where.exe', [`${agent}.exe`], { encoding: 'utf8' }).split(/\r?\n/)[0].trim();
+      } catch {
+        exe = `${agent}.exe`;
+      }
     }
+    executables.set(agent, exe);
   }
-  return claudeExe;
+  return exe;
+}
+
+/** Command-line arguments to resume `sessionId`, or to start a new session (Copilot takes a pre-assigned id, Claude assigns its own). */
+function agentArgs(agent: AgentType, sessionId: string | null, isNew: boolean): string[] {
+  if (agent === 'copilot') {
+    return sessionId ? [isNew ? `--session-id=${sessionId}` : `--resume=${sessionId}`] : [];
+  }
+  return sessionId && !isNew ? ['--resume', sessionId] : [];
 }
 
 /** Vars a parent Claude Code process sets for its children — inherited, they make the agent think it's a sub-session (e.g. transcript saving off) when sdeck is run from inside Claude Code. */
@@ -65,9 +79,20 @@ function agentEnv(): Record<string, string> {
   return env;
 }
 
-/** Starts `claude` (resuming `sessionId` when given) in a background PTY of the given size. */
-export function spawnClaude(sessionId: string | null, cwd: string, cols: number, rows: number, handlers: LiveSessionHandlers): LiveSession {
-  const proc = pty.spawn(resolveClaudeExe(), sessionId ? ['--resume', sessionId] : [], {
+/**
+ * Starts the agent in a background PTY of the given size: resuming `sessionId`, or starting a new
+ * session when `isNew` (with `sessionId` as its pre-assigned id, for Copilot).
+ */
+export function spawnAgent(
+  agent: AgentType,
+  sessionId: string | null,
+  isNew: boolean,
+  cwd: string,
+  cols: number,
+  rows: number,
+  handlers: LiveSessionHandlers
+): LiveSession {
+  const proc = pty.spawn(resolveExecutable(agent), agentArgs(agent, sessionId, isNew), {
     name: 'xterm-256color',
     cols,
     rows,
@@ -77,7 +102,7 @@ export function spawnClaude(sessionId: string | null, cwd: string, cols: number,
   const term = new Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true });
   const serializer = new SerializeAddon();
   term.loadAddon(serializer);
-  const live: LiveSession = { pty: proc, term, serializer, pid: proc.pid, exited: false };
+  const live: LiveSession = { pty: proc, term, serializer, pid: proc.pid, exited: false, lastOutputAt: Date.now() };
 
   // At most twice a second, after output settles into the mirror.
   let screenCheck: NodeJS.Timeout | undefined;
@@ -87,6 +112,7 @@ export function spawnClaude(sessionId: string | null, cwd: string, cols: number,
   };
   proc.onData((data) => {
     term.write(data);
+    live.lastOutputAt = Date.now();
     screenCheck ??= setTimeout(checkScreen, 500);
     handlers.onData(data);
   });
@@ -126,4 +152,10 @@ export function disposeLive(live: LiveSession): void {
     }
   }
   live.term.dispose();
+}
+
+/** Types a line into the agent and submits it: text and Enter as separate writes, so the input box doesn't treat the Enter as part of a paste. */
+export function typeLine(live: LiveSession, text: string): void {
+  live.pty.write(text);
+  setTimeout(() => !live.exited && live.pty.write('\r'), 150);
 }

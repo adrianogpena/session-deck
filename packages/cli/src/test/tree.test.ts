@@ -6,7 +6,7 @@ import { buildTree, projectLabels, TreeRow } from '../tree';
 
 function session(id: string, project: string, mtime: number): DeckSession {
   const root = `C:\\repos\\${project}`;
-  return { id, cwd: root, projectRoot: root, projectKey: root.toLowerCase(), title: id, mtime };
+  return { agent: 'claude', id, cwd: root, projectRoot: root, projectKey: root.toLowerCase(), title: id, mtime };
 }
 
 const key = (project: string) => `c:\\repos\\${project}`;

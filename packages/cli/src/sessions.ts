@@ -1,5 +1,4 @@
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import {
   decodeProjectPath,
@@ -7,6 +6,8 @@ import {
   getClaudeProjectsDir,
   getSessionStatusDir,
   isSessionStatusUnseen,
+  listCopilotSessions,
+  listLiveClaudeProcesses,
   listProjectDirNames,
   listSessionFiles,
   mapWithConcurrency,
@@ -17,25 +18,32 @@ import {
 } from '@session-deck/core';
 import { oneLine } from './ansi';
 import type { StatusCategory } from './filters';
-import type { LiveSession } from './liveSession';
+import type { AgentType, LiveSession } from './liveSession';
 
 const MAX_SESSIONS = 30;
 
 export interface DeckSession {
-  /** `null` until a brand-new session's id shows up in Claude's pid file. */
+  agent: AgentType;
+  /** `null` until a brand-new Claude session's id shows up in its pid file (Copilot's is pre-assigned). */
   id: string | null;
+  /** Copilot only: started with this pre-assigned id and not resumed yet (so it's "new", not "resume"). */
+  isNew?: boolean;
   file?: string;
   cwd: string;
   /** Git root of `cwd` (worktrees and subfolders share one), and its `normalizeFsPath` key, as in the extension. */
   projectRoot: string;
   projectKey: string;
-  /** Claude's own title (`/rename`, AI title) or the first prompt. See {@link displayTitle} for what's shown. */
+  /** Claude's own title (`/rename`, AI title) or first prompt; Copilot's summary. See {@link displayTitle} for what's shown. */
   title: string;
   mtime: number;
   live?: LiveSession;
   /** `undefined` = not loaded, `null` = loading. */
   lastResponse?: string | null;
   titleRefreshing?: boolean;
+  /** A one-line prompt (`o`) to type once the agent is ready. */
+  pendingPrompt?: string;
+  /** Found by discovery (a Claude transcript or a Copilot session with a turn): stays listed when stopped. */
+  onDisk?: boolean;
 }
 
 /**
@@ -58,8 +66,11 @@ export function displayTitle(s: DeckSession, store: DeckStore): string {
   return (s.id && store.getSession(s.id)?.name) || s.title;
 }
 
-/** The most recent Claude sessions on disk that have a prompt and aren't archived, merged with the live ones (kept, with their PTYs). */
-export async function discoverSessions(current: DeckSession[], store: DeckStore): Promise<DeckSession[]> {
+/**
+ * The most recent Claude and Copilot sessions (archived ones included, for the archived view), merged
+ * with the live ones (kept, with their PTYs).
+ */
+export async function discoverSessions(current: DeckSession[]): Promise<DeckSession[]> {
   const files: { full: string; dir: string; id: string; mtime: number }[] = [];
   for (const dir of listProjectDirNames()) {
     for (const f of listSessionFiles(dir)) {
@@ -78,16 +89,24 @@ export async function discoverSessions(current: DeckSession[], store: DeckStore)
     if (found.length >= MAX_SESSIONS) {
       break;
     }
-    if (store.getSession(f.id)?.archived) {
-      continue;
-    }
     const meta = await readSessionMeta(f.full);
     if (!meta.firstPrompt) {
       continue; // empty/aborted sessions
     }
     const cwd = meta.cwd || decodeProjectPath(f.dir);
-    found.push({ id: f.id, file: f.full, cwd, projectRoot: cwd, projectKey: normalizeFsPath(cwd), title: oneLine(meta.title || meta.firstPrompt), mtime: f.mtime });
+    found.push({
+      agent: 'claude',
+      onDisk: true,
+      id: f.id,
+      file: f.full,
+      cwd,
+      projectRoot: cwd,
+      projectKey: normalizeFsPath(cwd),
+      title: oneLine(meta.title || meta.firstPrompt),
+      mtime: f.mtime,
+    });
   }
+  found.push(...discoverCopilotSessions());
   await assignProjects(found);
 
   // Known sessions are updated in place, not replaced: the UI tracks the selection (and the previous
@@ -103,9 +122,32 @@ export async function discoverSessions(current: DeckSession[], store: DeckStore)
       existing.lastResponse = undefined; // transcript changed since it was loaded
     }
     const { title, file, mtime, cwd, projectRoot, projectKey } = s;
-    return Object.assign(existing, { title, file, mtime, cwd, projectRoot, projectKey });
+    return Object.assign(existing, { title, file, mtime, cwd, projectRoot, projectKey, onDisk: true });
   });
   return [...current.filter((s) => s.live && !merged.includes(s)), ...merged];
+}
+
+/** Copilot's own session list (its `session-store.db`), most recent first; sessions without a summary never got a turn. */
+function discoverCopilotSessions(): DeckSession[] {
+  let rows;
+  try {
+    rows = listCopilotSessions();
+  } catch {
+    return []; // Copilot not installed, or its store is unreadable
+  }
+  return rows
+    .filter((r) => r.summary)
+    .slice(0, MAX_SESSIONS)
+    .map((r) => ({
+      agent: 'copilot' as const,
+      onDisk: true,
+      id: r.id,
+      cwd: r.cwd,
+      projectRoot: r.cwd,
+      projectKey: normalizeFsPath(r.cwd),
+      title: oneLine(r.summary ?? ''),
+      mtime: Date.parse(r.updatedAt) || 0,
+    }));
 }
 
 const GIT_RESOLVE_CONCURRENCY = 8;
@@ -119,24 +161,17 @@ async function assignProjects(sessions: DeckSession[]): Promise<void> {
   });
 }
 
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
- * Every live `claude` process on the machine, from Claude's own `~/.claude/sessions/<pid>.json` files,
- * plus which sessions have an unseen "done"/"error" (Session Deck's status files + the shared seen
- * marks). Both are read once per {@link poll}, not on every frame.
+ * Status for every session, read once per {@link poll} rather than on every frame:
+ * - Claude: every live `claude` process on the machine, from its own pid files.
+ * - Copilot: Session Deck's status files, written by the Copilot watcher (this UI's or the extension's).
+ * - Both: which sessions have an unseen "done"/"error" (status files + the shared seen marks).
  */
-export class ClaudeProcs {
+export class StatusTracker {
   private bySession = new Map<string, ClaudeProc>();
   private byPid = new Map<number, ClaudeProc>();
   private unseen = new Map<string, 'done' | 'error'>();
+  private written = new Map<string, string>();
 
   poll(): void {
     this.pollUnseen();
@@ -145,6 +180,7 @@ export class ClaudeProcs {
 
   private pollUnseen(): void {
     this.unseen = new Map();
+    this.written = new Map();
     let names: string[];
     try {
       names = fs.readdirSync(getSessionStatusDir()).filter((n) => n.endsWith('.json'));
@@ -154,6 +190,9 @@ export class ClaudeProcs {
     for (const name of names) {
       const id = name.slice(0, -'.json'.length);
       const status = readSessionStatus(id)?.status;
+      if (status) {
+        this.written.set(id, status);
+      }
       if ((status === 'done' || status === 'error') && isSessionStatusUnseen(id)) {
         this.unseen.set(id, status);
       }
@@ -161,26 +200,11 @@ export class ClaudeProcs {
   }
 
   private pollProcesses(): void {
-    const dir = path.join(os.homedir(), '.claude', 'sessions');
     this.bySession = new Map();
     this.byPid = new Map();
-    let names: string[];
-    try {
-      names = fs.readdirSync(dir).filter((n) => n.endsWith('.json'));
-    } catch {
-      names = [];
-    }
-    for (const n of names) {
-      try {
-        const p = JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8'));
-        if (typeof p.pid === 'number' && typeof p.sessionId === 'string' && isAlive(p.pid)) {
-          const rec = { pid: p.pid, sessionId: p.sessionId, status: String(p.status) };
-          this.bySession.set(p.sessionId, rec);
-          this.byPid.set(p.pid, rec);
-        }
-      } catch {
-        // partial write
-      }
+    for (const rec of listLiveClaudeProcesses()) {
+      this.bySession.set(rec.sessionId, rec);
+      this.byPid.set(rec.pid, rec);
     }
   }
 
@@ -195,6 +219,9 @@ export class ClaudeProcs {
       const status = CLAUDE_STATUS[rec.status] || 'idle';
       return status === 'idle' && unseen === 'done' ? 'done' : status;
     };
+    if (s.agent === 'copilot') {
+      return this.copilotStatusOf(s, unseen);
+    }
     if (s.live) {
       if (s.live.exited) {
         return 'exited';
@@ -212,9 +239,27 @@ export class ClaudeProcs {
     return unseen === 'done' ? 'done' : unseen === 'error' ? 'exited' : 'stopped';
   }
 
-  /** Not running here, but a `claude` process elsewhere (another terminal, VS Code) has it open. */
+  /** Copilot has no process registry: a live session here reads its status file; elsewhere can't be told apart from stopped. */
+  private copilotStatusOf(s: DeckSession, unseen: 'done' | 'error' | undefined): SessionStatus {
+    if (!s.live) {
+      return unseen === 'done' ? 'done' : unseen === 'error' ? 'exited' : 'stopped';
+    }
+    if (s.live.exited) {
+      return 'exited';
+    }
+    const written = s.id ? this.written.get(s.id) : undefined;
+    if (written === 'running' || written === 'waiting') {
+      return written;
+    }
+    if (unseen) {
+      return unseen === 'done' ? 'done' : 'error';
+    }
+    return 'idle';
+  }
+
+  /** Not running here, but a `claude` process elsewhere (another terminal, VS Code) has it open. Never true for Copilot (no way to tell). */
   isElsewhere(s: DeckSession): boolean {
-    return !s.live && !!s.id && this.bySession.has(s.id);
+    return s.agent === 'claude' && !s.live && !!s.id && this.bySession.has(s.id);
   }
 
   /** "done" counts as waiting (it's waiting for a look); a screen error or an error exit counts as error. */
@@ -235,7 +280,7 @@ export class ClaudeProcs {
 
 /** Live sessions get re-titled as Claude updates its AI title. `readSessionMeta` is mtime-cached, so an unchanged transcript costs one stat. */
 export function refreshLiveTitle(s: DeckSession, onChange: () => void): void {
-  if (!s.id || s.titleRefreshing) {
+  if (s.agent !== 'claude' || !s.id || s.titleRefreshing) {
     return;
   }
   if (!s.file) {
@@ -263,32 +308,4 @@ export function refreshLiveTitle(s: DeckSession, onChange: () => void): void {
     .finally(() => {
       s.titleRefreshing = false;
     });
-}
-
-/**
- * The records Claude's own `/rename` writes, for a session that isn't running: `custom-title` is what
- * `/resume` and the extension list, `agent-name` is what a resumed Claude shows on its input box
- * border. Writing only the first leaves the old name there.
- */
-export function appendRenameRecords(file: string, sessionId: string, name: string): void {
-  let prefix = '';
-  try {
-    const fd = fs.openSync(file, 'r');
-    try {
-      const { size } = fs.fstatSync(fd);
-      const last = Buffer.alloc(1);
-      if (size > 0 && fs.readSync(fd, last, 0, 1, size - 1) === 1 && last[0] !== 0x0a) {
-        prefix = '\n'; // never glue our record onto a partial last line
-      }
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    // unreadable: append anyway, the write below reports real errors
-  }
-  const records = [
-    { type: 'custom-title', customTitle: name, sessionId },
-    { type: 'agent-name', agentName: name, sessionId },
-  ];
-  fs.appendFileSync(file, prefix + records.map((r) => `${JSON.stringify(r)}\n`).join(''));
 }
