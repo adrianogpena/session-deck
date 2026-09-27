@@ -12,8 +12,11 @@ const UNDERLINE = '\x1b[4m';
 const GLYPHS: Record<SessionStatus, { char: string; role: Role; bold: boolean }> = {
   running: { char: '●', role: 'green', bold: true },
   waiting: { char: '◐', role: 'yellow', bold: true },
+  // Finished, not seen yet: waiting for a look, so it reads like "waiting".
+  done: { char: '◐', role: 'yellow', bold: true },
   idle: { char: '○', role: 'textDim', bold: false },
   starting: { char: '⟳', role: 'yellow', bold: false },
+  error: { char: '✕', role: 'red', bold: true },
   exited: { char: '✕', role: 'red', bold: true },
   stopped: { char: '■', role: 'textDim', bold: false },
 };
@@ -38,6 +41,8 @@ export interface SessionView {
   timeLabel: string;
   cwd: string;
   id: string | null;
+  /** Replaces the plain status text, e.g. the screen error ("sign-in failed · run /login"). */
+  detail?: string;
 }
 
 interface GroupCounts {
@@ -244,8 +249,10 @@ export function renderGroupPreviewPanel(t: Theme, rect: Rect, group: GroupPrevie
 const STATUS_TEXT: Record<SessionStatus, string> = {
   running: 'running',
   waiting: 'waiting for you',
+  done: 'finished · not seen yet',
   idle: 'idle',
   starting: 'starting',
+  error: 'error',
   exited: 'exited',
   stopped: 'not running',
 };
@@ -264,7 +271,8 @@ export function renderPreviewPanel(t: Theme, rect: Rect, content: PreviewContent
     return [...panelHeader(t, rect.width, 'PREVIEW', ''), ...Array.from({ length: rect.height - PANEL_HEADER_ROWS }, () => blank(rect.width))];
   }
   const { view: v } = content;
-  const statusText = v.elsewhere ? `${STATUS_TEXT[v.status]} in another terminal` : STATUS_TEXT[v.status];
+  const base = v.detail ?? STATUS_TEXT[v.status];
+  const statusText = v.elsewhere ? `${base} in another terminal` : base;
   const titleLine = `${glyph(t, v.status)} ${BOLD}${t.fg('accent')}${fit(v.title, Math.max(1, rect.width - 2))}${RESET}`;
   const meta = ` ${statusText} · ${v.agent} · ${v.timeLabel} · ${v.cwd} `;
   const metaFit = fit(meta, Math.max(0, rect.width - 2)).trimEnd();
@@ -360,6 +368,7 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
       ['n', 'New session in the selected project'],
       ['e  F2', "Rename (same as Claude's /rename)"],
       ['x', 'Stop the selected session'],
+      ['u', 'Mark as unread (finished, not seen)'],
       [',', 'Pin: top · bottom · off'],
       ['r', 'Refresh the list'],
     ],

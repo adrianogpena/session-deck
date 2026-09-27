@@ -5,11 +5,14 @@ import {
   decodeProjectPath,
   DeckStore,
   getClaudeProjectsDir,
+  getSessionStatusDir,
+  isSessionStatusUnseen,
   listProjectDirNames,
   listSessionFiles,
   mapWithConcurrency,
   normalizeFsPath,
   readSessionMeta,
+  readSessionStatus,
   resolveProjectRoot,
 } from '@session-deck/core';
 import { oneLine } from './ansi';
@@ -35,8 +38,12 @@ export interface DeckSession {
   titleRefreshing?: boolean;
 }
 
-/** For a session open in another terminal, the status of that other process (see {@link ClaudeProcs.isElsewhere}). */
-export type SessionStatus = 'running' | 'waiting' | 'idle' | 'starting' | 'exited' | 'stopped';
+/**
+ * For a session open in another terminal, the status of that other process (see {@link ClaudeProcs.isElsewhere}).
+ * `done`: finished a turn the user hasn't seen yet. `error`: an error only visible on the screen
+ * (e.g. a failed sign-in). `exited`: the agent process ended with an error.
+ */
+export type SessionStatus = 'running' | 'waiting' | 'done' | 'idle' | 'starting' | 'error' | 'exited' | 'stopped';
 
 const CLAUDE_STATUS: Record<string, SessionStatus> = { busy: 'running', shell: 'running', waiting: 'waiting', idle: 'idle' };
 
@@ -121,12 +128,39 @@ function isAlive(pid: number): boolean {
   }
 }
 
-/** Every live `claude` process on the machine, from Claude's own `~/.claude/sessions/<pid>.json` files. */
+/**
+ * Every live `claude` process on the machine, from Claude's own `~/.claude/sessions/<pid>.json` files,
+ * plus which sessions have an unseen "done"/"error" (Session Deck's status files + the shared seen
+ * marks). Both are read once per {@link poll}, not on every frame.
+ */
 export class ClaudeProcs {
   private bySession = new Map<string, ClaudeProc>();
   private byPid = new Map<number, ClaudeProc>();
+  private unseen = new Map<string, 'done' | 'error'>();
 
   poll(): void {
+    this.pollUnseen();
+    this.pollProcesses();
+  }
+
+  private pollUnseen(): void {
+    this.unseen = new Map();
+    let names: string[];
+    try {
+      names = fs.readdirSync(getSessionStatusDir()).filter((n) => n.endsWith('.json'));
+    } catch {
+      return; // no status written yet
+    }
+    for (const name of names) {
+      const id = name.slice(0, -'.json'.length);
+      const status = readSessionStatus(id)?.status;
+      if ((status === 'done' || status === 'error') && isSessionStatusUnseen(id)) {
+        this.unseen.set(id, status);
+      }
+    }
+  }
+
+  private pollProcesses(): void {
     const dir = path.join(os.homedir(), '.claude', 'sessions');
     this.bySession = new Map();
     this.byPid = new Map();
@@ -155,15 +189,27 @@ export class ClaudeProcs {
   }
 
   statusOf(s: DeckSession): SessionStatus {
+    const unseen = s.id ? this.unseen.get(s.id) : undefined;
+    // An idle agent whose last turn the user hasn't seen yet is "done", i.e. waiting for a look.
+    const fromProcess = (rec: ClaudeProc): SessionStatus => {
+      const status = CLAUDE_STATUS[rec.status] || 'idle';
+      return status === 'idle' && unseen === 'done' ? 'done' : status;
+    };
     if (s.live) {
       if (s.live.exited) {
         return 'exited';
       }
+      if (s.live.screenError) {
+        return 'error';
+      }
       const rec = this.byPid.get(s.live.pid);
-      return rec ? CLAUDE_STATUS[rec.status] || 'idle' : 'starting';
+      return rec ? fromProcess(rec) : 'starting';
     }
     const external = s.id ? this.bySession.get(s.id) : undefined;
-    return external ? CLAUDE_STATUS[external.status] || 'idle' : 'stopped';
+    if (external) {
+      return fromProcess(external);
+    }
+    return unseen === 'done' ? 'done' : unseen === 'error' ? 'exited' : 'stopped';
   }
 
   /** Not running here, but a `claude` process elsewhere (another terminal, VS Code) has it open. */
@@ -171,9 +217,19 @@ export class ClaudeProcs {
     return !s.live && !!s.id && this.bySession.has(s.id);
   }
 
+  /** "done" counts as waiting (it's waiting for a look); a screen error or an error exit counts as error. */
   categoryOf(s: DeckSession): StatusCategory {
     const status = this.statusOf(s);
-    return status === 'starting' ? 'running' : status === 'exited' ? 'error' : status;
+    switch (status) {
+      case 'starting':
+        return 'running';
+      case 'done':
+        return 'waiting';
+      case 'exited':
+        return 'error';
+      default:
+        return status;
+    }
   }
 }
 

@@ -202,7 +202,7 @@ See [section 5](#5-open-decisions).
 - Group counts with `●` and `◐`, remembered collapse state, `1`–`9` jumps, `` ` `` previous session.
 - Sort modes and the "active on top" view.
 
-### Phase 4: status and attention
+### Phase 4: status and attention **(done)**
 
 - Seen/unseen model (waiting vs idle), with `u` to mark unseen.
 - Screen-reading fallback for errors (401, `/login`).

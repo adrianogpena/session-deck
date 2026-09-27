@@ -1,24 +1,45 @@
 import notifier from 'node-notifier';
-import { readEffectiveSessionStatus, SessionStatus } from './sessionStatus';
+import { claimNotification, readEffectiveSessionStatus, SessionStatus } from './sessionStatus';
 
 export interface WatchedSession {
   sessionId: string;
   label: string;
 }
 
-const NOTIFIABLE_STATUSES: ReadonlySet<SessionStatus> = new Set(['waiting', 'error']);
+export interface WaitingNotifierOptions {
+  /** Raster icon for the notification (most OS notifiers ignore SVG). */
+  iconPath?: string;
+  /** Statuses worth a notification. Defaults to "waiting" and "error". */
+  statuses?: readonly SessionStatus[];
+  /** Skip a session the user is already looking at. */
+  skip?(sessionId: string): boolean;
+}
+
+const DEFAULT_STATUSES: readonly SessionStatus[] = ['waiting', 'error'];
+
+const MESSAGES: Record<SessionStatus, (label: string) => string> = {
+  waiting: (label) => `${label} is waiting for your input`,
+  done: (label) => `${label} finished`,
+  error: (label) => `${label} exited with an error`,
+  running: (label) => `${label} is running`,
+};
 
 /**
- * Fires an OS desktop notification when a watched session transitions into "waiting"/"error" — not
+ * Fires an OS desktop notification when a watched session transitions into one of `statuses` — not
  * repeatedly, and not on first sight (so opening onto an already-waiting session stays silent).
- * `onActivated` reveals that session's terminal if the OS notifier reports it was clicked.
+ * `claimNotification` makes sure the extension and the terminal UI don't both notify the same event.
+ * `onActivated` is called with the session id if the OS notifier reports it was clicked.
  */
 export class WaitingNotifier {
   private readonly lastStatus = new Map<string, SessionStatus | undefined>();
+  private readonly options: WaitingNotifierOptions;
 
-  constructor(private readonly iconPath: string) {}
+  constructor(options: WaitingNotifierOptions | string = {}) {
+    this.options = typeof options === 'string' ? { iconPath: options } : options;
+  }
 
   check(sessions: readonly WatchedSession[], onActivated?: (sessionId: string) => void): void {
+    const statuses = this.options.statuses ?? DEFAULT_STATUSES;
     const stillWatched = new Set(sessions.map((s) => s.sessionId));
     for (const knownId of [...this.lastStatus.keys()]) {
       if (!stillWatched.has(knownId)) {
@@ -29,19 +50,19 @@ export class WaitingNotifier {
     for (const { sessionId, label } of sessions) {
       const isFirstSight = !this.lastStatus.has(sessionId);
       const previous = this.lastStatus.get(sessionId);
-      const current = readEffectiveSessionStatus(sessionId)?.status;
+      const record = readEffectiveSessionStatus(sessionId);
+      const current = record?.status;
       this.lastStatus.set(sessionId, current);
 
-      if (isFirstSight || current === previous || !current || !NOTIFIABLE_STATUSES.has(current)) {
+      if (isFirstSight || current === previous || !record || !current || !statuses.includes(current)) {
+        continue;
+      }
+      if (this.options.skip?.(sessionId) || !claimNotification(sessionId, record.updatedAt)) {
         continue;
       }
 
       notifier.notify(
-        {
-          title: 'Session Deck',
-          message: current === 'error' ? `${label} exited with an error` : `${label} is waiting for your input`,
-          icon: this.iconPath,
-        },
+        { title: 'Session Deck', message: MESSAGES[current](label), icon: this.options.iconPath },
         (error, response) => {
           if (!error && response === 'activate') {
             onActivated?.(sessionId);

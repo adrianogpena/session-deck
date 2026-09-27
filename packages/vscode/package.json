@@ -214,6 +214,11 @@
         "command": "sessionDeck.changeSort",
         "title": "Session Deck: Sort Sessions…",
         "icon": "$(list-ordered)"
+      },
+      {
+        "command": "sessionDeck.markUnread",
+        "title": "Session Deck: Mark as Unread",
+        "icon": "$(circle-filled)"
       }
     ],
     "menus": {
@@ -292,6 +297,10 @@
         },
         {
           "command": "sessionDeck.pinSession",
+          "when": "false"
+        },
+        {
+          "command": "sessionDeck.markUnread",
           "when": "false"
         }
       ],
@@ -517,6 +526,11 @@
           "command": "sessionDeck.pinSession",
           "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
           "group": "7_pin@1"
+        },
+        {
+          "command": "sessionDeck.markUnread",
+          "when": "view == sessionDeck.sessions && viewItem == sessionDeckSession",
+          "group": "7_pin@2"
         }
       ]
     },

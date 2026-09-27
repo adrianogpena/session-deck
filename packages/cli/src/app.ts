@@ -2,12 +2,15 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
+  acknowledgeSessionStatus,
+  ClaudeProcessWatcher,
   clearSessionMetaCache,
   createFolder,
   DeckStore,
   deleteFolder,
   folderNodeKey,
   humanizeSince,
+  markSessionUnseen,
   moveFolder,
   moveProject,
   moveProjectToFolder,
@@ -20,6 +23,7 @@ import {
   SIDEBAR_PCT_MIN,
   ThemePreference,
   TreePrefs,
+  WaitingNotifier,
 } from '@session-deck/core';
 import { ESC, fitAnsi, oneLine } from './ansi';
 import { matchesStatusFilter, nextTimeFilter, STATUS_CATEGORIES, StatusCategory, TimeFilter, withinTimeFilter } from './filters';
@@ -115,6 +119,10 @@ export class App {
   /** Once the terminal has answered an OSC 11 query, its background decides "system" (not the OS setting). */
   private terminalReportsBackground = false;
   private readonly themes: Record<ThemeName, Theme> = { dark: new Theme('dark'), light: new Theme('light') };
+  /** Toasts for sessions that need you, except the one you're attached to. The extension notifies too; claims keep it to one toast. */
+  private readonly notifier = new WaitingNotifier({ statuses: ['waiting', 'done', 'error'], skip: (id) => this.attached?.id === id });
+  /** Last terminal title written, so it's only rewritten when the waiting count changes. */
+  private lastTitle = '';
 
   constructor() {
     const ui = this.store.getUi();
@@ -124,6 +132,9 @@ export class App {
   }
 
   async run(): Promise<void> {
+    // Turns Claude's live process status into Session Deck's status files ("done" after a turn, etc.),
+    // the same way the extension does. Both can run at once: the watcher skips writes already made.
+    new ClaudeProcessWatcher(() => undefined).start();
     await this.discover();
     this.pollProcs();
     setInterval(() => this.pollProcs(), 1000);
@@ -270,6 +281,7 @@ export class App {
     }
     // Statuses (and so filter matches) and relative times move on their own.
     this.rebuildRows();
+    this.notifyChanges();
     this.scheduleRender();
   }
 
@@ -348,7 +360,35 @@ export class App {
       timeLabel: active ? 'now' : humanizeSince(s.mtime),
       cwd: this.shortPath(s.cwd),
       id: s.id,
+      detail: s.live && !s.live.exited ? s.live.screenError : undefined,
     };
+  }
+
+  /** Attaching (and detaching) counts as seeing the session: its "done"/"error" stops asking for attention, in both front ends. */
+  private markSeen(s: DeckSession): void {
+    if (s.id) {
+      void acknowledgeSessionStatus(s.id).then(() => this.pollProcs());
+    }
+  }
+
+  private notifyChanges(): void {
+    const watched = this.sessions
+      .filter((s) => s.id && ((s.live && !s.live.exited) || this.procs.isElsewhere(s)))
+      .map((s) => ({ sessionId: s.id!, label: displayTitle(s, this.store) }));
+    // Clicking the toast selects that session here (the terminal can't be brought to the front from Node).
+    this.notifier.check(watched, (id) => {
+      this.selectWhere((r) => r.kind === 'session' && r.session.id === id);
+      this.scheduleRender();
+    });
+  }
+
+  /** "Session Deck · ◐ 2 need you" in the terminal's title bar/tab, so it's visible from other windows. */
+  private updateTitle(waiting: number): void {
+    const title = waiting ? `Session Deck · ◐ ${waiting} need${waiting === 1 ? 's' : ''} you` : 'Session Deck';
+    if (title !== this.lastTitle) {
+      this.lastTitle = title;
+      out.write(`\x1b]0;${title}\x07`);
+    }
   }
 
   // -------------------------------------------------------------------------------------------
@@ -370,6 +410,7 @@ export class App {
     }
     const live = s.live!;
     this.attached = s;
+    this.markSeen(s);
     // Paint the mirrored screen immediately (no waiting for the agent), then let the resize-triggered
     // redraw and live output stream straight through.
     const snapshot = live.serializer.serialize({ scrollback: 0 });
@@ -378,8 +419,13 @@ export class App {
   }
 
   private detach(note?: string): void {
+    const seen = this.attached;
     this.attached = null;
-    out.write(`${RESET_AGENT_MODES}${ESC}?25l${ESC}]0;Session Deck\x07`);
+    out.write(`${RESET_AGENT_MODES}${ESC}?25l`);
+    this.lastTitle = ''; // the agent set its own title while attached
+    if (seen) {
+      this.markSeen(seen); // whatever finished while you were attached, you saw
+    }
     this.resizeAllToPane();
     if (note) {
       this.flash(note);
@@ -408,7 +454,8 @@ export class App {
     }
     const live = s.live;
     if (live && !live.exited) {
-      if (this.procs.statusOf(s) !== 'idle') {
+      const status = this.procs.statusOf(s);
+      if (status !== 'idle' && status !== 'done') {
         this.flash('Session is busy or waiting for you. Rename it once it is idle (○).');
         return;
       }
@@ -471,6 +518,7 @@ export class App {
       counts[this.procs.categoryOf(s)]++;
     }
     const liveCount = this.sessions.filter((s) => s.live && !s.live.exited).length;
+    this.updateTitle(counts.waiting);
 
     let frame = `${ESC}?2026h${ESC}0m`;
     // Truncated as a safety net: a wrapped top row would push the whole frame down.
@@ -752,6 +800,14 @@ export class App {
         if (s && s.live) {
           this.kill(s);
           this.flash('Session stopped');
+        }
+        break;
+      case 'u':
+        if (s?.id) {
+          void markSessionUnseen(s.id).then(() => this.pollProcs());
+          this.flash('Marked as unread');
+        } else {
+          this.flash('Select a session to mark as unread.');
         }
         break;
       case ',':

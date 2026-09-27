@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { clearSessionStatus, writeSessionStatus, SessionStatus } from './sessionStatus';
+import { clearSessionStatus, readSessionStatus, writeSessionStatus, SessionStatus } from './sessionStatus';
 
 /** Claude Code's own live per-process status directory — one `<pid>.json` file per running `claude` process, with `sessionId`/`status`/`statusUpdatedAt`. Undocumented format — treat as best-effort, not a stable contract. */
 export function getClaudeSessionsStateDir(): string {
@@ -126,7 +126,11 @@ export class ClaudeProcessWatcher {
         continue;
       }
       if (this.lastWritten.get(parsed.sessionId) !== status) {
-        writeSessionStatus(parsed.sessionId, status);
+        // The other front end's watcher may have written this same transition already; writing it
+        // again would give it a new updatedAt and un-see a "done" the user already saw.
+        if (readSessionStatus(parsed.sessionId)?.status !== status) {
+          writeSessionStatus(parsed.sessionId, status);
+        }
         this.lastWritten.set(parsed.sessionId, status);
       }
     }

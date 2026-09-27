@@ -26,7 +26,7 @@ import {
 } from '@session-deck/core';
 import { copilotSessionSearchText, lastCopilotAssistantResponse } from '@session-deck/core';
 import { resolveProjectRoot, clearProjectRootCache } from '@session-deck/core';
-import { acknowledgeSessionStatus, readEffectiveSessionStatus, SessionStatus } from '@session-deck/core';
+import { acknowledgeSessionStatus, markSessionUnseen, readEffectiveSessionStatus, SessionStatus } from '@session-deck/core';
 import { SessionStatusDecorationProvider } from './status/sessionStatusDecorationProvider';
 import { ClaudeProcessWatcher } from '@session-deck/core';
 import { WaitingNotifier } from '@session-deck/core';
@@ -81,8 +81,10 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.window.registerTreeDataProvider('sessionDeck.activeSession', activeSessionProvider),
     terminalService.onDidChangeOpenSessions(() => activeSessionProvider.refresh()),
     // Names/archive flags changed by the terminal UI (or by this window).
+    // Names, archive, folders and seen marks changed by the terminal UI (or by this window).
     state.watch(() => {
       treeProvider.refresh();
+      statusDecorationProvider.refresh();
       activeSessionProvider.refresh();
     }),
     treeView.onDidChangeSelection((e) => {
@@ -151,6 +153,14 @@ export async function activate(context: vscode.ExtensionContext) {
     ),
     vscode.commands.registerCommand('sessionDeck.moveUp', (node: FolderNode | ProjectGroupNode) => node && moveTreeNode(node, -1, state, treeProvider)),
     vscode.commands.registerCommand('sessionDeck.moveDown', (node: FolderNode | ProjectGroupNode) => node && moveTreeNode(node, 1, state, treeProvider)),
+    vscode.commands.registerCommand('sessionDeck.markUnread', async (node: SessionNode) => {
+      if (node) {
+        await markSessionUnseen(node.sessionId);
+        treeProvider.refresh();
+        statusDecorationProvider.refresh();
+        activeSessionProvider.refresh();
+      }
+    }),
     vscode.commands.registerCommand('sessionDeck.pinSession', (node: SessionNode) => node && pinSessionNode(node, state, treeProvider)),
     vscode.commands.registerCommand('sessionDeck.changeSort', () => changeSessionSort(state, treeProvider)),
     treeView.onDidCollapseElement((e) => rememberCollapsed(e.element, true, state)),

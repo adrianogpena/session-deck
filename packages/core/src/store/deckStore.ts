@@ -10,6 +10,8 @@ export interface SessionPrefs {
   archived?: boolean;
   /** Kept at the top or bottom of its project, above/below the sort order. */
   pin?: SessionPin;
+  /** `updatedAt` of the "done"/"error" status the user has seen (see `acknowledgeSessionStatus`). A newer one is unseen. */
+  seenAt?: number;
 }
 
 export type ThemePreference = 'dark' | 'light' | 'system';
@@ -73,7 +75,7 @@ export function parseDeckState(raw: string): DeckStateFile | undefined {
     if (typeof value !== 'object' || value === null) {
       continue;
     }
-    const { name, archived, pin } = value as Record<string, unknown>;
+    const { name, archived, pin, seenAt } = value as Record<string, unknown>;
     const prefs: SessionPrefs = {};
     if (typeof name === 'string' && name.trim()) {
       prefs.name = name;
@@ -83,6 +85,9 @@ export function parseDeckState(raw: string): DeckStateFile | undefined {
     }
     if (pin === 'top' || pin === 'bottom') {
       prefs.pin = pin;
+    }
+    if (typeof seenAt === 'number' && seenAt > 0) {
+      prefs.seenAt = seenAt;
     }
     if (Object.keys(prefs).length) {
       state.sessions[id] = prefs;
@@ -136,6 +141,13 @@ export function applySessionPatch(state: DeckStateFile, sessionId: string, patch
       next.pin = patch.pin;
     } else {
       delete next.pin;
+    }
+  }
+  if ('seenAt' in patch) {
+    if (patch.seenAt) {
+      next.seenAt = patch.seenAt;
+    } else {
+      delete next.seenAt;
     }
   }
   const sessions = { ...state.sessions };

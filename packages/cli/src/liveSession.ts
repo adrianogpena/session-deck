@@ -2,6 +2,7 @@ import { execFileSync } from 'child_process';
 import * as pty from 'node-pty';
 import { Terminal } from '@xterm/headless';
 import { SerializeAddon } from '@xterm/addon-serialize';
+import { detectScreenError, screenLines } from './screenStatus';
 
 /** A running agent: its PTY plus a headless terminal mirroring its screen, so it can be drawn (preview) or repainted (attach) at any time. */
 export interface LiveSession {
@@ -11,6 +12,8 @@ export interface LiveSession {
   pid: number;
   exited: boolean;
   exitCode?: number;
+  /** An error only visible on the screen (e.g. a failed sign-in), see `detectScreenError`. */
+  screenError?: string;
 }
 
 export interface LiveSessionHandlers {
@@ -76,8 +79,15 @@ export function spawnClaude(sessionId: string | null, cwd: string, cols: number,
   term.loadAddon(serializer);
   const live: LiveSession = { pty: proc, term, serializer, pid: proc.pid, exited: false };
 
+  // At most twice a second, after output settles into the mirror.
+  let screenCheck: NodeJS.Timeout | undefined;
+  const checkScreen = () => {
+    screenCheck = undefined;
+    live.screenError = detectScreenError(screenLines(term));
+  };
   proc.onData((data) => {
     term.write(data);
+    screenCheck ??= setTimeout(checkScreen, 500);
     handlers.onData(data);
   });
   // Replies to terminal queries (cursor position, device attributes...). While attached the real

@@ -7,10 +7,13 @@ All notable changes to Session Deck are documented in this file.
 ### Added
 
 - Folders for projects, manual order for folders and projects (Move Up / Move Down), pinned sessions, and a sort order for sessions (most recent, or needs attention first). All of it is shared with the Session Deck terminal UI.
+- "Mark as Unread" on sessions: a finished session shows its status again until you look at it.
 - Session names, archive flags and collapsed folders/projects are stored in `~/.session-deck/state.json`, shared with the terminal UI. Existing names and archive flags are copied over on first start.
 
 ### Changed
 
+- Which finished sessions you have already looked at is remembered across restarts, and shared with the terminal UI (it used to reset when VS Code restarted).
+- With the terminal UI running too, each desktop notification is shown once, not by both.
 - Projects start expanded unless collapsed (the collapsed state is now remembered, in both front ends).
 - Claude sessions are titled with Claude Code's own title (`/rename` or its AI-generated title) instead of the first prompt.
 
