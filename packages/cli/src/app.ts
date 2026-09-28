@@ -169,7 +169,10 @@ export class App {
   private readonly themes: Record<ThemeName, Theme> = { dark: new Theme('dark'), light: new Theme('light') };
   /** Toasts for sessions that need you, except the one you're attached to. The extension notifies too; claims keep it to one toast. */
   /** `notifyChanges()` always passes `config.ui.notifyStatuses`, so this constructor doesn't set a default. */
-  private readonly notifier = new WaitingNotifier({ skip: (id) => this.attached?.id === id || this.interacting?.id === id });
+  private readonly notifier = new WaitingNotifier({
+    iconPath: path.join(__dirname, '..', 'resources', 'icon.png'),
+    skip: (id) => this.attached?.id === id || this.interacting?.id === id,
+  });
   /** Last terminal title written, so it's only rewritten when the waiting count changes. */
   private lastTitle = '';
 

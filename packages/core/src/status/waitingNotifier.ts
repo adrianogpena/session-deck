@@ -20,10 +20,10 @@ export interface WaitingNotifierOptions {
 const DEFAULT_STATUSES: readonly SessionStatus[] = ['waiting', 'error'];
 
 const MESSAGES: Record<SessionStatus, (label: string) => string> = {
-  waiting: (label) => `${label} is waiting for your input`,
-  done: (label) => `${label} finished`,
-  error: (label) => `${label} exited with an error`,
-  running: (label) => `${label} is running`,
+  waiting: (label) => `Waiting: ${label}`,
+  done: (label) => `Done: ${label}`,
+  error: (label) => `Error: ${label}`,
+  running: (label) => `Running: ${label}`,
 };
 
 /**
