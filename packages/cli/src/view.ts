@@ -160,8 +160,7 @@ function renderSessionRow(t: Theme, width: number, row: Extract<ListRow, { kind:
   const pinMark = row.pin === 'top' ? '↑ ' : row.pin === 'bottom' ? '↓ ' : '';
   const markers = `${pinMark}${v.elsewhere ? '↗ ' : ''}`;
   const leftPlain = `${indent}${connector} ${GLYPHS[v.status].char} ${markers}`;
-  // Right-hand columns shrink away on narrow lists: first the agent, then the time.
-  const right = width >= 44 ? ` ${v.agent} ${v.timeLabel} ` : width >= 34 ? ` ${v.timeLabel} ` : ' ';
+  const right = ` ${v.agent} `;
   const titleWidth = Math.max(1, width - textWidth(leftPlain) - textWidth(right));
   const title = fit(v.title, titleWidth);
   const active = v.status === 'running' || v.status === 'waiting';
@@ -171,10 +170,9 @@ function renderSessionRow(t: Theme, width: number, row: Extract<ListRow, { kind:
     return `${sel}${leftPlain}${BOLD}${title}${RESET}${sel}${right}${RESET}`;
   }
   const titleStyle = `${active ? BOLD : ''}${v.status === 'exited' ? UNDERLINE : ''}${t.fg('text')}`;
-  const agentPart = width >= 44 ? ` ${t.fg(AGENT_ROLE[v.agent] ?? 'text')}${v.agent} ${t.fg('textDim')}${v.timeLabel} ` : `${t.fg('textDim')}${right}`;
   return (
     `${indent}${t.fg('border')}${connector}${RESET} ${glyph(t, v.status)} ${pinMark ? `${t.fg('accent')}${pinMark}` : ''}${v.elsewhere ? `${t.fg('purple')}↗ ` : ''}${RESET}` +
-    `${titleStyle}${title}${RESET}${agentPart}${RESET}`
+    `${titleStyle}${title}${RESET}${t.fg('textDim')}${right}${RESET}`
   );
 }
 
@@ -352,6 +350,7 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
     keys: [
       ['Enter', 'Attach full-screen (starts it if needed)'],
       ['Ctrl+Q', 'Detach back here; the session keeps running'],
+      ['i', 'Type into it right here, list and preview still showing'],
     ],
   },
   {
@@ -370,6 +369,7 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
       ['s', 'Start in the background'],
       ['R', 'Restart (a fresh process, same conversation)'],
       ['n  N', 'New Claude / Copilot session in the project'],
+      ['p', 'Add a project: new session in any folder'],
       ['o', 'Send a one-line prompt without attaching'],
       ['c', 'Copy the last response'],
       ['e  F2', "Rename (same as Claude's /rename)"],

@@ -98,6 +98,12 @@ a colored status dot on each session.
 - **Detach `Ctrl+Q` (while attached)**: back to Session Deck. The session keeps running in the
   background.
   - Whatever finished while you were attached is marked as seen.
+- **Type into it `i`**: like attaching, but the sessions panel and preview keep showing — everything
+  you type goes straight to the selected session, live, without leaving the list. Useful for sending
+  a longer or multi-step reply while still keeping an eye on your other sessions.
+  - A stopped session is started first.
+  - `Ctrl+Q` stops it, the same key that detaches from a full attach.
+  - Marks the session as seen, same as attaching.
 - **Start in background `s`**: starts a stopped session without attaching. Its screen shows in the
   preview.
 - **Stop `x`**: stops the selected session's agent.
@@ -112,6 +118,11 @@ a colored status dot on each session.
   - With a session selected, it starts in that session's folder; with a project selected, in the
     project's root.
 - **New Copilot session `N`**: the same, with GitHub Copilot CLI.
+- **Add project `p`**: asks for a folder (full path, `~` works) and starts a new Claude Code session
+  there, for a project that isn't listed yet (new, or moved to another folder).
+  - The session joins the folder's git project, or starts one.
+  - Projects come from your session history: the project stays listed once you send a prompt.
+  - Uses Copilot when Claude is disabled in the config.
 - **Send a prompt `o`**: types a one-line prompt into the selected session without attaching.
   - Type the prompt at the bottom and press `Enter` (`Esc` cancels).
   - A stopped session is started first; the prompt is typed as soon as the agent is ready (idle

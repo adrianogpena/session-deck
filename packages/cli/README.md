@@ -28,6 +28,8 @@ launches the real CLI, it doesn't reimplement either one.
 - **Every session, one screen** — grouped automatically by git project, with manual folders on top.
 - **Live preview** of the selected session's real screen, without attaching to it.
 - **Attach / detach** (`Enter` / `Ctrl+Q`) — the session keeps running in the background while detached.
+- **Type into a session without leaving the list** (`i`) — the sessions panel and preview stay on
+  screen while you type, so you can keep an eye on everything else.
 - **Full-text search** (`/`) across every session's prompts and replies, not just titles.
 - **Status at a glance** — running, waiting for you, finished, idle, error or stopped, with desktop
   notifications the moment a session needs input.

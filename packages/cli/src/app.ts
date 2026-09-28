@@ -21,6 +21,7 @@ import {
   createFolder,
   DeckStore,
   deleteFolder,
+  expandHome,
   folderNodeKey,
   humanizeSince,
   markSessionUnseen,
@@ -28,10 +29,12 @@ import {
   moveFolder,
   moveProject,
   moveProjectToFolder,
+  normalizeFsPath,
   projectNodeKey,
   readDeckConfig,
   readLastAssistantResponse,
   renameFolder,
+  resolveProjectRoot,
   SessionPin,
   setCollapsed,
   SIDEBAR_PCT_MAX,
@@ -46,7 +49,7 @@ import { CONFIG_FIELDS } from './configFields';
 import { matchesStatusFilter, nextTimeFilter, STATUS_CATEGORIES, StatusCategory, TimeFilter, withinTimeFilter } from './filters';
 import { findDetachKey, RESET_AGENT_MODES, splitKeys } from './keys';
 import { computeLayout, Layout, ptySizeFor, Rect } from './layout';
-import { AgentType, clearExecutableCache, disposeLive, resizeLive, spawnAgent, typeLine } from './liveSession';
+import { AgentType, clearExecutableCache, disposeLive, LiveSession, resizeLive, spawnAgent, typeLine } from './liveSession';
 import { DeckSession, StatusTracker, discoverSessions, displayTitle, refreshLiveTitle } from './sessions';
 import { buildTree, projectLabels, TreeRow } from './tree';
 import { extractBackgroundReply, OSC11_QUERY, readOsTheme, Theme, ThemeName } from './theme';
@@ -133,6 +136,8 @@ export class App {
   private tree: TreePrefs;
   private sidebarVisible = true;
   private attached: DeckSession | null = null;
+  /** Typing goes straight to this session's PTY, but (unlike `attached`) the list and preview keep rendering normally. `Ctrl+Q` stops it. */
+  private interacting: DeckSession | null = null;
   private message = '';
   private messageTimer?: NodeJS.Timeout;
   private renderTimer?: NodeJS.Timeout;
@@ -164,7 +169,7 @@ export class App {
   private readonly themes: Record<ThemeName, Theme> = { dark: new Theme('dark'), light: new Theme('light') };
   /** Toasts for sessions that need you, except the one you're attached to. The extension notifies too; claims keep it to one toast. */
   /** `notifyChanges()` always passes `config.ui.notifyStatuses`, so this constructor doesn't set a default. */
-  private readonly notifier = new WaitingNotifier({ skip: (id) => this.attached?.id === id });
+  private readonly notifier = new WaitingNotifier({ skip: (id) => this.attached?.id === id || this.interacting?.id === id });
   /** Last terminal title written, so it's only rewritten when the waiting count changes. */
   private lastTitle = '';
 
@@ -367,6 +372,9 @@ export class App {
         }
         if (this.attached === s) {
           this.detach(`Session exited (code ${exitCode})`);
+        } else if (this.interacting === s) {
+          this.interacting = null;
+          this.flash(`Session exited (code ${exitCode})`);
         } else {
           this.scheduleRender();
         }
@@ -465,20 +473,28 @@ export class App {
   // Attach / detach
   // -------------------------------------------------------------------------------------------
 
-  private attach(s: DeckSession): void {
+  /** Shared by attach() and startInteracting(): refuses a session open elsewhere, starts a stopped one. `undefined` if it couldn't be readied (already flashed why). */
+  private ensureLive(s: DeckSession): LiveSession | undefined {
     if (this.procs.isElsewhere(s)) {
       this.flash('That session is running in another terminal. Close it there first.');
-      return;
+      return undefined;
     }
     if (!s.live || s.live.exited) {
       if (s.live) {
         this.kill(s);
       }
       if (!this.start(s)) {
-        return;
+        return undefined;
       }
     }
-    const live = s.live!;
+    return s.live!;
+  }
+
+  private attach(s: DeckSession): void {
+    const live = this.ensureLive(s);
+    if (!live) {
+      return;
+    }
     this.attached = s;
     this.markSeen(s);
     // Paint the mirrored screen immediately (no waiting for the agent), then let the resize-triggered
@@ -500,6 +516,25 @@ export class App {
     if (note) {
       this.flash(note);
     }
+    this.render();
+  }
+
+  /**
+   * Types straight into `s` without leaving the list/preview screen — its own PTY is already sized to
+   * the preview pane (background sessions always are), so nothing needs resizing. `Ctrl+Q` stops it.
+   */
+  private startInteracting(s: DeckSession): void {
+    const live = this.ensureLive(s);
+    if (!live) {
+      return;
+    }
+    this.interacting = s;
+    this.markSeen(s);
+    this.render();
+  }
+
+  private stopInteracting(): void {
+    this.interacting = null;
     this.render();
   }
 
@@ -641,6 +676,8 @@ export class App {
       frame += renderConfirmBar(t, cols, this.confirm.question);
     } else if (this.message) {
       frame += renderMessageBar(t, cols, this.message);
+    } else if (this.interacting) {
+      frame += renderMessageBar(t, cols, `Typing into ${displayTitle(this.interacting, this.store)} · Ctrl+Q to stop`);
     } else {
       frame += renderHelpBar(t, cols);
     }
@@ -961,6 +998,20 @@ export class App {
       }
       return;
     }
+    const interacting = this.interacting;
+    if (interacting) {
+      const live = interacting.live;
+      const idx = findDetachKey(data);
+      if (idx >= 0) {
+        if (idx > 0 && live && !live.exited) {
+          live.pty.write(data.slice(0, idx));
+        }
+        this.stopInteracting();
+      } else if (live && !live.exited) {
+        live.pty.write(data);
+      }
+      return;
+    }
 
     const s = this.current;
     const row = this.selectedRow;
@@ -1021,12 +1072,22 @@ export class App {
           if (this.start(s)) this.flash('Started in background');
         }
         break;
+      case 'i':
+        if (s) {
+          this.startInteracting(s);
+        } else {
+          this.flash('Select a session to type into.');
+        }
+        break;
       case 'n':
         this.newSession('claude');
         return;
       case 'N':
         this.newSession('copilot');
         return;
+      case 'p':
+        this.openAddProject();
+        break;
       case 'o':
         this.openPromptInput();
         break;
@@ -1234,7 +1295,36 @@ export class App {
       this.render();
       return;
     }
-    const cwd = s ? s.cwd : project.root;
+    this.startNewSession(agent, s ? s.cwd : project.root, project);
+  }
+
+  /** `p`: a new Claude session in any folder, which lists its project once a prompt is sent. */
+  private openAddProject(): void {
+    this.prompt = { label: 'Project folder', value: '', onSubmit: (input) => void this.addProject(input) };
+  }
+
+  private async addProject(input: string): Promise<void> {
+    const raw = input.trim().replace(/^"(.*)"$/, '$1');
+    if (!raw) {
+      return;
+    }
+    const cwd = path.resolve(expandHome(raw));
+    if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
+      this.flash(`Not a folder: ${cwd}`);
+      this.render();
+      return;
+    }
+    const agent: AgentType = this.config.tools.claude.enabled === false ? 'copilot' : 'claude';
+    if (this.config.tools[agent].enabled === false) {
+      this.flash('Claude and Copilot are both disabled in the config.');
+      this.render();
+      return;
+    }
+    const { root } = await resolveProjectRoot(cwd);
+    this.startNewSession(agent, cwd, { key: normalizeFsPath(root), root });
+  }
+
+  private startNewSession(agent: AgentType, cwd: string, project: { key: string; root: string }): void {
     // Copilot takes a pre-assigned id; Claude reports its own once started.
     const fresh: DeckSession = {
       agent,
