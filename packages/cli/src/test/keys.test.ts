@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { findDetachKey, splitKeys } from '../keys';
+import { findChordKey, findDetachKey, findPlainKey, splitKeys } from '../keys';
 
 test('splitKeys separates typed characters and keeps escape sequences whole', () => {
   assert.deepEqual(splitKeys('>>>'), ['>', '>', '>']);
@@ -18,4 +18,28 @@ test('findDetachKey recognizes Ctrl+Q in every encoding, and only Ctrl+Q', () =>
   assert.equal(findDetachKey('\x1b[81;16;113;1;0;1_'), -1); // plain q
   assert.equal(findDetachKey('\x1b[81;16;17;0;8;1_'), -1); // key-up
   assert.equal(findDetachKey('\x1b[81;16;0;1;10;1_'), -1); // Ctrl+Alt+Q (AltGr)
+});
+
+test('findChordKey recognizes Ctrl+K in every encoding, and only Ctrl+K', () => {
+  assert.deepEqual(findChordKey('\x0b'), { index: 0, end: 1 });
+  assert.deepEqual(findChordKey('\x1b[107;5u'), { index: 0, end: 8 });
+  assert.deepEqual(findChordKey('ab\x1b[75;16;17;1;8;1_'), { index: 2, end: 19 });
+  assert.equal(findChordKey('\x1b[75;16;107;1;0;1_'), null); // plain k
+  assert.equal(findChordKey('\x1b[75;16;17;0;8;1_'), null); // key-up
+  assert.equal(findChordKey('\x1b[75;16;0;1;10;1_'), null); // Ctrl+Alt+K (AltGr)
+});
+
+test("findChordKey exposes where its match ends, so a chord's resolving key already in the same chunk is not lost", () => {
+  const m = findChordKey('\x0bN');
+  assert.deepEqual(m, { index: 0, end: 1 });
+  assert.equal(findPlainKey('\x0bN'.slice(m!.end), 'N'), 0);
+});
+
+test('findPlainKey recognizes an unmodified key press in every encoding', () => {
+  assert.equal(findPlainKey('n', 'n'), 0);
+  assert.equal(findPlainKey('ab n', 'n'), 3);
+  assert.equal(findPlainKey('\x1b[78;49;110;1;0;1_', 'n'), 0);
+  assert.equal(findPlainKey('\x1b[78;49;78;1;8;1_', 'N'), 0);
+  assert.equal(findPlainKey('\x1b[78;49;110;0;0;1_', 'n'), -1); // key-up
+  assert.equal(findPlainKey('x', 'n'), -1);
 });

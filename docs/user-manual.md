@@ -98,6 +98,10 @@ a colored status dot on each session.
 - **Detach `Ctrl+Q` (while attached)**: back to Session Deck. The session keeps running in the
   background.
   - Whatever finished while you were attached is marked as seen.
+- **New session `Ctrl+K` then `n` (while attached)**: detaches and starts a new Claude Code session
+  in the same project (the same folder, if the attached session is in a subfolder of it) — without
+  going back to the list first.
+  - Any other key after `Ctrl+K` is sent through to the agent as an ordinary `Ctrl+K` keystroke.
 - **Type into it `i`**: like attaching, but the sessions panel and preview keep showing — everything
   you type goes straight to the selected session, live, without leaving the list. Useful for sending
   a longer or multi-step reply while still keeping an eye on your other sessions.
@@ -247,8 +251,11 @@ repository form one project. Folders let you group projects further, one level d
 
 ### Desktop notifications
 
-A notification appears when a session starts waiting for you, finishes a turn, or hits an error.
+A notification appears when a session starts waiting for you, finishes a turn, or hits an error
+(see `ui.notifyStatuses` to change which statuses fire one).
 
+- Titled with the project's name (`Session Deck` when that isn't known), with the Session Deck icon.
+- The message is the status followed by the session's title, e.g. `Waiting: <title>`.
 - Not for the session you're attached to.
 - Clicking the notification selects that session in Session Deck.
 - It covers sessions running in other terminals too (for example in VS Code).

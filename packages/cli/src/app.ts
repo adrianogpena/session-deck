@@ -47,7 +47,7 @@ import {
 import { ESC, fitAnsi, oneLine } from './ansi';
 import { CONFIG_FIELDS } from './configFields';
 import { matchesStatusFilter, nextTimeFilter, STATUS_CATEGORIES, StatusCategory, TimeFilter, withinTimeFilter } from './filters';
-import { findDetachKey, RESET_AGENT_MODES, splitKeys } from './keys';
+import { findChordKey, findDetachKey, findPlainKey, RESET_AGENT_MODES, splitKeys } from './keys';
 import { computeLayout, Layout, ptySizeFor, Rect } from './layout';
 import { AgentType, clearExecutableCache, disposeLive, LiveSession, resizeLive, spawnAgent, typeLine } from './liveSession';
 import { DeckSession, StatusTracker, discoverSessions, displayTitle, refreshLiveTitle } from './sessions';
@@ -136,6 +136,8 @@ export class App {
   private tree: TreePrefs;
   private sidebarVisible = true;
   private attached: DeckSession | null = null;
+  /** Set right after Ctrl+K while attached: the next key decides whether it's `n` (the new-session chord) or an ordinary Ctrl+K meant for the agent. */
+  private chordPending = false;
   /** Typing goes straight to this session's PTY, but (unlike `attached`) the list and preview keep rendering normally. `Ctrl+Q` stops it. */
   private interacting: DeckSession | null = null;
   private message = '';
@@ -278,6 +280,12 @@ export class App {
     return this.isArchived(s) === this.archivedView && matchesStatusFilter(this.procs.categoryOf(s), this.statusFilter) && withinTimeFilter(s.mtime, this.timeFilter);
   }
 
+  /** Every session, minus ones belonging to a project removed with `d` (see `DeckStore.setProjectHidden`). */
+  private get unhiddenSessions(): DeckSession[] {
+    const hidden = this.store.getHiddenProjects();
+    return hidden.length ? this.sessions.filter((s) => !hidden.includes(s.projectKey)) : this.sessions;
+  }
+
   private isArchived(s: DeckSession): boolean {
     return !!s.id && this.store.getSession(s.id)?.archived === true;
   }
@@ -291,7 +299,7 @@ export class App {
     const previous = this.selectedRow;
     const previousIndex = this.selected;
     const previousRows = this.rows;
-    const built = buildTree(this.sessions, this.tree, {
+    const built = buildTree(this.unhiddenSessions, this.tree, {
       include: (s) => this.isVisible(s),
       categoryOf: (s) => this.procs.categoryOf(s),
       pinOf: (s) => (s.id ? this.store.getSession(s.id)?.pin : undefined),
@@ -542,6 +550,55 @@ export class App {
     this.render();
   }
 
+  private isChordResolution(data: string): boolean {
+    return findPlainKey(data, 'n') >= 0 || findPlainKey(data, 'N') >= 0;
+  }
+
+  /**
+   * Input while attached (full-screen) or interacting (typed into from the list) with `live`:
+   * forwarded to its PTY, except Ctrl+Q (`stop` — detach or stop interacting, see `findDetachKey`)
+   * and the `Ctrl+K n` chord, which starts a new session in the same project. `n` is usually typed
+   * just after Ctrl+K, quickly enough to arrive in the same input chunk (unlike Ctrl+Q, which needs
+   * no second key) — so both `findChordKey`'s match end and the *next* chunk, if this one ends right
+   * at the match, are checked for it.
+   */
+  private onLiveInput(live: LiveSession | undefined, data: string, stop: () => void): void {
+    if (this.chordPending) {
+      this.chordPending = false;
+      if (this.isChordResolution(data)) {
+        stop();
+        this.newSession('claude');
+        return;
+      }
+      if (live && !live.exited) {
+        live.pty.write('\x0b'); // not the chord after all: the withheld Ctrl+K goes to the agent
+      }
+    }
+    const chord = findChordKey(data);
+    const detachIdx = findDetachKey(data);
+    const idx = chord && (detachIdx < 0 || chord.index < detachIdx) ? chord.index : detachIdx;
+    if (idx < 0) {
+      if (live && !live.exited) {
+        live.pty.write(data);
+      }
+      return;
+    }
+    // Forward keys typed before the match; drop the rest (e.g. the matching key-up events).
+    if (idx > 0 && live && !live.exited) {
+      live.pty.write(data.slice(0, idx));
+    }
+    if (chord && idx === chord.index) {
+      if (this.isChordResolution(data.slice(chord.end))) {
+        stop();
+        this.newSession('claude');
+        return;
+      }
+      this.chordPending = true;
+    } else {
+      stop();
+    }
+  }
+
   /**
    * Types straight into `s` without leaving the list/preview screen — its own PTY is already sized to
    * the preview pane (background sessions always are), so nothing needs resizing. `Ctrl+Q` stops it.
@@ -648,11 +705,12 @@ export class App {
     const layout = this.layout();
 
     const counts = Object.fromEntries(STATUS_CATEGORIES.map((c) => [c, 0])) as Record<StatusCategory, number>;
-    const inView = this.sessions.filter((s) => this.isArchived(s) === this.archivedView);
+    const unhidden = this.unhiddenSessions;
+    const inView = unhidden.filter((s) => this.isArchived(s) === this.archivedView);
     for (const s of inView) {
       counts[this.procs.categoryOf(s)]++;
     }
-    const liveCount = this.sessions.filter((s) => s.live && !s.live.exited).length;
+    const liveCount = unhidden.filter((s) => s.live && !s.live.exited).length;
     this.updateTitle(counts.waiting);
 
     let frame = `${ESC}?2026h${ESC}0m`;
@@ -668,7 +726,7 @@ export class App {
         .filter(Boolean)
         .join(' · ');
       const note = this.resizeNote && Date.now() < this.resizeNote.until ? this.resizeNote.text : modes ? `· ${modes}` : '';
-      const empty = this.sessions.length === 0 ? 'No Claude sessions found.' : 'Nothing matches the filter. Press 0 to clear it.';
+      const empty = unhidden.length === 0 ? 'No Claude sessions found.' : 'Nothing matches the filter. Press 0 to clear it.';
       frame += placeLines(layout.list, renderListPanel(t, layout.list, listRows, this.selected, note, empty));
     }
     const group = this.groupPreview();
@@ -720,7 +778,7 @@ export class App {
       overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
     }
     if (this.search) {
-      const labels = projectLabels(this.sessions.map((s) => s.projectRoot));
+      const labels = projectLabels(unhidden.map((s) => s.projectRoot));
       const rows: SearchResultRow[] = this.search.results.map((s) => ({ view: this.viewOf(s), projectLabel: labels.get(s.projectRoot) ?? s.projectRoot }));
       const overlay = searchOverlay(t, cols, height, this.search.query, this.search.loading, rows, this.search.index);
       overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
@@ -869,7 +927,7 @@ export class App {
 
   /** Every prompt/reply of every session with a real id, keyed by session id — read once per search, lazily. */
   private async loadSearchText(): Promise<Map<string, string>> {
-    const searchable = this.sessions.filter((s) => s.id);
+    const searchable = this.unhiddenSessions.filter((s) => s.id);
     const pairs = await mapWithConcurrency(searchable, SEARCH_READ_CONCURRENCY, async (s): Promise<[string, string]> => [
       s.id!,
       s.agent === 'claude' ? (s.file ? await readSessionSearchText(s.file) : '') : copilotSessionSearchText(s.id!),
@@ -918,7 +976,7 @@ export class App {
     const query = (statusFilter ? trimmed.slice(1) : trimmed).trim().toLowerCase();
     const textBySessionId = search.textBySessionId;
     search.results = textBySessionId
-      ? this.sessions
+      ? this.unhiddenSessions
           .filter((s) => s.id && (!statusFilter || this.procs.categoryOf(s) === statusFilter))
           .map((s) => ({ session: s, match: fuzzyMatch(query, textBySessionId.get(s.id!) ?? '') }))
           .filter((x) => x.match.matched)
@@ -1009,31 +1067,12 @@ export class App {
     }
     const attached = this.attached;
     if (attached) {
-      const live = attached.live;
-      const idx = findDetachKey(data);
-      if (idx >= 0) {
-        // Forward keys typed before Ctrl+Q; drop the rest (e.g. the matching key-up events).
-        if (idx > 0 && live && !live.exited) {
-          live.pty.write(data.slice(0, idx));
-        }
-        this.detach();
-      } else if (live && !live.exited) {
-        live.pty.write(data);
-      }
+      this.onLiveInput(attached.live, data, () => this.detach());
       return;
     }
     const interacting = this.interacting;
     if (interacting) {
-      const live = interacting.live;
-      const idx = findDetachKey(data);
-      if (idx >= 0) {
-        if (idx > 0 && live && !live.exited) {
-          live.pty.write(data.slice(0, idx));
-        }
-        this.stopInteracting();
-      } else if (live && !live.exited) {
-        live.pty.write(data);
-      }
+      this.onLiveInput(interacting.live, data, () => this.stopInteracting());
       return;
     }
 
@@ -1188,6 +1227,8 @@ export class App {
             question: `Delete folder "${row.name}"? Its projects move back to the top level.`,
             onYes: () => this.changeTree((t) => deleteFolder(t, folderId)),
           };
+        } else if (row?.kind === 'project') {
+          this.removeProject(row.projectKey, row.label);
         }
         break;
       case 'S':
@@ -1353,7 +1394,9 @@ export class App {
       return;
     }
     const { root } = await resolveProjectRoot(cwd);
-    this.startNewSession(agent, cwd, { key: normalizeFsPath(root), root });
+    const key = normalizeFsPath(root);
+    await this.store.setProjectHidden(key, false); // explicitly added here: undoes a previous `d` removal, if any
+    this.startNewSession(agent, cwd, { key, root });
   }
 
   private startNewSession(agent: AgentType, cwd: string, project: { key: string; root: string }): void {
@@ -1496,6 +1539,23 @@ export class App {
       this.scheduleRender();
     });
     this.flash(archive ? 'Archived (^ shows archived sessions)' : 'Unarchived');
+  }
+
+  /**
+   * `d` on a project: removes it from the list. Nothing on disk is touched, and any still-running
+   * session keeps running in the background — a new session for it (here or from outside Session Deck)
+   * won't bring it back on its own; add the project again (`p`) to see it.
+   */
+  private removeProject(key: string, label: string): void {
+    this.confirm = {
+      question: `Remove project "${label}" from the list? (p to add it back)`,
+      onYes: () => {
+        void this.store.setProjectHidden(key, true).then(() => {
+          this.rebuildRows();
+          this.scheduleRender();
+        });
+      },
+    };
   }
 
   /** `d` on a session: moves its transcript to the trash (Ctrl+Z or Z to bring it back). */

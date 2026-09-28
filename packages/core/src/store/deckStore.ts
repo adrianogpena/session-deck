@@ -28,6 +28,12 @@ export interface DeckStateFile {
   sessions: Record<string, SessionPrefs>;
   ui?: UiPrefs;
   tree?: TreePrefs;
+  /**
+   * Project keys removed from the list (see `DeckStore.setProjectHidden`). A session discovered later
+   * for one of these keys — even one started outside Session Deck — stays off the list; the project
+   * reappears only once it's added again (e.g. the terminal UI's `p`, "add a project").
+   */
+  hiddenProjects?: string[];
 }
 
 const THEMES: readonly ThemePreference[] = ['dark', 'light', 'system'];
@@ -58,7 +64,7 @@ export function parseDeckState(raw: string): DeckStateFile | undefined {
   if (typeof parsed !== 'object' || parsed === null) {
     return undefined;
   }
-  const { sessions, ui, tree } = parsed as { sessions?: unknown; ui?: unknown; tree?: unknown };
+  const { sessions, ui, tree, hiddenProjects } = parsed as { sessions?: unknown; ui?: unknown; tree?: unknown; hiddenProjects?: unknown };
   const state = emptyState();
   const uiPrefs = parseUiPrefs(ui);
   if (uiPrefs) {
@@ -67,6 +73,12 @@ export function parseDeckState(raw: string): DeckStateFile | undefined {
   const treePrefs = parseTreePrefs(tree);
   if (treePrefs) {
     state.tree = treePrefs;
+  }
+  if (Array.isArray(hiddenProjects)) {
+    const keys = [...new Set(hiddenProjects.filter((k): k is string => typeof k === 'string'))];
+    if (keys.length) {
+      state.hiddenProjects = keys;
+    }
   }
   if (typeof sessions !== 'object' || sessions === null) {
     return state;
@@ -159,6 +171,23 @@ export function applySessionPatch(state: DeckStateFile, sessionId: string, patch
   return { ...state, sessions };
 }
 
+/** Pure: adds or removes a project key from the hidden list, dropping the field entirely once it's empty. */
+export function applyHiddenProjectPatch(state: DeckStateFile, projectKey: string, hidden: boolean): DeckStateFile {
+  const keys = new Set(state.hiddenProjects ?? []);
+  if (hidden) {
+    keys.add(projectKey);
+  } else {
+    keys.delete(projectKey);
+  }
+  const next: DeckStateFile = { ...state };
+  if (keys.size) {
+    next.hiddenProjects = [...keys];
+  } else {
+    delete next.hiddenProjects;
+  }
+  return next;
+}
+
 const RENAME_RETRIES = 10;
 const RENAME_RETRY_MS = 20;
 
@@ -209,6 +238,15 @@ export class DeckStore {
 
   getTree(): TreePrefs {
     return this.read().tree ?? defaultTreePrefs();
+  }
+
+  getHiddenProjects(): string[] {
+    return this.read().hiddenProjects ?? [];
+  }
+
+  /** Hides (or brings back) a project by key. See {@link DeckStateFile.hiddenProjects}. */
+  async setProjectHidden(projectKey: string, hidden: boolean): Promise<void> {
+    await this.writeAtomic(applyHiddenProjectPatch(this.readForWrite(), projectKey, hidden));
   }
 
   /** `change` gets the tree as it is on disk right now (not the cached copy), so edits from the other front end are kept. */

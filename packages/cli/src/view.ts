@@ -236,7 +236,7 @@ export function renderGroupPreviewPanel(t: Theme, rect: Rect, group: GroupPrevie
   const hints =
     group.kind === 'folder'
       ? `${key('Enter')} collapse/expand · ${key('K J')} reorder · ${key('e')} rename · ${key('d')} delete`
-      : `${key('Enter')} collapse/expand · ${key('M')} move to folder · ${key('K J')} reorder · ${key('n')} new session`;
+      : `${key('Enter')} collapse/expand · ${key('M')} move to folder · ${key('K J')} reorder · ${key('n')} new session · ${key('d')} remove`;
   const body = [blank(rect.width), fitAnsi(`  ${t.fg('textDim')}${hints}${RESET}`, rect.width), blank(rect.width)];
   for (const s of group.sessions) {
     const right = ` ${s.timeLabel} `;
@@ -365,6 +365,7 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
     keys: [
       ['Enter', 'Attach full-screen (starts it if needed)'],
       ['Ctrl+Q', 'Detach back here; the session keeps running'],
+      ['Ctrl+K n', 'New session in the same project, without detaching first'],
       ['i', 'Type into it right here, list and preview still showing'],
     ],
   },
@@ -405,6 +406,7 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
       ['M', 'Move the project to a folder'],
       ['K J', 'Move the folder / project up or down'],
       ['e  d', 'Rename / delete the selected folder'],
+      ['d', 'Remove the selected project from the list (p to add it back)'],
       ['S', 'Sort sessions: recent · actionable'],
       ['t', 'View: normal · active on top'],
     ],

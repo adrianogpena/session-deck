@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { DeckStore, applySessionPatch, applyUiPatch, parseDeckState } from '../store/deckStore';
+import { DeckStore, applyHiddenProjectPatch, applySessionPatch, applyUiPatch, parseDeckState } from '../store/deckStore';
 
 function tempStorePath(): string {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'session-deck-store-')), 'state.json');
@@ -73,4 +73,30 @@ test('DeckStore keeps UI prefs when a session is updated, and sessions when UI p
   await store.updateSession('a', { name: 'A' });
   await store.updateUi({ sidebarPct: 30 });
   assert.deepEqual(new DeckStore(file).read(), { version: 1, sessions: { a: { name: 'A' } }, ui: { theme: 'light', sidebarPct: 30 } });
+});
+
+test('applyHiddenProjectPatch adds and removes keys, dropping the field once empty', () => {
+  let state = applyHiddenProjectPatch({ version: 1, sessions: {} }, '/a', true);
+  assert.deepEqual(state.hiddenProjects, ['/a']);
+  state = applyHiddenProjectPatch(state, '/b', true);
+  assert.deepEqual(new Set(state.hiddenProjects), new Set(['/a', '/b']));
+  state = applyHiddenProjectPatch(state, '/a', false);
+  assert.deepEqual(state.hiddenProjects, ['/b']);
+  state = applyHiddenProjectPatch(state, '/b', false);
+  assert.equal('hiddenProjects' in state, false);
+});
+
+test('parseDeckState keeps unique, valid hidden project keys and drops an empty list', () => {
+  const state = parseDeckState(JSON.stringify({ version: 1, sessions: {}, hiddenProjects: ['/a', '/a', 5, '/b'] }));
+  assert.deepEqual(new Set(state?.hiddenProjects), new Set(['/a', '/b']));
+  assert.equal(parseDeckState(JSON.stringify({ version: 1, sessions: {}, hiddenProjects: [] }))?.hiddenProjects, undefined);
+});
+
+test('DeckStore.setProjectHidden persists across instances and a project can be un-hidden', async () => {
+  const file = tempStorePath();
+  const store = new DeckStore(file);
+  await store.setProjectHidden('/proj', true);
+  assert.deepEqual(new DeckStore(file).getHiddenProjects(), ['/proj']);
+  await store.setProjectHidden('/proj', false);
+  assert.deepEqual(new DeckStore(file).getHiddenProjects(), []);
 });

@@ -1,4 +1,6 @@
 import { execFileSync } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
 import * as pty from 'node-pty';
 import { Terminal } from '@xterm/headless';
 import { SerializeAddon } from '@xterm/addon-serialize';
@@ -35,10 +37,43 @@ export function clearExecutableCache(): void {
   executables.clear();
 }
 
+/** The npm package that installs each agent's CLI, used to find its real binary when it was only installed via `npm install -g` (no system installer put a `.exe` on PATH). */
+const NPM_PACKAGES: Record<AgentType, string> = {
+  claude: '@anthropic-ai/claude-code',
+  copilot: '@github/copilot',
+};
+
+/**
+ * Given the directory of an agent's npm-global shim (`<dir>/<agent>.cmd`), resolves the real binary its
+ * package ships, from that package's own `package.json#bin` entry — not a path assumed or hardcoded, so
+ * it holds however npm laid the install out. Returns the binary's absolute path only when it's a native
+ * `.exe` that actually exists (Claude's `bin/claude.exe`), so ConPTY can run it directly instead of the
+ * shim (which would otherwise add a `cmd.exe` hop). Returns undefined when the package's bin is a JS
+ * entry point instead (e.g. Copilot's loader script), which has no equivalent shortcut.
+ */
+export function resolveNpmGlobalExecutable(agent: AgentType, shimDir: string): string | undefined {
+  const pkgDir = path.join(shimDir, 'node_modules', NPM_PACKAGES[agent]);
+  let pkg: { bin?: Record<string, string> | string };
+  try {
+    pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8')) as { bin?: Record<string, string> | string };
+  } catch {
+    return undefined;
+  }
+  const binEntry = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.[agent];
+  if (!binEntry || !binEntry.endsWith('.exe')) {
+    return undefined;
+  }
+  const exePath = path.join(pkgDir, binEntry);
+  return fs.existsSync(exePath) ? exePath : undefined;
+}
+
 /**
  * The agent's real executable: the `tools.<agent>.command` override from `~/.session-deck/config.json`
  * if set (used as-is, whether a bare name or a full path), otherwise `where.exe` on Windows (so ConPTY
- * runs the .exe rather than an npm .cmd shim), otherwise the bare agent name.
+ * runs the .exe rather than an npm .cmd shim) — falling back, when no bare `.exe` is on PATH (an
+ * npm-only install, with no system installer's own `.exe`), to whatever real binary the npm-global
+ * install's own package ships, so the agent starts the same way regardless of how it was installed —
+ * otherwise the bare agent name.
  */
 function resolveExecutable(agent: AgentType): string {
   let exe = executables.get(agent);
@@ -50,7 +85,13 @@ function resolveExecutable(agent: AgentType): string {
       try {
         exe = execFileSync('where.exe', [`${agent}.exe`], { encoding: 'utf8' }).split(/\r?\n/)[0].trim();
       } catch {
-        exe = `${agent}.exe`;
+        let shimDir: string | undefined;
+        try {
+          shimDir = path.dirname(execFileSync('where.exe', [`${agent}.cmd`], { encoding: 'utf8' }).split(/\r?\n/)[0].trim());
+        } catch {
+          shimDir = undefined;
+        }
+        exe = (shimDir && resolveNpmGlobalExecutable(agent, shimDir)) || `${agent}.exe`;
       }
     } else {
       exe = agent;

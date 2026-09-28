@@ -6,23 +6,52 @@
  */
 // eslint-disable-next-line no-control-regex -- matching terminal control sequences is the point
 const DETACH_PATTERN =/\x11|\x1b\[113;5u|\x1b\[81;\d*;\d*;1;(\d+);\d*_/g;
+/** Same encodings as {@link DETACH_PATTERN}, for Ctrl+K (0x0b, Vk 75 = K, kitty code point 107 = k). */
+// eslint-disable-next-line no-control-regex -- matching terminal control sequences is the point
+const CHORD_PATTERN = /\x0b|\x1b\[107;5u|\x1b\[75;\d*;\d*;1;(\d+);\d*_/g;
 const CTRL_PRESSED = 0x04 | 0x08;
 const ALT_PRESSED = 0x01 | 0x02;
 
-/** Index where the detach key starts in `data`, or -1. */
-export function findDetachKey(data: string): number {
-  const re = new RegExp(DETACH_PATTERN);
+function matchCtrlKey(data: string, pattern: RegExp): RegExpExecArray | null {
+  const re = new RegExp(pattern);
   let m: RegExpExecArray | null;
   while ((m = re.exec(data))) {
     if (m[1] === undefined) {
-      return m.index;
+      return m;
     }
     const state = Number(m[1]);
     if (state & CTRL_PRESSED && !(state & ALT_PRESSED)) {
-      return m.index;
+      return m;
     }
   }
-  return -1;
+  return null;
+}
+
+/** Index where the detach key starts in `data`, or -1. */
+export function findDetachKey(data: string): number {
+  return matchCtrlKey(data, DETACH_PATTERN)?.index ?? -1;
+}
+
+/**
+ * Where the new-session chord's prefix (Ctrl+K) starts and ends in `data`, or null. `end` matters
+ * because a chord typed quickly can arrive with its resolving key already in the same chunk, right
+ * after the match — unlike Ctrl+Q, this key needs to look past its own match to find that out.
+ */
+export function findChordKey(data: string): { index: number; end: number } | null {
+  const m = matchCtrlKey(data, CHORD_PATTERN);
+  return m ? { index: m.index, end: m.index + m[0].length } : null;
+}
+
+/**
+ * Index where an unmodified, key-down press of `ch` (a single ASCII letter) starts in `data`: the
+ * plain character itself, or Windows Terminal's win32-input-mode encoding of it (`Uc` = its code
+ * point, `Kd` = 1) — the same reason `findDetachKey` needs that encoding. -1 if not found.
+ */
+export function findPlainKey(data: string, ch: string): number {
+  const code = ch.charCodeAt(0);
+  const re = new RegExp(`${ch}|\\x1b\\[\\d+;\\d*;${code};1;\\d*;\\d*_`, 'g');
+  const m = re.exec(data);
+  return m ? m.index : -1;
 }
 
 /** Terminal modes an agent (or ConPTY) may switch on in the real terminal while attached. */
