@@ -286,6 +286,8 @@ export class App {
   /** Re-applies the tree, sort and filters, keeping the selected row selected when it's still shown. */
   private rebuildRows(): void {
     const previous = this.selectedRow;
+    const previousIndex = this.selected;
+    const previousRows = this.rows;
     const built = buildTree(this.sessions, this.tree, {
       include: (s) => this.isVisible(s),
       categoryOf: (s) => this.procs.categoryOf(s),
@@ -296,7 +298,21 @@ export class App {
     this.rows = built.rows;
     this.containers = built.containers;
     const keep = previous ? this.rows.findIndex((r) => sameRow(r, previous)) : -1;
-    this.selected = keep >= 0 ? keep : Math.max(0, this.rows.findIndex((r) => r.kind === 'session'));
+    this.selected = keep >= 0 ? keep : (this.nearestSurvivingRow(previousRows, previousIndex) ?? Math.max(0, this.rows.findIndex((r) => r.kind === 'session')));
+  }
+
+  /** When the previously selected row is gone (deleted, archived, filtered out), select whatever now sits
+   *  where it used to be — the row right after it, else the row right before it — instead of the list's top. */
+  private nearestSurvivingRow(previousRows: TreeRow[], previousIndex: number): number | undefined {
+    for (let i = previousIndex + 1; i < previousRows.length; i++) {
+      const idx = this.rows.findIndex((r) => sameRow(r, previousRows[i]));
+      if (idx >= 0) return idx;
+    }
+    for (let i = previousIndex - 1; i >= 0; i--) {
+      const idx = this.rows.findIndex((r) => sameRow(r, previousRows[i]));
+      if (idx >= 0) return idx;
+    }
+    return undefined;
   }
 
   /** Applies a tree change right away, and to the shared store (on the tree as it is on disk). */
@@ -446,9 +462,13 @@ export class App {
     if (!this.config.ui.notifications) {
       return;
     }
-    const watched = this.sessions
-      .filter((s) => s.id && ((s.live && !s.live.exited) || this.procs.isElsewhere(s)))
-      .map((s) => ({ sessionId: s.id!, label: displayTitle(s, this.store) }));
+    const watchedSessions = this.sessions.filter((s) => s.id && ((s.live && !s.live.exited) || this.procs.isElsewhere(s)));
+    const projectNames = projectLabels(watchedSessions.map((s) => s.projectRoot));
+    const watched = watchedSessions.map((s) => ({
+      sessionId: s.id!,
+      label: displayTitle(s, this.store),
+      project: projectNames.get(s.projectRoot),
+    }));
     // Clicking the toast selects that session here (the terminal can't be brought to the front from Node).
     this.notifier.check(
       watched,
@@ -1129,6 +1149,14 @@ export class App {
           this.flash('Marked as unread');
         } else {
           this.flash('Select a session to mark as unread.');
+        }
+        break;
+      case 'U':
+        if (s?.id) {
+          void acknowledgeSessionStatus(s.id).then(() => this.pollProcs());
+          this.flash('Marked as read');
+        } else {
+          this.flash('Select a session to mark as read.');
         }
         break;
       case ',':

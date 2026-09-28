@@ -13,10 +13,10 @@ const UNDERLINE = '\x1b[4m';
 const REVERSE = '\x1b[7m';
 
 const GLYPHS: Record<SessionStatus, { char: string; role: Role; bold: boolean }> = {
-  running: { char: '●', role: 'green', bold: true },
+  running: { char: '●', role: 'red', bold: true },
   waiting: { char: '◐', role: 'yellow', bold: true },
-  // Finished, not seen yet: waiting for a look, so it reads like "waiting".
-  done: { char: '◐', role: 'yellow', bold: true },
+  // Finished, not seen yet: waiting for a look. Same green as the VS Code extension's "Done" decoration.
+  done: { char: '●', role: 'green', bold: true },
   idle: { char: '○', role: 'textDim', bold: false },
   starting: { char: '⟳', role: 'yellow', bold: false },
   error: { char: '✕', role: 'red', bold: true },
@@ -390,6 +390,7 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
       ['e  F2', "Rename (same as Claude's /rename)"],
       ['x', 'Stop the selected session'],
       ['u', 'Mark as unread (finished, not seen)'],
+      ['U', 'Mark as read'],
       ['A', 'Archive / unarchive (^ shows archived)'],
       ['d', 'Delete: move to the trash'],
       ['Ctrl+Z  Z', 'Undo the delete / open the trash'],

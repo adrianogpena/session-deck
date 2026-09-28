@@ -4,6 +4,8 @@ import { claimNotification, readEffectiveSessionStatus, SessionStatus } from './
 export interface WatchedSession {
   sessionId: string;
   label: string;
+  /** Shown as the toast's title. Falls back to "Session Deck" when omitted. */
+  project?: string;
 }
 
 export interface WaitingNotifierOptions {
@@ -48,7 +50,7 @@ export class WaitingNotifier {
       }
     }
 
-    for (const { sessionId, label } of sessions) {
+    for (const { sessionId, label, project } of sessions) {
       const isFirstSight = !this.lastStatus.has(sessionId);
       const previous = this.lastStatus.get(sessionId);
       const record = readEffectiveSessionStatus(sessionId);
@@ -63,7 +65,7 @@ export class WaitingNotifier {
       }
 
       notifier.notify(
-        { title: 'Session Deck', message: MESSAGES[current](label), icon: this.options.iconPath },
+        { title: project ?? 'Session Deck', message: MESSAGES[current](label), icon: this.options.iconPath, appID: 'Session Deck' },
         (error, response) => {
           if (!error && response === 'activate') {
             onActivated?.(sessionId);
