@@ -1,5 +1,5 @@
 import type { Terminal } from '@xterm/headless';
-import type { DeckConfig } from '@session-deck/core';
+import type { DeckConfig, GitStatus } from '@session-deck/core';
 import { fit, fitAnsi, fitTail, renderTerm, textWidth, wrap } from './ansi';
 import { CONFIG_FIELDS } from './configFields';
 import { STATUS_CATEGORIES, StatusCategory, TimeFilter } from './filters';
@@ -46,6 +46,8 @@ export interface SessionView {
   id: string | null;
   /** Replaces the plain status text, e.g. the screen error ("sign-in failed · run /login"). */
   detail?: string;
+  /** `undefined` when `ui.gitStatus` is off, or the cwd isn't a git repo. */
+  git?: GitStatus;
 }
 
 interface GroupCounts {
@@ -56,7 +58,7 @@ interface GroupCounts {
 
 export type ListRow =
   | ({ kind: 'folder'; name: string; collapsed: boolean; hotkey?: number } & GroupCounts)
-  | ({ kind: 'project'; label: string; collapsed: boolean; depth: number; hotkey?: number } & GroupCounts)
+  | ({ kind: 'project'; label: string; collapsed: boolean; depth: number; hotkey?: number; git?: GitStatus } & GroupCounts)
   | { kind: 'session'; view: SessionView; isLast: boolean; depth: number; pin?: 'top' | 'bottom' }
   | { kind: 'divider'; label: string };
 
@@ -129,14 +131,20 @@ function panelHeader(t: Theme, width: number, title: string, note: string): stri
   return [titleLine, `${t.fg('border')}${'─'.repeat(width)}${RESET}`];
 }
 
-/** Folder and project rows: `1▾ name (n) ●r ◐w`. The leading column shows the 1–9 jump key on top-level rows. */
+/** ⇡/⇣ ahead/behind upstream, ✱ dirty — one badge for the whole project, not per session (they'd all share the same repo state). */
+function gitGlyphs(g: GitStatus): string {
+  return `${g.ahead > 0 ? '⇡' : ''}${g.behind > 0 ? '⇣' : ''}${g.dirty > 0 ? '✱' : ''}`;
+}
+
+/** Folder and project rows: `1▾ name (n) ●r ◐w ⇡⇣✱`. The leading column shows the 1–9 jump key on top-level rows. */
 function renderGroupRow(t: Theme, width: number, row: Extract<ListRow, { kind: 'folder' | 'project' }>, selected: boolean): string {
   const depth = row.kind === 'project' ? row.depth : 0;
   const hotkey = row.hotkey === undefined ? ' ' : String(row.hotkey);
   const arrow = row.collapsed ? '▸' : '▾';
   const lead = `${hotkey}${'  '.repeat(depth)}${arrow} `;
   const name = row.kind === 'folder' ? row.name : row.label;
-  const counts = `${row.running ? ` ●${row.running}` : ''}${row.waiting ? ` ◐${row.waiting}` : ''}`;
+  const gitText = row.kind === 'project' && row.git ? gitGlyphs(row.git) : '';
+  const counts = `${row.running ? ` ●${row.running}` : ''}${row.waiting ? ` ◐${row.waiting}` : ''}${gitText ? ` ${gitText}` : ''}`;
   const suffix = ` (${row.count})${counts}`;
   const label = fit(name, Math.max(1, width - textWidth(lead) - textWidth(suffix))).trimEnd();
   const pad = blank(width - textWidth(lead) - textWidth(label) - textWidth(suffix));
@@ -147,9 +155,10 @@ function renderGroupRow(t: Theme, width: number, row: Extract<ListRow, { kind: '
   const nameRole: Role = row.kind === 'folder' ? 'purple' : 'cyan';
   const running = row.running ? ` ${t.fg('green')}●${row.running}` : '';
   const waiting = row.waiting ? ` ${t.fg('yellow')}◐${row.waiting}` : '';
+  const git = gitText ? ` ${t.fg('yellow')}${gitText}` : '';
   return (
     `${t.fg('textDim')}${hotkey}${t.fg('text')}${'  '.repeat(depth)}${arrow} ` +
-    `${BOLD}${t.fg(nameRole)}${label}${RESET}${t.fg('text')} (${row.count})${running}${waiting}${RESET}${pad}`
+    `${BOLD}${t.fg(nameRole)}${label}${RESET}${t.fg('text')} (${row.count})${running}${waiting}${git}${RESET}${pad}`
   );
 }
 
@@ -280,7 +289,10 @@ export function renderPreviewPanel(t: Theme, rect: Rect, content: PreviewContent
   const base = v.detail ?? STATUS_TEXT[v.status];
   const statusText = v.elsewhere ? `${base} in another terminal` : base;
   const titleLine = `${glyph(t, v.status)} ${BOLD}${t.fg('accent')}${fit(v.title, Math.max(1, rect.width - 2))}${RESET}`;
-  const meta = ` ${statusText} · ${v.agent} · ${v.timeLabel} · ${v.cwd} `;
+  const gitText = v.git
+    ? ` · ⎇${v.git.branch ?? '(detached)'}${v.git.ahead || v.git.behind ? ` ⇡${v.git.ahead} ⇣${v.git.behind}` : ''}${v.git.dirty ? ` ✱${v.git.dirty}` : ''}`
+    : '';
+  const meta = ` ${statusText} · ${v.agent} · ${v.timeLabel} · ${v.cwd}${gitText} `;
   const metaFit = fit(meta, Math.max(0, rect.width - 2)).trimEnd();
   const metaLine = `${t.fg('border')}─${t.fg('textDim')}${metaFit}${t.fg('border')}${'─'.repeat(Math.max(0, rect.width - 1 - textWidth(metaFit)))}${RESET}`;
   const bodyHeight = rect.height - PANEL_HEADER_ROWS;

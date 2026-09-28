@@ -27,6 +27,7 @@ const opts = (overrides: Partial<Parameters<typeof buildTree>[2]> = {}) => ({
   include: () => true,
   categoryOf: (s: DeckSession) => categories[s.id!],
   pinOf: () => undefined,
+  gitOf: () => undefined,
   filtering: false,
   recentProjectsFirst: false,
   ...overrides,
@@ -69,6 +70,17 @@ test('buildTree "active" view hoists groups with running/waiting sessions above 
 test('buildTree orders pinned sessions around the rest', () => {
   const rows = buildTree(sessions, defaultTreePrefs(), opts({ pinOf: (s) => (s.id === 'a2' ? 'top' : undefined) })).rows;
   assert.deepEqual(outline(rows).slice(0, 3), ['1P:api', '  s:a2^', '  s:a1']);
+});
+
+test('buildTree aggregates git status across a project\'s sessions to the worst case, one badge per project', () => {
+  const gitBySessionId: Record<string, { ahead: number; behind: number; dirty: number }> = {
+    a1: { ahead: 0, behind: 0, dirty: 0 },
+    a2: { ahead: 2, behind: 0, dirty: 5 },
+  };
+  const rows = buildTree(sessions, defaultTreePrefs(), opts({ gitOf: (s) => gitBySessionId[s.id!] })).rows;
+  const project = (label: string) => rows.find((r): r is Extract<TreeRow, { kind: 'project' }> => r.kind === 'project' && r.label === label)!;
+  assert.deepEqual(project('api').git, { ahead: 2, behind: 0, dirty: 5 });
+  assert.equal(project('docs').git, undefined); // d1 has no entry in gitBySessionId
 });
 
 test('projectLabels adds the parent folder only when two projects share a name', () => {

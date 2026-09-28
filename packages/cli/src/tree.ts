@@ -1,5 +1,5 @@
 import * as path from 'path';
-import { arrangeProjects, folderNodeKey, projectNodeKey, SessionCategory, SessionPin, sortSessions, TreePrefs } from '@session-deck/core';
+import { arrangeProjects, folderNodeKey, GitStatus, projectNodeKey, SessionCategory, SessionPin, sortSessions, TreePrefs } from '@session-deck/core';
 import type { DeckSession } from './sessions';
 
 export type TreeRow =
@@ -16,6 +16,8 @@ export type TreeRow =
       /** 1 inside a folder. */
       depth: number;
       hotkey?: number;
+      /** Worst case across the project's visible sessions (they usually share a cwd, so usually all identical). */
+      git?: GitStatus;
     }
   | { kind: 'session'; session: DeckSession; isLast: boolean; depth: number; pin?: SessionPin }
   | { kind: 'divider'; label: string };
@@ -24,6 +26,8 @@ export interface TreeOptions {
   include(s: DeckSession): boolean;
   categoryOf(s: DeckSession): SessionCategory;
   pinOf(s: DeckSession): SessionPin | undefined;
+  /** `undefined` when `ui.gitStatus` is off, or the session's cwd isn't a git repo (or hasn't been polled yet). */
+  gitOf(s: DeckSession): GitStatus | undefined;
   /** A status/time filter is on: groups with nothing visible are hidden, even empty folders. */
   filtering: boolean;
   /** Projects never moved (`K`/`J`) sort by most-recent-activity when true, alphabetically (fixed) when false. See `DeckConfig.ui.recentProjectsFirst`. */
@@ -44,6 +48,19 @@ interface ProjectBucket {
 }
 
 const isActive = (c: SessionCategory) => c === 'running' || c === 'waiting';
+
+/** One badge for the whole project: worst (highest) ahead/behind/dirty across its sessions — usually all identical, since they usually share a cwd. */
+function aggregateGit(statuses: (GitStatus | undefined)[]): GitStatus | undefined {
+  const present = statuses.filter((g): g is GitStatus => !!g);
+  if (!present.length) {
+    return undefined;
+  }
+  return {
+    ahead: Math.max(...present.map((g) => g.ahead)),
+    behind: Math.max(...present.map((g) => g.behind)),
+    dirty: Math.max(...present.map((g) => g.dirty)),
+  };
+}
 
 /** The folder name, plus its parent's name (`acme-storefront · demo-projects`) when two projects share a name. */
 export function projectLabels(roots: string[]): Map<string, string> {
@@ -109,6 +126,7 @@ export function buildTree(sessions: DeckSession[], tree: TreePrefs, opts: TreeOp
       collapsed: isCollapsed,
       depth,
       hotkey: depth === 0 ? nextHotkey() : undefined,
+      git: aggregateGit(b.visible.map(opts.gitOf)),
     });
     if (isCollapsed) {
       return;

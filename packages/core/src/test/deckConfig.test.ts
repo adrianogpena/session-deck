@@ -12,6 +12,7 @@ test('parseDeckConfig returns every default when the file is empty', () => {
   assert.deepEqual(config.ui.notifyStatuses, ['waiting', 'done', 'error']);
   assert.equal(config.ui.recentProjectsFirst, false);
   assert.equal(config.ui.newSessionFullScreen, true);
+  assert.equal(config.ui.gitStatus, true);
   assert.deepEqual(config.tools.claude, {});
   assert.deepEqual(config.tools.copilot, {});
   assert.equal(config.trash.retentionDays, 30);
@@ -25,6 +26,11 @@ test('parseDeckConfig accepts a valid ui.recentProjectsFirst', () => {
 test('parseDeckConfig accepts a valid ui.newSessionFullScreen', () => {
   assert.equal(parseDeckConfig(JSON.stringify({ ui: { newSessionFullScreen: false } })).ui.newSessionFullScreen, false);
   assert.equal(parseDeckConfig(JSON.stringify({ ui: { newSessionFullScreen: 'false' } })).ui.newSessionFullScreen, true);
+});
+
+test('parseDeckConfig accepts a valid ui.gitStatus', () => {
+  assert.equal(parseDeckConfig(JSON.stringify({ ui: { gitStatus: false } })).ui.gitStatus, false);
+  assert.equal(parseDeckConfig(JSON.stringify({ ui: { gitStatus: 'false' } })).ui.gitStatus, true);
 });
 
 test('parseDeckConfig accepts a valid ui.notifyStatuses and rejects an unknown status wholesale', () => {

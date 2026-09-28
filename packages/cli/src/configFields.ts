@@ -96,6 +96,13 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     editValue: (c) => (c.ui.newSessionFullScreen ? 'on' : 'off'),
     apply: (c) => ({ ...c, ui: { ...c.ui, newSessionFullScreen: !c.ui.newSessionFullScreen } }),
   },
+  {
+    label: 'ui.gitStatus',
+    kind: 'toggle',
+    display: (c) => (c.ui.gitStatus ? 'on' : 'off'),
+    editValue: (c) => (c.ui.gitStatus ? 'on' : 'off'),
+    apply: (c) => ({ ...c, ui: { ...c.ui, gitStatus: !c.ui.gitStatus } }),
+  },
   ...toolFields('claude'),
   ...toolFields('copilot'),
   {

@@ -7,6 +7,7 @@ export * from './concurrency';
 export * from './discovery/claudeStorage';
 export * from './discovery/copilotStorage';
 export * from './discovery/gitProject';
+export * from './discovery/gitStatus';
 export * from './discovery/pathUtils';
 export * from './format';
 export * from './fuzzyMatch';

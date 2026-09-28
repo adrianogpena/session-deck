@@ -66,6 +66,13 @@ test('ui.newSessionFullScreen toggles regardless of input, on by default', () =>
   assert.equal(f.apply(f.apply(base(), '')!, '')?.ui.newSessionFullScreen, true);
 });
 
+test('ui.gitStatus toggles regardless of input, on by default', () => {
+  const f = field('ui.gitStatus');
+  assert.equal(f.display(base()), 'on');
+  assert.equal(f.apply(base(), '')?.ui.gitStatus, false);
+  assert.equal(f.apply(f.apply(base(), '')!, '')?.ui.gitStatus, true);
+});
+
 test('tools.claude.enabled and tools.copilot.enabled toggle independently', () => {
   const claudeEnabled = field('tools.claude.enabled');
   const copilotEnabled = field('tools.copilot.enabled');

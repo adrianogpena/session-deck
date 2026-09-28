@@ -32,6 +32,11 @@ export interface DeckConfig {
      * in the preview pane, as if you'd pressed `i`, when `false`. Default: true.
      */
     newSessionFullScreen: boolean;
+    /**
+     * A session's row shows `✱`/`↑`/`↓` for uncommitted changes and commits ahead/behind its
+     * upstream, and the preview panel shows the branch name and counts. Default: true.
+     */
+    gitStatus: boolean;
   };
   tools: {
     claude: ToolConfig;
@@ -56,6 +61,7 @@ function defaultDeckConfig(): DeckConfig {
       notifyStatuses: [...DEFAULT_NOTIFY_STATUSES],
       recentProjectsFirst: false,
       newSessionFullScreen: true,
+      gitStatus: true,
     },
     tools: { claude: {}, copilot: {} },
     trash: { retentionDays: DEFAULT_TRASH_RETENTION_DAYS },
@@ -99,7 +105,7 @@ export function parseDeckConfig(raw: string): DeckConfig {
   }
   const { ui, tools, trash } = parsed as Record<string, unknown>;
   if (typeof ui === 'object' && ui !== null) {
-    const { maxSessionsListed, notifications, notifyStatuses, recentProjectsFirst, newSessionFullScreen } = ui as Record<string, unknown>;
+    const { maxSessionsListed, notifications, notifyStatuses, recentProjectsFirst, newSessionFullScreen, gitStatus } = ui as Record<string, unknown>;
     if (typeof maxSessionsListed === 'number' && Number.isInteger(maxSessionsListed) && maxSessionsListed > 0) {
       config.ui.maxSessionsListed = maxSessionsListed;
     }
@@ -114,6 +120,9 @@ export function parseDeckConfig(raw: string): DeckConfig {
     }
     if (typeof newSessionFullScreen === 'boolean') {
       config.ui.newSessionFullScreen = newSessionFullScreen;
+    }
+    if (typeof gitStatus === 'boolean') {
+      config.ui.gitStatus = gitStatus;
     }
   }
   if (typeof tools === 'object' && tools !== null) {

@@ -63,8 +63,12 @@ a colored status dot on each session.
   - A number `1`–`9` on the left of a top-level row is its jump key.
   - `▾` means expanded, `▸` collapsed.
   - `↑` / `↓` in front of a title means pinned to the top / bottom of its project.
+  - `⇡` / `⇣` / `✱` after a project's count means it's ahead of / behind its upstream, or has
+    uncommitted changes — one badge for the whole project (see `ui.gitStatus` in
+    [section 4](#4-global-config-sessiondeckconfigjson)), not repeated per session.
 - **Preview panel** (right): the live screen of the selected session, or a summary with its last
-  response when it isn't running. For a folder or project row it lists its sessions.
+  response when it isn't running. For a folder or project row it lists its sessions. Its header
+  line also spells out that session's own branch and git detail (`⎇main ⇡2 ⇣0 ✱3`).
 - **Help bar** (bottom line): the most useful keys. It shortens itself on narrow terminals.
 - **Terminal title**: `Session Deck · ◐ 2 need you` when sessions are waiting or finished unseen,
   so you can see it from the taskbar or another tab.
@@ -408,7 +412,8 @@ it up next time it starts).
     "notifications": true,
     "notifyStatuses": ["waiting", "done", "error"],
     "recentProjectsFirst": false,
-    "newSessionFullScreen": true
+    "newSessionFullScreen": true,
+    "gitStatus": true
   },
   "tools": {
     "claude": { "command": "claude-nightly", "args": ["--model", "opus"] },
@@ -431,6 +436,8 @@ it up next time it starts).
 - **`ui.newSessionFullScreen`**: a new session started with `n`/`N` attaches full-screen, as if you'd
   pressed `Enter`, when `true` — or opens it in the preview pane, as if you'd pressed `i`, when
   `false`. Default: on.
+- **`ui.gitStatus`**: `false` turns off the `⇡`/`⇣`/`✱` project badges and the preview panel's branch
+  line entirely — no `git status` is run at all. Default: on.
 - **`tools.claude` / `tools.copilot`**:
   - **`enabled`**: `false` hides that agent entirely — its sessions aren't discovered, and its `n`/`N`
     new-session key just flashes a message instead of starting one. Default: on.

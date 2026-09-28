@@ -47,6 +47,7 @@ import {
 import { ESC, fitAnsi, oneLine } from './ansi';
 import { CONFIG_FIELDS } from './configFields';
 import { matchesStatusFilter, nextTimeFilter, STATUS_CATEGORIES, StatusCategory, TimeFilter, withinTimeFilter } from './filters';
+import { GitStatusTracker } from './gitStatusTracker';
 import { findChordKey, findDetachKey, findPlainKey, RESET_AGENT_MODES, splitKeys } from './keys';
 import { computeLayout, Layout, ptySizeFor, Rect } from './layout';
 import { AgentType, clearExecutableCache, disposeLive, LiveSession, resizeLive, spawnAgent, typeLine } from './liveSession';
@@ -80,6 +81,7 @@ const DEFAULT_SIDEBAR_PCT = 35;
 const SIDEBAR_STEP = 5;
 const THEME_CYCLE: readonly ThemePreference[] = ['dark', 'light', 'system'];
 const THEME_POLL_MS = 5000;
+const GIT_STATUS_POLL_MS = 5000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** Caps how many sessions' content search reads concurrently on first use. */
 const SEARCH_READ_CONCURRENCY = 8;
@@ -156,6 +158,8 @@ export class App {
   private readonly procs = new StatusTracker();
   /** Tails the events log of Copilot sessions running here, writing their status files. */
   private readonly copilotWatcher = new CopilotStatusWatcher(() => undefined);
+  /** `git status` per session cwd, for the row's ⇡/⇣/✱ markers and the preview panel's branch line. Off entirely when `ui.gitStatus` is false. */
+  private readonly gitStatus = new GitStatusTracker();
   /** `^`: show archived sessions (only) instead of the active ones. */
   private archivedView = false;
   /** Ids moved to the trash this run, newest last, for Ctrl+Z. */
@@ -197,6 +201,8 @@ export class App {
     this.store.watch(() => void this.discover().then(() => this.scheduleRender()));
     void this.refreshSystemTheme();
     setInterval(() => void this.refreshSystemTheme(), THEME_POLL_MS);
+    void this.pollGitStatus();
+    setInterval(() => void this.pollGitStatus(), GIT_STATUS_POLL_MS);
 
     out.write(`${ESC}?1049h${ESC}?25l${ESC}2J`);
     process.stdin.setRawMode(true);
@@ -303,6 +309,7 @@ export class App {
       include: (s) => this.isVisible(s),
       categoryOf: (s) => this.procs.categoryOf(s),
       pinOf: (s) => (s.id ? this.store.getSession(s.id)?.pin : undefined),
+      gitOf: (s) => (this.config.ui.gitStatus ? this.gitStatus.get(s.cwd) : undefined),
       filtering: this.filtering,
       recentProjectsFirst: this.config.ui.recentProjectsFirst,
     });
@@ -339,6 +346,16 @@ export class App {
       this.selected = i;
     }
     return i >= 0;
+  }
+
+  /** Refreshes every visible session's `git status`, then repaints — a no-op (no subprocess spawned) while `ui.gitStatus` is off. */
+  private async pollGitStatus(): Promise<void> {
+    if (!this.config.ui.gitStatus) {
+      return;
+    }
+    await this.gitStatus.poll(this.unhiddenSessions.map((s) => s.cwd));
+    this.rebuildRows(); // the project row's badge is computed into `this.rows`, not read live like the preview panel is
+    this.scheduleRender();
   }
 
   private pollProcs(): void {
@@ -459,6 +476,7 @@ export class App {
       cwd: this.shortPath(s.cwd),
       id: s.id,
       detail: s.live && !s.live.exited ? s.live.screenError : undefined,
+      git: this.config.ui.gitStatus ? this.gitStatus.get(s.cwd) : undefined,
     };
   }
 
@@ -918,6 +936,7 @@ export class App {
     writeDeckConfig(next);
     clearExecutableCache(); // a tools.*.command edit shouldn't need a restart to take effect
     this.rebuildRows(); // e.g. ui.recentProjectsFirst reorders the tree right away
+    void this.pollGitStatus(); // turning ui.gitStatus on shows markers right away, not after the next poll
     this.flash(`${field.label} updated`);
   }
 
