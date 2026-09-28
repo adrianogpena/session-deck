@@ -1,6 +1,6 @@
 import type { Terminal } from '@xterm/headless';
 import type { DeckConfig } from '@session-deck/core';
-import { fit, fitAnsi, renderTerm, textWidth, wrap } from './ansi';
+import { fit, fitAnsi, fitTail, renderTerm, textWidth, wrap } from './ansi';
 import { CONFIG_FIELDS } from './configFields';
 import { STATUS_CATEGORIES, StatusCategory, TimeFilter } from './filters';
 import { PANEL_HEADER_ROWS, Rect } from './layout';
@@ -344,7 +344,10 @@ export function renderMessageBar(t: Theme, cols: number, message: string): strin
 
 export function renderPromptBar(t: Theme, cols: number, label: string, value: string): string {
   const prefix = ` ${label}: `;
-  return `${BOLD}${t.fg('accent')}${prefix}${RESET}${t.fg('text')}${fit(`${value}█`, Math.max(1, cols - textWidth(prefix)))}${RESET}`;
+  const width = Math.max(1, cols - textWidth(prefix));
+  // Keep the tail (and the cursor block after it) visible rather than truncating it away when the value overflows.
+  const visible = fitTail(value, Math.max(0, width - 1));
+  return `${BOLD}${t.fg('accent')}${prefix}${RESET}${t.fg('text')}${fit(`${visible}█`, width)}${RESET}`;
 }
 
 const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [

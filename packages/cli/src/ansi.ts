@@ -46,6 +46,29 @@ export function fit(text: string, width: number): string {
   return result + ' '.repeat(Math.max(0, width - w));
 }
 
+/** Truncates (with a leading `…`) or leaves plain text as-is, keeping the *tail* within `width` columns. Used where the end of the text (e.g. a trailing cursor) must stay visible. */
+export function fitTail(text: string, width: number): string {
+  const chars = Array.from(text);
+  let w = 0;
+  let start = chars.length;
+  for (let i = chars.length - 1; i >= 0; i--) {
+    const cw = charWidth(chars[i].codePointAt(0) ?? 0);
+    if (w + cw > width) {
+      break;
+    }
+    w += cw;
+    start = i;
+  }
+  if (start === 0) {
+    return chars.join('');
+  }
+  const kept = chars.slice(start);
+  while (kept.length && w + 1 > width) {
+    w -= charWidth(kept.shift()!.codePointAt(0) ?? 0);
+  }
+  return '…' + kept.join('');
+}
+
 export function oneLine(text: string): string {
   return String(text).replace(/\s+/g, ' ').trim();
 }
