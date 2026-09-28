@@ -160,19 +160,22 @@ function renderSessionRow(t: Theme, width: number, row: Extract<ListRow, { kind:
   const pinMark = row.pin === 'top' ? '↑ ' : row.pin === 'bottom' ? '↓ ' : '';
   const markers = `${pinMark}${v.elsewhere ? '↗ ' : ''}`;
   const leftPlain = `${indent}${connector} ${GLYPHS[v.status].char} ${markers}`;
-  const right = ` ${v.agent} `;
-  const titleWidth = Math.max(1, width - textWidth(leftPlain) - textWidth(right));
-  const title = fit(v.title, titleWidth);
+  const agentText = ` ${v.agent}`;
+  const availWidth = Math.max(1, width - textWidth(leftPlain));
+  const maxTitleWidth = Math.max(1, availWidth - textWidth(agentText));
+  // Truncated to fit, but not padded: the agent name sits right after the title, not at the row's edge.
+  const title = fit(v.title, Math.min(textWidth(v.title), maxTitleWidth));
+  const pad = blank(Math.max(0, width - textWidth(leftPlain) - textWidth(title) - textWidth(agentText)));
   const active = v.status === 'running' || v.status === 'waiting';
 
   if (selected) {
     const sel = `${t.bg('accent')}${t.fg('bg')}`;
-    return `${sel}${leftPlain}${BOLD}${title}${RESET}${sel}${right}${RESET}`;
+    return `${sel}${leftPlain}${BOLD}${title}${RESET}${sel}${agentText}${pad}${RESET}`;
   }
   const titleStyle = `${active ? BOLD : ''}${v.status === 'exited' ? UNDERLINE : ''}${t.fg('text')}`;
   return (
     `${indent}${t.fg('border')}${connector}${RESET} ${glyph(t, v.status)} ${pinMark ? `${t.fg('accent')}${pinMark}` : ''}${v.elsewhere ? `${t.fg('purple')}↗ ` : ''}${RESET}` +
-    `${titleStyle}${title}${RESET}${t.fg('textDim')}${right}${RESET}`
+    `${titleStyle}${title}${RESET}${t.fg('textDim')}${agentText}${RESET}${pad}`
   );
 }
 
