@@ -82,6 +82,13 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
       return { ...c, ui: { ...c.ui, notifyStatuses: values as SessionStatus[] } };
     },
   },
+  {
+    label: 'ui.recentProjectsFirst',
+    kind: 'toggle',
+    display: (c) => (c.ui.recentProjectsFirst ? 'on' : 'off'),
+    editValue: (c) => (c.ui.recentProjectsFirst ? 'on' : 'off'),
+    apply: (c) => ({ ...c, ui: { ...c.ui, recentProjectsFirst: !c.ui.recentProjectsFirst } }),
+  },
   ...toolFields('claude'),
   ...toolFields('copilot'),
   {

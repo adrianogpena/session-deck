@@ -171,7 +171,10 @@ repository form one project. Folders let you group projects further, one level d
   - **+ New folder…**: asks for a name, creates the folder and moves the project into it.
 - **Move up / down `K` / `J` (or `Shift+↑` / `Shift+↓`)**: moves the selected folder, or the selected
   project (a session moves its project), one place up or down.
-  - Projects never moved keep their default order: the most recently active first.
+  - Projects never moved keep a fixed alphabetical order by default — moving one keeps it exactly
+    where you put it, it won't shuffle as sessions become active. Set `ui.recentProjectsFirst` in
+    the [global config](#4-global-config-sessiondeckconfigjson) to sort unmoved projects by most
+    recent activity instead, the way earlier versions did.
   - Only in the normal view; in the "active on top" view you're asked to switch back (`t`).
 - **Rename folder `e`**: on a folder row, renames it.
 - **Delete folder `d`**: on a folder row, deletes the folder after you confirm with `y`. Its projects
@@ -385,7 +388,8 @@ it up next time it starts).
   "ui": {
     "maxSessionsListed": 30,
     "notifications": true,
-    "notifyStatuses": ["waiting", "done", "error"]
+    "notifyStatuses": ["waiting", "done", "error"],
+    "recentProjectsFirst": false
   },
   "tools": {
     "claude": { "command": "claude-nightly", "args": ["--model", "opus"] },
@@ -402,6 +406,9 @@ it up next time it starts).
 - **`ui.notifications`**: turns desktop notifications off entirely. Default: on.
 - **`ui.notifyStatuses`**: which statuses `notifications` fires for, space-separated: `running`,
   `waiting`, `done`, `error`. Default: `waiting done error` (not `running`).
+- **`ui.recentProjectsFirst`**: sorts top-level projects you haven't manually moved (`K`/`J`) by
+  most-recent-activity when `true`, so they shuffle as sessions become active — a fixed alphabetical
+  order when `false`. Default: off.
 - **`tools.claude` / `tools.copilot`**:
   - **`enabled`**: `false` hides that agent entirely — its sessions aren't discovered, and its `n`/`N`
     new-session key just flashes a message instead of starting one. Default: on.

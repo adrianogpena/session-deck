@@ -28,15 +28,24 @@ const opts = (overrides: Partial<Parameters<typeof buildTree>[2]> = {}) => ({
   categoryOf: (s: DeckSession) => categories[s.id!],
   pinOf: () => undefined,
   filtering: false,
+  recentProjectsFirst: false,
   ...overrides,
 });
 const workTree = (): TreePrefs => ({ ...defaultTreePrefs(), folders: [{ id: 'f1', name: 'Work', projects: [key('web'), key('docs')] }] });
 
-test('buildTree puts folders first, then top-level projects by most recent activity, numbering top-level rows', () => {
+test('buildTree puts folders first, then top-level projects, numbering top-level rows', () => {
   const { rows, containers } = buildTree(sessions, workTree(), opts());
   assert.deepEqual(outline(rows), ['1F:Work(2)', '   P:web', '    s:w1', '   P:docs', '    s:d1', '2P:api', '  s:a1', '  s:a2']);
   assert.deepEqual(containers.get('f1'), [key('web'), key('docs')]);
   assert.deepEqual(containers.get(''), [key('api')]);
+});
+
+test('buildTree defaults top-level projects to a fixed alphabetical order, or most-recent-activity first when recentProjectsFirst is on', () => {
+  const projectLabelsOf = (rows: TreeRow[]) => rows.filter((r): r is Extract<TreeRow, { kind: 'project' }> => r.kind === 'project').map((r) => r.label);
+  const fixed = buildTree(sessions, defaultTreePrefs(), opts()).rows;
+  assert.deepEqual(projectLabelsOf(fixed), ['api', 'docs', 'web']);
+  const recent = buildTree(sessions, defaultTreePrefs(), opts({ recentProjectsFirst: true })).rows;
+  assert.deepEqual(projectLabelsOf(recent), ['api', 'web', 'docs']);
 });
 
 test('buildTree hides the children of collapsed folders and projects', () => {

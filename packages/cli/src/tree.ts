@@ -26,6 +26,8 @@ export interface TreeOptions {
   pinOf(s: DeckSession): SessionPin | undefined;
   /** A status/time filter is on: groups with nothing visible are hidden, even empty folders. */
   filtering: boolean;
+  /** Projects never moved (`K`/`J`) sort by most-recent-activity when true, alphabetically (fixed) when false. See `DeckConfig.ui.recentProjectsFirst`. */
+  recentProjectsFirst: boolean;
 }
 
 export interface BuiltTree {
@@ -59,9 +61,10 @@ function activeFirst<T>(items: T[], active: (item: T) => boolean): { active: T[]
 }
 
 /**
- * Folders (in their manual order) then top-level projects. Projects default to most recent activity
- * first until reordered. Collapsed nodes hide their children. In the "active" view, groups with
- * running/waiting sessions come first, and an "idle / done" divider separates the rest.
+ * Folders (in their manual order) then top-level projects. Projects never moved (`K`/`J`) default to
+ * a fixed alphabetical order, or most recent activity first when `opts.recentProjectsFirst` is on.
+ * Collapsed nodes hide their children. In the "active" view, groups with running/waiting sessions
+ * come first, and an "idle / done" divider separates the rest.
  */
 export function buildTree(sessions: DeckSession[], tree: TreePrefs, opts: TreeOptions): BuiltTree {
   const buckets = new Map<string, ProjectBucket>();
@@ -78,7 +81,9 @@ export function buildTree(sessions: DeckSession[], tree: TreePrefs, opts: TreeOp
   }
   const latest = (b: ProjectBucket) => Math.max(...b.all.map((s) => s.mtime));
   const labels = projectLabels([...buckets.values()].map((bucket) => bucket.root));
-  const defaultOrder = [...buckets.values()].sort((a, b) => latest(b) - latest(a)).map((b) => b.key);
+  const defaultOrder = opts.recentProjectsFirst
+    ? [...buckets.values()].sort((a, b) => latest(b) - latest(a)).map((b) => b.key)
+    : [...buckets.values()].sort((a, b) => (labels.get(a.root) ?? a.root).localeCompare(labels.get(b.root) ?? b.root)).map((b) => b.key);
   const arranged = arrangeProjects(tree, defaultOrder);
   const collapsed = new Set(tree.collapsed);
   const counts = (list: DeckSession[]) => {

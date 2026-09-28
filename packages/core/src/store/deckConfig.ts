@@ -21,6 +21,12 @@ export interface DeckConfig {
     notifications: boolean;
     /** Which statuses `notifications` fires for. Default: waiting, done, error (not running). */
     notifyStatuses: SessionStatus[];
+    /**
+     * Top-level projects you haven't manually reordered (`K`/`J`) sort by most-recent-activity when
+     * `true`, so they shuffle as sessions become active — or alphabetically, a fixed order, when
+     * `false`. Default: false.
+     */
+    recentProjectsFirst: boolean;
   };
   tools: {
     claude: ToolConfig;
@@ -39,7 +45,12 @@ const DEFAULT_TRASH_RETENTION_DAYS = 30;
 
 function defaultDeckConfig(): DeckConfig {
   return {
-    ui: { maxSessionsListed: DEFAULT_MAX_SESSIONS_LISTED, notifications: true, notifyStatuses: [...DEFAULT_NOTIFY_STATUSES] },
+    ui: {
+      maxSessionsListed: DEFAULT_MAX_SESSIONS_LISTED,
+      notifications: true,
+      notifyStatuses: [...DEFAULT_NOTIFY_STATUSES],
+      recentProjectsFirst: false,
+    },
     tools: { claude: {}, copilot: {} },
     trash: { retentionDays: DEFAULT_TRASH_RETENTION_DAYS },
   };
@@ -82,7 +93,7 @@ export function parseDeckConfig(raw: string): DeckConfig {
   }
   const { ui, tools, trash } = parsed as Record<string, unknown>;
   if (typeof ui === 'object' && ui !== null) {
-    const { maxSessionsListed, notifications, notifyStatuses } = ui as Record<string, unknown>;
+    const { maxSessionsListed, notifications, notifyStatuses, recentProjectsFirst } = ui as Record<string, unknown>;
     if (typeof maxSessionsListed === 'number' && Number.isInteger(maxSessionsListed) && maxSessionsListed > 0) {
       config.ui.maxSessionsListed = maxSessionsListed;
     }
@@ -91,6 +102,9 @@ export function parseDeckConfig(raw: string): DeckConfig {
     }
     if (Array.isArray(notifyStatuses) && notifyStatuses.every((s): s is SessionStatus => VALID_STATUSES.includes(s as SessionStatus))) {
       config.ui.notifyStatuses = notifyStatuses;
+    }
+    if (typeof recentProjectsFirst === 'boolean') {
+      config.ui.recentProjectsFirst = recentProjectsFirst;
     }
   }
   if (typeof tools === 'object' && tools !== null) {

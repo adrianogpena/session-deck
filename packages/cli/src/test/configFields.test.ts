@@ -51,6 +51,13 @@ test('ui.notifyStatuses accepts a space-separated list of known statuses and rej
   assert.equal(f.display(f.apply(base(), '')!), '(none)');
 });
 
+test('ui.recentProjectsFirst toggles regardless of input, off by default', () => {
+  const f = field('ui.recentProjectsFirst');
+  assert.equal(f.display(base()), 'off');
+  assert.equal(f.apply(base(), '')?.ui.recentProjectsFirst, true);
+  assert.equal(f.apply(f.apply(base(), '')!, '')?.ui.recentProjectsFirst, false);
+});
+
 test('tools.claude.enabled and tools.copilot.enabled toggle independently', () => {
   const claudeEnabled = field('tools.claude.enabled');
   const copilotEnabled = field('tools.copilot.enabled');

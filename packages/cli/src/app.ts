@@ -286,6 +286,7 @@ export class App {
       categoryOf: (s) => this.procs.categoryOf(s),
       pinOf: (s) => (s.id ? this.store.getSession(s.id)?.pin : undefined),
       filtering: this.filtering,
+      recentProjectsFirst: this.config.ui.recentProjectsFirst,
     });
     this.rows = built.rows;
     this.containers = built.containers;
@@ -797,6 +798,7 @@ export class App {
     this.config = next;
     writeDeckConfig(next);
     clearExecutableCache(); // a tools.*.command edit shouldn't need a restart to take effect
+    this.rebuildRows(); // e.g. ui.recentProjectsFirst reorders the tree right away
     this.flash(`${field.label} updated`);
   }
 

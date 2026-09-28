@@ -10,9 +10,15 @@ test('parseDeckConfig returns every default when the file is empty', () => {
   assert.equal(config.ui.maxSessionsListed, 30);
   assert.equal(config.ui.notifications, true);
   assert.deepEqual(config.ui.notifyStatuses, ['waiting', 'done', 'error']);
+  assert.equal(config.ui.recentProjectsFirst, false);
   assert.deepEqual(config.tools.claude, {});
   assert.deepEqual(config.tools.copilot, {});
   assert.equal(config.trash.retentionDays, 30);
+});
+
+test('parseDeckConfig accepts a valid ui.recentProjectsFirst', () => {
+  assert.equal(parseDeckConfig(JSON.stringify({ ui: { recentProjectsFirst: true } })).ui.recentProjectsFirst, true);
+  assert.equal(parseDeckConfig(JSON.stringify({ ui: { recentProjectsFirst: 'true' } })).ui.recentProjectsFirst, false);
 });
 
 test('parseDeckConfig accepts a valid ui.notifyStatuses and rejects an unknown status wholesale', () => {
