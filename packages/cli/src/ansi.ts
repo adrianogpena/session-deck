@@ -116,10 +116,36 @@ function cellSgr(c: IBufferCell): string {
   return `${ESC}${p.join(';')}m`;
 }
 
-/** The visible screen of a headless terminal, cropped/padded to width x height, as ANSI lines. */
-export function renderTerm(term: Terminal, width: number, height: number): string[] {
+type CursorShape = 'block' | 'underline' | 'bar';
+
+/**
+ * The child's current cursor shape (DECSCUSR), the same thing an attached terminal honors natively —
+ * reading it here, rather than hardcoding a shape, is what keeps the snapshot cursor in sync with the
+ * real one whichever one is changed. `decPrivateModes` isn't part of the public API, but it's the only
+ * way to see a DECSCUSR override; falling back to the terminal's own (public) default cursorStyle option.
+ */
+function cursorShape(term: Terminal): CursorShape {
+  const override = (term as unknown as { _core?: { coreService?: { decPrivateModes?: { cursorStyle?: CursorShape } } } })._core?.coreService
+    ?.decPrivateModes?.cursorStyle;
+  return override ?? term.options.cursorStyle ?? 'block';
+}
+
+/**
+ * The visible screen of a headless terminal, cropped/padded to width x height, as ANSI lines.
+ *
+ * This is a plain-text snapshot, not a live passthrough, so the child's own blinking terminal
+ * cursor (which it positions via escape codes rather than printing a visible glyph) never makes it
+ * into the snapshot on its own — we paint it in ourselves, in whatever shape (block/underline/bar)
+ * the child last requested, mirroring what an attached terminal would show. `showCursor` is false
+ * whenever this session isn't the one actually receiving keystrokes, so a merely-previewed session
+ * reads at a glance as not-in-focus.
+ */
+export function renderTerm(term: Terminal, width: number, height: number, showCursor: boolean): string[] {
   const buf = term.buffer.active;
   const cell = buf.getNullCell();
+  // Not part of the public API, but it's the only way to know the child hid its cursor (e.g. mid-render).
+  const cursorHidden = !!(term as unknown as { _core?: { coreService?: { isCursorHidden?: boolean } } })._core?.coreService?.isCursorHidden;
+  const shape = showCursor && !cursorHidden ? cursorShape(term) : undefined;
   const lines: string[] = [];
   for (let y = 0; y < height; y++) {
     const line = y < term.rows ? buf.getLine(buf.baseY + y) : undefined;
@@ -133,7 +159,8 @@ export function renderTerm(term: Terminal, width: number, height: number): strin
         if (w === 0) {
           continue;
         }
-        const sgr = cellSgr(cell);
+        const atCursor = shape !== undefined && y === buf.cursorY && x === buf.cursorX;
+        const sgr = atCursor ? `${cellSgr(cell)}${ESC}${shape === 'underline' ? 4 : 7}m` : cellSgr(cell);
         if (sgr !== lastSgr) {
           s += sgr;
           lastSgr = sgr;
@@ -143,7 +170,7 @@ export function renderTerm(term: Terminal, width: number, height: number): strin
           col += 1;
           break;
         }
-        s += cell.getChars() || ' ';
+        s += atCursor && shape === 'bar' ? '▏' : cell.getChars() || ' ';
         col += w;
       }
     }

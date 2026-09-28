@@ -657,6 +657,7 @@ export class App {
         ? {
             view: this.viewOf(s),
             term: s.live && !s.live.exited ? s.live.term : undefined,
+            interacting: this.interacting === s,
             exitCode: s.live?.exitCode,
             lastResponse: this.lastResponseOf(s),
           }
@@ -1339,7 +1340,11 @@ export class App {
     this.sessions.unshift(fresh);
     this.rebuildRows();
     this.selectWhere((r) => r.kind === 'session' && r.session === fresh);
-    this.attach(fresh);
+    if (this.config.ui.newSessionFullScreen) {
+      this.attach(fresh);
+    } else {
+      this.startInteracting(fresh);
+    }
   }
 
   /** `o`: a one-line prompt, sent without attaching. A stopped session is started first and gets it once ready. */

@@ -121,7 +121,10 @@ export function spawnAgent(
     cwd,
     env: agentEnv(),
   });
-  const term = new Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true });
+  // cursorStyle: neither agent ever negotiates a shape (DECSCUSR) itself, so this is the one place
+  // that decides it — matching it here is what keeps the preview's drawn-in cursor (view.ts/ansi.ts
+  // renderTerm) looking like the real cursor an attached terminal shows.
+  const term = new Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true, cursorStyle: 'underline' });
   const serializer = new SerializeAddon();
   term.loadAddon(serializer);
   const live: LiveSession = { pty: proc, term, serializer, pid: proc.pid, exited: false, lastOutputAt: Date.now() };

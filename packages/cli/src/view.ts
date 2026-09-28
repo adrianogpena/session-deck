@@ -10,6 +10,7 @@ import { Role, Theme, ThemeName } from './theme';
 const RESET = '\x1b[0m';
 const BOLD = '\x1b[1m';
 const UNDERLINE = '\x1b[4m';
+const REVERSE = '\x1b[7m';
 
 const GLYPHS: Record<SessionStatus, { char: string; role: Role; bold: boolean }> = {
   running: { char: '●', role: 'green', bold: true },
@@ -264,6 +265,8 @@ export interface PreviewContent {
   view: SessionView;
   /** Mirror of the live agent's screen, when it runs here. */
   term?: Terminal;
+  /** Keystrokes are actually going into this session ('i'), as opposed to just being previewed. */
+  interacting?: boolean;
   exitCode?: number;
   lastResponse?: string | null;
 }
@@ -283,7 +286,7 @@ export function renderPreviewPanel(t: Theme, rect: Rect, content: PreviewContent
   const bodyHeight = rect.height - PANEL_HEADER_ROWS;
 
   if (content.term) {
-    return [titleLine, metaLine, ...renderTerm(content.term, rect.width, bodyHeight)];
+    return [titleLine, metaLine, ...renderTerm(content.term, rect.width, bodyHeight, !!content.interacting)];
   }
 
   const key = (k: string) => `${BOLD}${t.fg('accent')}${k}${RESET}${t.fg('textDim')}`;
@@ -345,9 +348,15 @@ export function renderMessageBar(t: Theme, cols: number, message: string): strin
 export function renderPromptBar(t: Theme, cols: number, label: string, value: string): string {
   const prefix = ` ${label}: `;
   const width = Math.max(1, cols - textWidth(prefix));
-  // Keep the tail (and the cursor block after it) visible rather than truncating it away when the value overflows.
-  const visible = fitTail(value, Math.max(0, width - 1));
-  return `${BOLD}${t.fg('accent')}${prefix}${RESET}${t.fg('text')}${fit(`${visible}█`, width)}${RESET}`;
+  const cursorWidth = width > 0 ? 1 : 0;
+  // Keep the tail visible rather than truncating it away when the value overflows.
+  const visible = fitTail(value, Math.max(0, width - cursorWidth));
+  const visibleWidth = Math.min(textWidth(visible), width - cursorWidth);
+  // A reverse-video space instead of a block glyph: relies only on color swap, not on the terminal
+  // having (and correctly rendering) a full-block character, which some terminals drop in some window states.
+  const cursor = cursorWidth ? `${REVERSE} ${RESET}${t.fg('text')}` : '';
+  const pad = ' '.repeat(Math.max(0, width - visibleWidth - cursorWidth));
+  return `${BOLD}${t.fg('accent')}${prefix}${RESET}${t.fg('text')}${visible}${cursor}${pad}${RESET}`;
 }
 
 const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
