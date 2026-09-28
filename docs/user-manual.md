@@ -400,7 +400,8 @@ it up next time it starts).
     "maxSessionsListed": 30,
     "notifications": true,
     "notifyStatuses": ["waiting", "done", "error"],
-    "recentProjectsFirst": false
+    "recentProjectsFirst": false,
+    "newSessionFullScreen": true
   },
   "tools": {
     "claude": { "command": "claude-nightly", "args": ["--model", "opus"] },
@@ -420,6 +421,9 @@ it up next time it starts).
 - **`ui.recentProjectsFirst`**: sorts top-level projects you haven't manually moved (`K`/`J`) by
   most-recent-activity when `true`, so they shuffle as sessions become active — a fixed alphabetical
   order when `false`. Default: off.
+- **`ui.newSessionFullScreen`**: a new session started with `n`/`N` attaches full-screen, as if you'd
+  pressed `Enter`, when `true` — or opens it in the preview pane, as if you'd pressed `i`, when
+  `false`. Default: on.
 - **`tools.claude` / `tools.copilot`**:
   - **`enabled`**: `false` hides that agent entirely — its sessions aren't discovered, and its `n`/`N`
     new-session key just flashes a message instead of starting one. Default: on.

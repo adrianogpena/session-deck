@@ -27,6 +27,11 @@ export interface DeckConfig {
      * `false`. Default: false.
      */
     recentProjectsFirst: boolean;
+    /**
+     * `n`/`N` (new session) attaches full-screen, as if you'd pressed Enter, when `true` — or opens it
+     * in the preview pane, as if you'd pressed `i`, when `false`. Default: true.
+     */
+    newSessionFullScreen: boolean;
   };
   tools: {
     claude: ToolConfig;
@@ -50,6 +55,7 @@ function defaultDeckConfig(): DeckConfig {
       notifications: true,
       notifyStatuses: [...DEFAULT_NOTIFY_STATUSES],
       recentProjectsFirst: false,
+      newSessionFullScreen: true,
     },
     tools: { claude: {}, copilot: {} },
     trash: { retentionDays: DEFAULT_TRASH_RETENTION_DAYS },
@@ -93,7 +99,7 @@ export function parseDeckConfig(raw: string): DeckConfig {
   }
   const { ui, tools, trash } = parsed as Record<string, unknown>;
   if (typeof ui === 'object' && ui !== null) {
-    const { maxSessionsListed, notifications, notifyStatuses, recentProjectsFirst } = ui as Record<string, unknown>;
+    const { maxSessionsListed, notifications, notifyStatuses, recentProjectsFirst, newSessionFullScreen } = ui as Record<string, unknown>;
     if (typeof maxSessionsListed === 'number' && Number.isInteger(maxSessionsListed) && maxSessionsListed > 0) {
       config.ui.maxSessionsListed = maxSessionsListed;
     }
@@ -105,6 +111,9 @@ export function parseDeckConfig(raw: string): DeckConfig {
     }
     if (typeof recentProjectsFirst === 'boolean') {
       config.ui.recentProjectsFirst = recentProjectsFirst;
+    }
+    if (typeof newSessionFullScreen === 'boolean') {
+      config.ui.newSessionFullScreen = newSessionFullScreen;
     }
   }
   if (typeof tools === 'object' && tools !== null) {

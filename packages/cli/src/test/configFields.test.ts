@@ -58,6 +58,14 @@ test('ui.recentProjectsFirst toggles regardless of input, off by default', () =>
   assert.equal(f.apply(f.apply(base(), '')!, '')?.ui.recentProjectsFirst, false);
 });
 
+test('ui.newSessionFullScreen toggles regardless of input, on by default', () => {
+  const f = field('ui.newSessionFullScreen');
+  assert.equal(f.display(base()), 'full screen');
+  assert.equal(f.apply(base(), '')?.ui.newSessionFullScreen, false);
+  assert.equal(f.display(f.apply(base(), '')!), 'preview pane');
+  assert.equal(f.apply(f.apply(base(), '')!, '')?.ui.newSessionFullScreen, true);
+});
+
 test('tools.claude.enabled and tools.copilot.enabled toggle independently', () => {
   const claudeEnabled = field('tools.claude.enabled');
   const copilotEnabled = field('tools.copilot.enabled');

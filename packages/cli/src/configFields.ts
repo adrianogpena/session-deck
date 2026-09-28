@@ -89,6 +89,13 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     editValue: (c) => (c.ui.recentProjectsFirst ? 'on' : 'off'),
     apply: (c) => ({ ...c, ui: { ...c.ui, recentProjectsFirst: !c.ui.recentProjectsFirst } }),
   },
+  {
+    label: 'ui.newSessionFullScreen',
+    kind: 'toggle',
+    display: (c) => (c.ui.newSessionFullScreen ? 'full screen' : 'preview pane'),
+    editValue: (c) => (c.ui.newSessionFullScreen ? 'on' : 'off'),
+    apply: (c) => ({ ...c, ui: { ...c.ui, newSessionFullScreen: !c.ui.newSessionFullScreen } }),
+  },
   ...toolFields('claude'),
   ...toolFields('copilot'),
   {
