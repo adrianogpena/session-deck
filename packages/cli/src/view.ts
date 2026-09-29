@@ -5,6 +5,7 @@ import { CONFIG_FIELDS } from './configFields';
 import { STATUS_CATEGORIES, StatusCategory, TimeFilter } from './filters';
 import { PANEL_HEADER_ROWS, Rect } from './layout';
 import type { SessionStatus } from './sessions';
+import type { LocalSkill, SkillState } from './skills';
 import { Role, Theme, ThemeName } from './theme';
 
 const RESET = '\x1b[0m';
@@ -498,6 +499,7 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
     keys: [
       ['?', 'This help'],
       ['C', 'Show the config file in use'],
+      ['w', 'Show local skills, grouped by state (on · name-only · user-invocable-only · off)'],
       ['q  Ctrl+C', 'Quit (stops background sessions)'],
     ],
   },
@@ -586,6 +588,61 @@ export function configOverlay(
     `${border}╰${'─'.repeat(width - 2)}╯${RESET}`,
   ];
   return { x: Math.max(0, Math.floor((cols - width) / 2)), y: Math.max(0, Math.floor((rows - lines.length) / 2)), lines };
+}
+
+const SKILL_NAME_COLUMN = 32;
+
+const SKILL_STATE_ORDER: readonly SkillState[] = ['on', 'name-only', 'user-invocable-only', 'off'];
+
+const SKILL_STATE_LABELS: Record<SkillState, string> = {
+  on: 'ON — visible + auto-triggerable',
+  'name-only': 'NAME-ONLY — name visible, no description',
+  'user-invocable-only': 'USER-INVOCABLE-ONLY — hidden from context, still in the / menu',
+  off: 'OFF — removed entirely, even from /',
+};
+
+/**
+ * The skills popup (`w`): every skill from `discoverLocalSkills`, grouped by its effective
+ * `skillOverrides` state (a skill with no override shows as `on`). Scrolls like the help overlay.
+ */
+export function skillsOverlay(t: Theme, cols: number, rows: number, skills: readonly LocalSkill[], scroll: number): { x: number; y: number; lines: string[]; maxScroll: number } {
+  const width = Math.min(88, cols - 4);
+  const inner = width - 6;
+  const content: string[] = [];
+  if (skills.length === 0) {
+    content.push(`${t.fg('textDim')}${fit('No local skills found under ~/.claude/skills.', inner)}`);
+  }
+  for (const state of SKILL_STATE_ORDER) {
+    const group = skills.filter((skill) => skill.state === state);
+    if (group.length === 0) {
+      continue;
+    }
+    content.push(`${BOLD}${t.fg('cyan')}${fit(`${SKILL_STATE_LABELS[state]} (${group.length})`, inner)}`);
+    for (const skill of group) {
+      content.push(
+        `${BOLD}${t.fg('purple')}${fit(skill.name, SKILL_NAME_COLUMN)}${RESET}${t.bg('surface')}${t.fg('text')}${fit(skill.description, inner - SKILL_NAME_COLUMN)}`
+      );
+    }
+    content.push(blank(inner));
+  }
+  content.push(`${t.fg('textDim')}${fit('Esc or w to close', inner)}`);
+
+  const maxBody = Math.max(3, rows - 6);
+  const maxScroll = Math.max(0, content.length - maxBody);
+  const offset = Math.min(scroll, maxScroll);
+  const visible = content.slice(offset, offset + maxBody);
+  const s = t.bg('surface');
+  const border = `${s}${t.fg('purple')}`;
+  const title = ' SKILLS ';
+  const left = Math.floor((width - 2 - title.length) / 2);
+  const lines = [
+    `${border}╭${'─'.repeat(left)}${BOLD}${title}${RESET}${border}${'─'.repeat(width - 2 - left - title.length)}╮${RESET}`,
+    `${border}│${s}${blank(width - 2)}${border}│${RESET}`,
+    ...visible.map((l) => `${border}│${s}  ${l}${RESET}${s}  ${border}│${RESET}`),
+    `${border}│${s}${t.fg('yellow')}${fit(offset < maxScroll ? '  ▼ more below' : offset > 0 ? '  ▲ more above' : '', width - 2)}${border}│${RESET}`,
+    `${border}╰${'─'.repeat(width - 2)}╯${RESET}`,
+  ];
+  return { x: Math.max(0, Math.floor((cols - width) / 2)), y: Math.max(0, Math.floor((rows - lines.length) / 2)), lines, maxScroll };
 }
 
 export function themeLabel(preference: string, resolved: ThemeName): string {

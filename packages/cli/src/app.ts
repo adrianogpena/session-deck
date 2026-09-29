@@ -64,6 +64,7 @@ import {
 import { computeLayout, Layout, ptySizeFor, Rect } from './layout';
 import { AgentType, clearExecutableCache, disposeLive, LiveSession, resizeLive, spawnAgent, typeLine } from './liveSession';
 import { DeckSession, StatusTracker, discoverSessions, displayTitle, refreshLiveTitle } from './sessions';
+import { discoverLocalSkills, LocalSkill } from './skills';
 import { buildTree, isStarted, projectLabels, TreeOptions, TreeRow } from './tree';
 import { extractBackgroundReply, OSC11_QUERY, readOsTheme, Theme, ThemeName } from './theme';
 import {
@@ -84,6 +85,7 @@ import {
   searchOverlay,
   SearchResultRow,
   SessionView,
+  skillsOverlay,
   themeLabel,
 } from './view';
 
@@ -172,6 +174,9 @@ export class App {
   private confirm: Confirm | null = null;
   private helpScroll: number | null = null;
   private configSelected: number | null = null;
+  /** `w`: local skills read from `~/.claude/skills` the moment the popup opens, grouped by state in the overlay. */
+  private skillsScroll: number | null = null;
+  private skills: LocalSkill[] = [];
   private search: Search | null = null;
   private statusFilter = new Set<StatusCategory>();
   private timeFilter: TimeFilter = 'all';
@@ -1036,6 +1041,11 @@ export class App {
       const overlay = configOverlay(t, cols, height, this.config, getDeckConfigPath(), this.configSelected);
       overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
     }
+    if (this.skillsScroll !== null) {
+      const overlay = skillsOverlay(t, cols, height, this.skills, this.skillsScroll);
+      this.skillsScroll = Math.min(this.skillsScroll, overlay.maxScroll);
+      overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
+    }
     if (this.search) {
       const labels = projectLabels(unhidden.map((s) => s.projectRoot));
       const rows: SearchResultRow[] = this.search.results.map((s) => ({ view: this.viewOf(s), projectLabel: labels.get(s.projectRoot) ?? s.projectRoot }));
@@ -1240,6 +1250,18 @@ export class App {
     this.render();
   }
 
+  private onSkillsKey(data: string): void {
+    if (data === '\x1b' || data === 'w' || data === 'q') {
+      this.skillsScroll = null;
+      out.write(`${ESC}2J`);
+    } else if (data === '\x1b[A' || data === 'k') {
+      this.skillsScroll = Math.max(0, (this.skillsScroll ?? 0) - 1);
+    } else if (data === '\x1b[B' || data === 'j') {
+      this.skillsScroll = (this.skillsScroll ?? 0) + 1;
+    }
+    this.render();
+  }
+
   /** `toggle` fields flip themselves right away; the rest open a prompt pre-filled with their current value. */
   private editConfigField(index: number): void {
     const field = CONFIG_FIELDS[index];
@@ -1398,6 +1420,10 @@ export class App {
     }
     if (this.configSelected !== null) {
       this.onConfigKey(data);
+      return;
+    }
+    if (this.skillsScroll !== null) {
+      this.onSkillsKey(data);
       return;
     }
     if (this.search) {
@@ -1684,6 +1710,10 @@ export class App {
         break;
       case 'C':
         this.configSelected = 0;
+        break;
+      case 'w':
+        this.skills = discoverLocalSkills();
+        this.skillsScroll = 0;
         break;
       case '/':
         this.openSearch();
