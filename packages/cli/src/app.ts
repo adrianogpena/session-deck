@@ -23,12 +23,14 @@ import {
   deleteFolder,
   expandHome,
   folderNodeKey,
+  freezeSessionOrder,
   humanizeSince,
   markSessionUnseen,
   getDeckConfigPath,
   moveFolder,
   moveProject,
   moveProjectToFolder,
+  moveSession,
   normalizeFsPath,
   projectNodeKey,
   readDeckConfig,
@@ -140,6 +142,7 @@ export class App {
   private rows: TreeRow[] = [];
   /** Displayed project order per container (`''` = top level, else folder id), for K/J. */
   private containers = new Map<string, string[]>();
+  private sessionContainers = new Map<string, string[]>();
   /** Index into `rows`: any row but a divider (or 0 when there are none). */
   private selected = 0;
   /** Checked with Space, for a batch action (archive/stop/delete/move) applied to all of them at once. */
@@ -425,10 +428,15 @@ export class App {
       gitOf: (s) => (this.config.ui.gitStatus ? this.gitStatus.get(s.cwd) : undefined),
       filtering: this.filtering,
       recentProjectsFirst: this.config.ui.recentProjectsFirst,
+      recentSessionsFirst: this.config.ui.recentSessionsFirst,
       tagsOf: (s) => this.tagsOf(s),
     });
     this.rows = built.rows;
     this.containers = built.containers;
+    this.sessionContainers = built.sessionContainers;
+    if (!this.config.ui.recentSessionsFirst) {
+      this.applyFreezeSessionOrder(built.sessionContainers);
+    }
     if (this.multiSelected.size) {
       for (const s of this.multiSelected) {
         if (!this.sessions.includes(s)) {
@@ -438,6 +446,14 @@ export class App {
     }
     const keep = previous ? this.rows.findIndex((r) => sameRow(r, previous)) : -1;
     this.selected = keep >= 0 ? keep : (this.nearestSurvivingRow(previousRows, previousIndex) ?? Math.max(0, this.rows.findIndex((r) => r.kind === 'session')));
+  }
+
+  private applyFreezeSessionOrder(sessionContainers: Map<string, string[]>): void {
+    const next = freezeSessionOrder(this.tree, sessionContainers);
+    if (next !== this.tree) {
+      this.tree = next;
+      void this.store.updateTree((tree) => freezeSessionOrder(tree, sessionContainers));
+    }
   }
 
   /** When the previously selected row is gone (deleted, archived, filtered out), select whatever now sits
@@ -2152,7 +2168,7 @@ export class App {
     this.flash(`Removed tag "${name}" from ${targets.length} session${targets.length === 1 ? '' : 's'}`);
   }
 
-  /** K/J: moves the selected folder, or the selected project (a session moves its project), up or down. */
+  /** K/J: moves the selected folder, the selected project, or the selected session (within its project), up or down. */
   private reorder(delta: number): void {
     const row = this.selectedRow;
     if (this.tree.view === 'active') {
@@ -2162,6 +2178,15 @@ export class App {
     if (row?.kind === 'folder') {
       const folderId = row.folderId;
       this.changeTree((t) => moveFolder(t, folderId, delta));
+      return;
+    }
+    if (row?.kind === 'session') {
+      const s = row.session;
+      if (!s.id) {
+        return;
+      }
+      const displayed = this.sessionContainers.get(s.projectKey) ?? [];
+      this.changeTree((t) => moveSession(t, s.projectKey, s.id!, delta, displayed));
       return;
     }
     const project = this.selectedProject;

@@ -28,6 +28,12 @@ export interface DeckConfig {
      */
     recentProjectsFirst: boolean;
     /**
+     * Sessions inside a project sort by most-recent-activity when `true`, so they shuffle as they
+     * become active — or keep a fixed order when `false`, changing only when you move one yourself
+     * (`K`/`J` on a session row). Default: true.
+     */
+    recentSessionsFirst: boolean;
+    /**
      * `n`/`N` (new session) attaches full-screen, as if you'd pressed Enter, when `true` — or opens it
      * in the preview pane, as if you'd pressed `i`, when `false`. Default: true.
      */
@@ -60,6 +66,7 @@ function defaultDeckConfig(): DeckConfig {
       notifications: true,
       notifyStatuses: [...DEFAULT_NOTIFY_STATUSES],
       recentProjectsFirst: false,
+      recentSessionsFirst: true,
       newSessionFullScreen: true,
       gitStatus: true,
     },
@@ -105,7 +112,7 @@ export function parseDeckConfig(raw: string): DeckConfig {
   }
   const { ui, tools, trash } = parsed as Record<string, unknown>;
   if (typeof ui === 'object' && ui !== null) {
-    const { maxSessionsListed, notifications, notifyStatuses, recentProjectsFirst, newSessionFullScreen, gitStatus } = ui as Record<string, unknown>;
+    const { maxSessionsListed, notifications, notifyStatuses, recentProjectsFirst, recentSessionsFirst, newSessionFullScreen, gitStatus } = ui as Record<string, unknown>;
     if (typeof maxSessionsListed === 'number' && Number.isInteger(maxSessionsListed) && maxSessionsListed > 0) {
       config.ui.maxSessionsListed = maxSessionsListed;
     }
@@ -117,6 +124,9 @@ export function parseDeckConfig(raw: string): DeckConfig {
     }
     if (typeof recentProjectsFirst === 'boolean') {
       config.ui.recentProjectsFirst = recentProjectsFirst;
+    }
+    if (typeof recentSessionsFirst === 'boolean') {
+      config.ui.recentSessionsFirst = recentSessionsFirst;
     }
     if (typeof newSessionFullScreen === 'boolean') {
       config.ui.newSessionFullScreen = newSessionFullScreen;

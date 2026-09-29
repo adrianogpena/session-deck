@@ -1,5 +1,5 @@
 import * as path from 'path';
-import { arrangeProjects, folderNodeKey, GitStatus, projectNodeKey, SessionCategory, SessionPin, sortSessions, TreePrefs } from '@session-deck/core';
+import { arrangeByManualOrder, arrangeProjects, folderNodeKey, GitStatus, projectNodeKey, SessionCategory, SessionPin, sortSessions, TreePrefs } from '@session-deck/core';
 import type { DeckSession } from './sessions';
 
 export type TreeRow =
@@ -33,6 +33,8 @@ export interface TreeOptions {
   filtering: boolean;
   /** Projects never moved (`K`/`J`) sort by most-recent-activity when true, alphabetically (fixed) when false. See `DeckConfig.ui.recentProjectsFirst`. */
   recentProjectsFirst: boolean;
+  /** Sessions sort by most-recent-activity when true, or keep a fixed manual order (moved with `K`/`J`) when false. See `DeckConfig.ui.recentSessionsFirst`. */
+  recentSessionsFirst: boolean;
   /** A session's own tags, for the tag summary section at the bottom of the tree. */
   tagsOf(s: DeckSession): string[];
 }
@@ -41,6 +43,8 @@ export interface BuiltTree {
   rows: TreeRow[];
   /** Displayed project order per container (`''` = top level, else folder id), for reordering. */
   containers: Map<string, string[]>;
+  /** Displayed session order per project (keyed by project key), for reordering. */
+  sessionContainers: Map<string, string[]>;
 }
 
 interface ProjectBucket {
@@ -81,6 +85,22 @@ function activeFirst<T>(items: T[], active: (item: T) => boolean): { active: T[]
 }
 
 /**
+ * Pinned bands as in `sortSessions`, but the rest keeps `manualOrder` instead of sorting by recency —
+ * new sessions (or ones without an id yet) are appended, most recent first. See `DeckConfig.ui.recentSessionsFirst`.
+ */
+function sortSessionsManual(items: DeckSession[], manualOrder: string[], pinOf: (s: DeckSession) => SessionPin | undefined): DeckSession[] {
+  const byRecent = (a: DeckSession, b: DeckSession) => b.mtime - a.mtime;
+  const top = items.filter((i) => pinOf(i) === 'top').sort(byRecent);
+  const bottom = items.filter((i) => pinOf(i) === 'bottom').sort(byRecent);
+  const rest = items.filter((i) => !pinOf(i));
+  const identified = rest.filter((s) => s.id !== null).sort(byRecent);
+  const unidentified = rest.filter((s) => s.id === null).sort(byRecent);
+  const byId = new Map(identified.map((s) => [s.id as string, s]));
+  const orderedIds = arrangeByManualOrder(identified.map((s) => s.id as string), manualOrder);
+  return [...top, ...orderedIds.map((id) => byId.get(id)!), ...unidentified, ...bottom];
+}
+
+/**
  * Folders (in their manual order) then top-level projects. Projects never moved (`K`/`J`) default to
  * a fixed alphabetical order, or most recent activity first when `opts.recentProjectsFirst` is on.
  * Collapsed nodes hide their children. In the "active" view, groups with running/waiting sessions
@@ -115,6 +135,7 @@ export function buildTree(sessions: DeckSession[], tree: TreePrefs, opts: TreeOp
 
   const rows: TreeRow[] = [];
   const containers = new Map<string, string[]>();
+  const sessionContainers = new Map<string, string[]>();
   let hotkey = 1;
   const nextHotkey = () => (hotkey <= 9 ? hotkey++ : undefined);
 
@@ -134,7 +155,13 @@ export function buildTree(sessions: DeckSession[], tree: TreePrefs, opts: TreeOp
     if (isCollapsed) {
       return;
     }
-    const ordered = sortSessions(b.visible, tree.sort, opts.pinOf, (s) => s.mtime, opts.categoryOf);
+    const ordered = opts.recentSessionsFirst
+      ? sortSessions(b.visible, tree.sort, opts.pinOf, (s) => s.mtime, opts.categoryOf)
+      : sortSessionsManual(b.visible, tree.sessionOrder[b.key] ?? [], opts.pinOf);
+    sessionContainers.set(
+      b.key,
+      ordered.filter((s) => s.id !== null).map((s) => s.id as string)
+    );
     ordered.forEach((s, i) => rows.push({ kind: 'session', session: s, isLast: i === ordered.length - 1, depth: depth + 1, pin: opts.pinOf(s) }));
   };
 
@@ -191,5 +218,5 @@ export function buildTree(sessions: DeckSession[], tree: TreePrefs, opts: TreeOp
     }
   }
 
-  return { rows, containers };
+  return { rows, containers, sessionContainers };
 }

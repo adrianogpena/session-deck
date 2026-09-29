@@ -24,6 +24,11 @@ export interface TreePrefs {
   folders: FolderPrefs[];
   /** Manual order of top-level projects. Projects not listed follow, in each front end's default order. */
   rootOrder: string[];
+  /**
+   * Manual order of each project's sessions (session id, keyed by project key), used only when
+   * `DeckConfig.ui.recentSessionsFirst` is off. Sessions not listed follow, in the front end's default order.
+   */
+  sessionOrder: Record<string, string[]>;
   /** Collapsed folder/project nodes, see {@link folderNodeKey} / {@link projectNodeKey}. */
   collapsed: string[];
   sort: SessionSort;
@@ -31,13 +36,28 @@ export interface TreePrefs {
 }
 
 export function defaultTreePrefs(): TreePrefs {
-  return { folders: [], rootOrder: [], collapsed: [], sort: 'recent', view: 'normal' };
+  return { folders: [], rootOrder: [], sessionOrder: {}, collapsed: [], sort: 'recent', view: 'normal' };
 }
 
 export const folderNodeKey = (folderId: string) => `folder:${folderId}`;
 export const projectNodeKey = (projectKey: string) => `project:${projectKey}`;
 
 const stringArray = (value: unknown): string[] => (Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []);
+
+/** Tolerant: non-object values, or entries whose value isn't a string array, are dropped (empty arrays too). */
+const stringArrayRecord = (value: unknown): Record<string, string[]> => {
+  if (typeof value !== 'object' || value === null) {
+    return {};
+  }
+  const result: Record<string, string[]> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    const arr = stringArray(v);
+    if (arr.length) {
+      result[k] = arr;
+    }
+  }
+  return result;
+};
 
 /** Tolerant: invalid parts fall back to defaults, and a project listed in two places keeps its first one. */
 export function parseTreePrefs(raw: unknown): TreePrefs | undefined {
@@ -57,6 +77,7 @@ export function parseTreePrefs(raw: unknown): TreePrefs | undefined {
     tree.folders.push({ id, name, projects: members });
   }
   tree.rootOrder = stringArray(r.rootOrder).filter((p) => !placed.has(p));
+  tree.sessionOrder = stringArrayRecord(r.sessionOrder);
   tree.collapsed = [...new Set(stringArray(r.collapsed))];
   if (r.sort === 'recent' || r.sort === 'actionable') {
     tree.sort = r.sort;
@@ -150,6 +171,58 @@ export function moveProject(tree: TreePrefs, projectKey: string, delta: number, 
   return folder
     ? { ...tree, folders: tree.folders.map((f) => (f === folder ? { ...f, projects: list } : f)) }
     : { ...tree, rootOrder: list };
+}
+
+/**
+ * Swaps a session with its displayed neighbor within one project. `displayed` is that project's
+ * currently shown session ids (may include ones never ordered): those keep their stored positions,
+ * and unordered displayed ones are appended in displayed order first. See `moveProject`.
+ */
+export function moveSession(tree: TreePrefs, projectKey: string, sessionId: string, delta: number, displayed: string[]): TreePrefs {
+  const list = [...(tree.sessionOrder[projectKey] ?? [])];
+  for (const id of displayed) {
+    if (!list.includes(id)) {
+      list.push(id);
+    }
+  }
+  const visible = list.filter((id) => displayed.includes(id));
+  const i = visible.indexOf(sessionId);
+  const j = i + delta;
+  if (i < 0 || j < 0 || j >= visible.length) {
+    return tree;
+  }
+  const a = list.indexOf(visible[i]);
+  const b = list.indexOf(visible[j]);
+  [list[a], list[b]] = [list[b], list[a]];
+  return { ...tree, sessionOrder: { ...tree.sessionOrder, [projectKey]: list } };
+}
+
+/**
+ * With `DeckConfig.ui.recentSessionsFirst` off, locks in each project's currently displayed session
+ * order for any session not yet in `sessionOrder` — otherwise it keeps falling back to
+ * most-recent-first (see `sortSessionsManual` in `tree.ts`), so it would still shuffle as it becomes
+ * active. `displayed` is a project's currently shown session ids, keyed by project key. From here on a
+ * session only moves via `moveSession` (`K`/`J`).
+ */
+export function freezeSessionOrder(tree: TreePrefs, displayed: Map<string, string[]>): TreePrefs {
+  let sessionOrder = tree.sessionOrder;
+  for (const [key, ids] of displayed) {
+    const stored = sessionOrder[key] ?? [];
+    const missing = ids.filter((id) => !stored.includes(id));
+    if (missing.length) {
+      sessionOrder = { ...sessionOrder, [key]: [...stored, ...missing] };
+    }
+  }
+  return sessionOrder === tree.sessionOrder ? tree : { ...tree, sessionOrder };
+}
+
+/** Orders `ids` (already in a default/fallback order) by `manual`, keeping unlisted ones in that fallback order at the end. */
+export function arrangeByManualOrder(ids: string[], manual: string[]): string[] {
+  const present = new Set(ids);
+  const ordered = manual.filter((id) => present.has(id));
+  const orderedSet = new Set(ordered);
+  const rest = ids.filter((id) => !orderedSet.has(id));
+  return [...ordered, ...rest];
 }
 
 export function setCollapsed(tree: TreePrefs, nodeKey: string, collapsed: boolean): TreePrefs {

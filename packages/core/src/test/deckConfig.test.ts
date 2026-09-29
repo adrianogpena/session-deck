@@ -11,6 +11,7 @@ test('parseDeckConfig returns every default when the file is empty', () => {
   assert.equal(config.ui.notifications, true);
   assert.deepEqual(config.ui.notifyStatuses, ['waiting', 'done', 'error']);
   assert.equal(config.ui.recentProjectsFirst, false);
+  assert.equal(config.ui.recentSessionsFirst, true);
   assert.equal(config.ui.newSessionFullScreen, true);
   assert.equal(config.ui.gitStatus, true);
   assert.deepEqual(config.tools.claude, {});
@@ -21,6 +22,11 @@ test('parseDeckConfig returns every default when the file is empty', () => {
 test('parseDeckConfig accepts a valid ui.recentProjectsFirst', () => {
   assert.equal(parseDeckConfig(JSON.stringify({ ui: { recentProjectsFirst: true } })).ui.recentProjectsFirst, true);
   assert.equal(parseDeckConfig(JSON.stringify({ ui: { recentProjectsFirst: 'true' } })).ui.recentProjectsFirst, false);
+});
+
+test('parseDeckConfig accepts a valid ui.recentSessionsFirst', () => {
+  assert.equal(parseDeckConfig(JSON.stringify({ ui: { recentSessionsFirst: false } })).ui.recentSessionsFirst, false);
+  assert.equal(parseDeckConfig(JSON.stringify({ ui: { recentSessionsFirst: 'false' } })).ui.recentSessionsFirst, true);
 });
 
 test('parseDeckConfig accepts a valid ui.newSessionFullScreen', () => {

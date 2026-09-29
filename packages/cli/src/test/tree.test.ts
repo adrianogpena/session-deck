@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { defaultTreePrefs, folderNodeKey, projectNodeKey, SessionCategory, TreePrefs } from '@session-deck/core';
+import { defaultTreePrefs, folderNodeKey, freezeSessionOrder, projectNodeKey, SessionCategory, TreePrefs } from '@session-deck/core';
 import type { DeckSession } from '../sessions';
 import { buildTree, projectLabels, TreeRow } from '../tree';
 
@@ -31,6 +31,7 @@ const opts = (overrides: Partial<Parameters<typeof buildTree>[2]> = {}) => ({
   gitOf: () => undefined,
   filtering: false,
   recentProjectsFirst: false,
+  recentSessionsFirst: true,
   tagsOf: () => [],
   ...overrides,
 });
@@ -49,6 +50,33 @@ test('buildTree defaults top-level projects to a fixed alphabetical order, or mo
   assert.deepEqual(projectLabelsOf(fixed), ['api', 'docs', 'web']);
   const recent = buildTree(sessions, defaultTreePrefs(), opts({ recentProjectsFirst: true })).rows;
   assert.deepEqual(projectLabelsOf(recent), ['api', 'web', 'docs']);
+});
+
+test('buildTree keeps a fixed session order when recentSessionsFirst is off, moving only via the stored sessionOrder', () => {
+  const tree = { ...defaultTreePrefs(), sessionOrder: { [key('api')]: ['a2', 'a1'] } };
+  const built = buildTree(sessions, tree, opts({ recentSessionsFirst: false }));
+  assert.deepEqual(outline(built.rows).slice(0, 3), ['1P:api', '  s:a2', '  s:a1']);
+  assert.deepEqual(built.sessionContainers.get(key('api')), ['a2', 'a1']);
+  // Unordered project (docs) falls back to most-recent-first for sessions it hasn't stored an order for.
+  assert.deepEqual(built.sessionContainers.get(key('docs')), ['d1']);
+});
+
+test('reproduces the reported bug: with recentSessionsFirst off, a session that becomes newest does not jump up once frozen (app.ts wires buildTree + freezeSessionOrder together on every render)', () => {
+  // api starts with a2 (mtime 10) second, behind a1 (mtime 50) — nothing manually ordered yet.
+  let tree = defaultTreePrefs();
+  const renderOnce = (currentSessions: DeckSession[]) => {
+    const built = buildTree(currentSessions, tree, opts({ recentSessionsFirst: false }));
+    tree = freezeSessionOrder(tree, built.sessionContainers); // what app.ts's rebuildRows() does each time
+    return built;
+  };
+
+  const first = renderOnce(sessions);
+  assert.deepEqual(outline(first.rows).slice(0, 3), ['1P:api', '  s:a1', '  s:a2']); // fallback: mtime order, now frozen
+
+  // a2 becomes the most recently active session in the project (its transcript just got a new turn).
+  const bumped = [session('a1', 'api', 50), session('a2', 'api', 999), session('w1', 'web', 40), session('d1', 'docs', 30)];
+  const second = renderOnce(bumped);
+  assert.deepEqual(outline(second.rows).slice(0, 3), ['1P:api', '  s:a1', '  s:a2']); // unchanged: order is frozen, not activity-based
 });
 
 test('buildTree hides the children of collapsed folders and projects', () => {

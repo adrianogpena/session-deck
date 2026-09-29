@@ -210,12 +210,19 @@ repository form one project. Folders let you group projects further, one level d
   - **+ New folder…**: asks for a name, creates the folder and moves the project into it.
   - With a checked batch (`Space`): moves every distinct project among the checked sessions to the
     folder you pick, in one go.
-- **Move up / down `K` / `J` (or `Shift+↑` / `Shift+↓`)**: moves the selected folder, or the selected
-  project (a session moves its project), one place up or down.
+- **Move up / down `K` / `J` (or `Shift+↑` / `Shift+↓`)**: moves the selected folder, project, or
+  session one place up or down. On a session row, it moves that session within its project, not the
+  project itself.
   - Projects never moved keep a fixed alphabetical order by default — moving one keeps it exactly
     where you put it, it won't shuffle as sessions become active. Set `ui.recentProjectsFirst` in
     the [global config](#4-global-config-sessiondeckconfigjson) to sort unmoved projects by most
     recent activity instead, the way earlier versions did.
+  - Sessions sort by most recent activity by default, shuffling as they become active. Set
+    `ui.recentSessionsFirst` to `false` in the [global config](#4-global-config-sessiondeckconfigjson)
+    to freeze that order: the next time each project's sessions are shown, whatever order they're
+    currently in is locked in, and from then on a session only moves when you move it with `K`/`J`
+    (a brand-new session is appended, most recent first, the first time it's seen). Turning the
+    setting off doesn't undo any shuffling that already happened before you turned it off.
   - Only in the normal view; in the "active on top" view you're asked to switch back (`t`).
 - **Rename folder `e`**: on a folder row, renames it.
 - **Delete folder `d`**: on a folder row, deletes the folder after you confirm with `y`. Its projects
@@ -452,6 +459,7 @@ it up next time it starts).
     "notifications": true,
     "notifyStatuses": ["waiting", "done", "error"],
     "recentProjectsFirst": false,
+    "recentSessionsFirst": true,
     "newSessionFullScreen": true,
     "gitStatus": true
   },
@@ -473,6 +481,9 @@ it up next time it starts).
 - **`ui.recentProjectsFirst`**: sorts top-level projects you haven't manually moved (`K`/`J`) by
   most-recent-activity when `true`, so they shuffle as sessions become active — a fixed alphabetical
   order when `false`. Default: off.
+- **`ui.recentSessionsFirst`**: sorts each project's sessions by most-recent-activity when `true`, so
+  they shuffle as they become active — or keeps a fixed order when `false`, changing only when you move
+  a session yourself (`K`/`J` on a session row). Default: on.
 - **`ui.newSessionFullScreen`**: a new session started with `n`/`N` attaches full-screen, as if you'd
   pressed `Enter`, when `true` — or opens it in the preview pane, as if you'd pressed `i`, when
   `false`. Default: on.

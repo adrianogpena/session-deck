@@ -58,6 +58,13 @@ test('ui.recentProjectsFirst toggles regardless of input, off by default', () =>
   assert.equal(f.apply(f.apply(base(), '')!, '')?.ui.recentProjectsFirst, false);
 });
 
+test('ui.recentSessionsFirst toggles regardless of input, on by default', () => {
+  const f = field('ui.recentSessionsFirst');
+  assert.equal(f.display(base()), 'on');
+  assert.equal(f.apply(base(), '')?.ui.recentSessionsFirst, false);
+  assert.equal(f.apply(f.apply(base(), '')!, '')?.ui.recentSessionsFirst, true);
+});
+
 test('ui.newSessionFullScreen toggles regardless of input, on by default', () => {
   const f = field('ui.newSessionFullScreen');
   assert.equal(f.display(base()), 'full screen');

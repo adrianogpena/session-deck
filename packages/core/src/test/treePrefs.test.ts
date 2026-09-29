@@ -5,14 +5,17 @@ import * as os from 'os';
 import * as path from 'path';
 import { DeckStore } from '../store/deckStore';
 import {
+  arrangeByManualOrder,
   arrangeProjects,
   createFolder,
   defaultTreePrefs,
   deleteFolder,
   folderNodeKey,
+  freezeSessionOrder,
   moveFolder,
   moveProject,
   moveProjectToFolder,
+  moveSession,
   parseTreePrefs,
   SessionCategory,
   setCollapsed,
@@ -39,6 +42,7 @@ test('parseTreePrefs falls back to defaults for invalid parts and keeps a projec
       { id: 'c', name: 'Home', projects: ['p2', 'p4'] },
     ],
     rootOrder: ['p1', 'p5', 7],
+    sessionOrder: { p1: ['s2', 's1', 3], p2: [], p3: 'nope' },
     sort: 'sideways',
     view: 'active',
   });
@@ -47,6 +51,7 @@ test('parseTreePrefs falls back to defaults for invalid parts and keeps a projec
     { id: 'c', name: 'Home', projects: ['p4'] },
   ]);
   assert.deepEqual(tree?.rootOrder, ['p5']);
+  assert.deepEqual(tree?.sessionOrder, { p1: ['s2', 's1'] });
   assert.equal(tree?.sort, 'recent');
   assert.equal(tree?.view, 'active');
 });
@@ -84,6 +89,31 @@ test('moveProject swaps displayed neighbors and keeps projects the other front e
   assert.deepEqual(t.rootOrder, ['a', 'x', 'c', 'b']);
   assert.deepEqual(arrangeProjects(t, ['a', 'b', 'c']).root, ['a', 'c', 'b']);
   assert.equal(moveProject(tree, 'a', -1, ['a', 'b']), tree);
+});
+
+test('moveSession swaps displayed neighbors within one project and keeps other projects\' orders untouched', () => {
+  const tree = { ...defaultTreePrefs(), sessionOrder: { p1: ['a', 'x'], p2: ['z'] } };
+  const t = moveSession(tree, 'p1', 'c', -1, ['a', 'b', 'c']);
+  assert.deepEqual(t.sessionOrder, { p1: ['a', 'x', 'c', 'b'], p2: ['z'] });
+  assert.equal(moveSession(tree, 'p1', 'a', -1, ['a', 'b']), tree);
+});
+
+test('freezeSessionOrder locks in the currently displayed order, once, leaving already-stored sessions untouched', () => {
+  const tree = { ...defaultTreePrefs(), sessionOrder: { p1: ['a', 'b'] } };
+  // p1: 'c' is new (gets appended); p2: nothing stored yet, so its whole displayed order is captured.
+  const displayed = new Map([
+    ['p1', ['a', 'b', 'c']],
+    ['p2', ['y', 'x']],
+  ]);
+  const t = freezeSessionOrder(tree, displayed);
+  assert.deepEqual(t.sessionOrder, { p1: ['a', 'b', 'c'], p2: ['y', 'x'] });
+  // Nothing new to freeze the second time around: returns the same object (no-op, no spurious write).
+  assert.equal(freezeSessionOrder(t, displayed), t);
+});
+
+test('arrangeByManualOrder keeps stored positions and appends unlisted ids in fallback order', () => {
+  assert.deepEqual(arrangeByManualOrder(['a', 'b', 'c'], ['c', 'a']), ['c', 'a', 'b']);
+  assert.deepEqual(arrangeByManualOrder(['a', 'b'], ['z', 'a']), ['a', 'b']); // 'z' isn't present, dropped
 });
 
 test('arrangeProjects places folder members, then ordered top-level projects, then the rest in given order', () => {

@@ -90,6 +90,13 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     apply: (c) => ({ ...c, ui: { ...c.ui, recentProjectsFirst: !c.ui.recentProjectsFirst } }),
   },
   {
+    label: 'ui.recentSessionsFirst',
+    kind: 'toggle',
+    display: (c) => (c.ui.recentSessionsFirst ? 'on' : 'off'),
+    editValue: (c) => (c.ui.recentSessionsFirst ? 'on' : 'off'),
+    apply: (c) => ({ ...c, ui: { ...c.ui, recentSessionsFirst: !c.ui.recentSessionsFirst } }),
+  },
+  {
     label: 'ui.newSessionFullScreen',
     kind: 'toggle',
     display: (c) => (c.ui.newSessionFullScreen ? 'full screen' : 'preview pane'),
