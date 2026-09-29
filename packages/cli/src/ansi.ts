@@ -139,16 +139,23 @@ function cursorShape(term: Terminal): CursorShape {
  * the child last requested, mirroring what an attached terminal would show. `showCursor` is false
  * whenever this session isn't the one actually receiving keystrokes, so a merely-previewed session
  * reads at a glance as not-in-focus.
+ *
+ * `scrollOffset` reads further back into the terminal's own scrollback instead of the live bottom
+ * (0 = live), for the preview's own scroll — independent of the terminal's real viewport, which
+ * stays pinned to the bottom throughout (this is a read-only snapshot, not `term.scrollLines`, so
+ * an attach mid-scroll still resumes at the live bottom). The cursor is only ever drawn at 0: at
+ * any other offset it isn't part of what's on screen.
  */
-export function renderTerm(term: Terminal, width: number, height: number, showCursor: boolean): string[] {
+export function renderTerm(term: Terminal, width: number, height: number, showCursor: boolean, scrollOffset = 0): string[] {
   const buf = term.buffer.active;
   const cell = buf.getNullCell();
+  const topY = Math.max(0, buf.baseY - scrollOffset);
   // Not part of the public API, but it's the only way to know the child hid its cursor (e.g. mid-render).
   const cursorHidden = !!(term as unknown as { _core?: { coreService?: { isCursorHidden?: boolean } } })._core?.coreService?.isCursorHidden;
-  const shape = showCursor && !cursorHidden ? cursorShape(term) : undefined;
+  const shape = showCursor && scrollOffset === 0 && !cursorHidden ? cursorShape(term) : undefined;
   const lines: string[] = [];
   for (let y = 0; y < height; y++) {
-    const line = y < term.rows ? buf.getLine(buf.baseY + y) : undefined;
+    const line = y < term.rows ? buf.getLine(topY + y) : undefined;
     let s = '';
     let lastSgr = '';
     let col = 0;

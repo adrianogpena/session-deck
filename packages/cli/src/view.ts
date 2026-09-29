@@ -306,6 +306,8 @@ export interface PreviewContent {
   interacting?: boolean;
   exitCode?: number;
   lastResponse?: string | null;
+  /** Lines scrolled back from the live bottom (↑↓/PageUp/PageDown/Home/End while this session is selected), see `renderTerm`. */
+  scrollOffset?: number;
 }
 
 /** Lines for the preview panel: a title + meta header, then the live screen or a summary. */
@@ -320,13 +322,15 @@ export function renderPreviewPanel(t: Theme, rect: Rect, content: PreviewContent
   const gitText = v.git
     ? ` · ⎇${v.git.branch ?? '(detached)'}${v.git.ahead || v.git.behind ? ` ⇡${v.git.ahead} ⇣${v.git.behind}` : ''}${v.git.dirty ? ` ✱${v.git.dirty}` : ''}`
     : '';
-  const meta = ` ${statusText} · ${v.agent} · ${v.timeLabel} · ${v.cwd}${gitText} `;
+  const scrolled = !!content.scrollOffset;
+  const meta = ` ${statusText} · ${v.agent} · ${v.timeLabel} · ${v.cwd}${gitText}${scrolled ? ' · ↑ scrolled · End to jump to latest' : ''} `;
   const metaFit = fit(meta, Math.max(0, rect.width - 2)).trimEnd();
-  const metaLine = `${t.fg('border')}─${t.fg('textDim')}${metaFit}${t.fg('border')}${'─'.repeat(Math.max(0, rect.width - 1 - textWidth(metaFit)))}${RESET}`;
+  const metaRole = scrolled ? 'yellow' : 'textDim';
+  const metaLine = `${t.fg('border')}─${t.fg(metaRole)}${metaFit}${t.fg('border')}${'─'.repeat(Math.max(0, rect.width - 1 - textWidth(metaFit)))}${RESET}`;
   const bodyHeight = rect.height - PANEL_HEADER_ROWS;
 
   if (content.term) {
-    return [titleLine, metaLine, ...renderTerm(content.term, rect.width, bodyHeight, !!content.interacting)];
+    return [titleLine, metaLine, ...renderTerm(content.term, rect.width, bodyHeight, !!content.interacting, content.scrollOffset)];
   }
 
   const key = (k: string) => `${BOLD}${t.fg('accent')}${k}${RESET}${t.fg('textDim')}`;
@@ -413,7 +417,9 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
   {
     title: 'NAVIGATION',
     keys: [
-      ['↑ ↓  j k', 'Select (preview follows)'],
+      ['j k', 'Select (preview follows)'],
+      ['↑ ↓', 'Select, or scroll the preview if it has a live session in it'],
+      ['PgUp/Dn  Home/End', "Scroll the selected session's preview"],
       ['← →  Tab', 'Collapse / expand; ← also goes to the parent'],
       ['1-9', 'Jump to a top-level folder or project'],
       ['`', 'Back to the previously selected session'],

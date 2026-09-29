@@ -59,6 +59,33 @@ export function findPlainKey(data: string, ch: string): number {
 export const RESET_AGENT_MODES = '\x1b[?9001l\x1b[?2004l\x1b[?1004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1l\x1b[<u\x1b[0m';
 
 /**
+ * Basic click/wheel reporting (mode 1000), SGR-encoded (mode 1006) so coordinates never collide with
+ * printable bytes. On while browsing the list (a wheel notch then arrives as its own unambiguous
+ * sequence, see `onMouseSequence`, instead of the arrow keys a terminal falls back to translating it
+ * into with no mouse mode on — which a real arrow-key press also sends, and can't be told apart from).
+ * Off whenever input is forwarded to a live agent (`RESET_AGENT_MODES` already turns it back off too).
+ */
+export const ENABLE_MOUSE = '\x1b[?1000h\x1b[?1006h';
+export const DISABLE_MOUSE = '\x1b[?1000l\x1b[?1006l';
+
+/** A wheel notch or click, reported because {@link ENABLE_MOUSE} is on: `ESC [ < Cb ; Cx ; Cy (M|m)`. */
+// eslint-disable-next-line no-control-regex -- matching terminal control sequences is the point
+const MOUSE_SEQUENCE = /^\x1b\[<(\d+);(\d+);(\d+)[Mm]$/;
+
+/** Whether `data` is one SGR mouse report, and if it's a wheel notch, which way. `wheel` is undefined for a plain click/release (reported the same as a wheel notch would be, just consumed silently — sdeck has no use for clicks yet). */
+export function parseMouseSequence(data: string): { wheel?: 'up' | 'down' } | undefined {
+  const m = MOUSE_SEQUENCE.exec(data);
+  if (!m) {
+    return undefined;
+  }
+  const cb = Number(m[1]);
+  if ((cb & 0x40) === 0) {
+    return {}; // an ordinary button press/release, not the wheel
+  }
+  return { wheel: (cb & 1) === 0 ? 'up' : 'down' };
+}
+
+/**
  * One input chunk as individual keys: fast typing, key repeat and pastes arrive as several keys at
  * once. CSI (`ESC [ … final`) and SS3 (`ESC O x`) sequences stay whole, e.g. arrows and F2.
  */

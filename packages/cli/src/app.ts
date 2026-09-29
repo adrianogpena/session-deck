@@ -48,7 +48,16 @@ import { ESC, fitAnsi, oneLine } from './ansi';
 import { CONFIG_FIELDS } from './configFields';
 import { matchesStatusFilter, nextTimeFilter, STATUS_CATEGORIES, StatusCategory, TimeFilter, withinTimeFilter } from './filters';
 import { GitStatusTracker } from './gitStatusTracker';
-import { findChordKey, findDetachKey, findPlainKey, RESET_AGENT_MODES, splitKeys } from './keys';
+import {
+  DISABLE_MOUSE,
+  ENABLE_MOUSE,
+  findChordKey,
+  findDetachKey,
+  findPlainKey,
+  parseMouseSequence,
+  RESET_AGENT_MODES,
+  splitKeys,
+} from './keys';
 import { computeLayout, Layout, ptySizeFor, Rect } from './layout';
 import { AgentType, clearExecutableCache, disposeLive, LiveSession, resizeLive, spawnAgent, typeLine } from './liveSession';
 import { DeckSession, StatusTracker, discoverSessions, displayTitle, refreshLiveTitle } from './sessions';
@@ -138,6 +147,10 @@ export class App {
   /** For ` (back to the previous session). */
   private lastSession?: DeckSession;
   private previousSession?: DeckSession;
+  /** Lines scrolled back from the live bottom in the preview panel, for the session `current` points to — reset whenever the selection moves to a different session. See `scrollPreview`. */
+  private previewScroll = 0;
+  /** The session `previewScroll` currently applies to, so it can be reset the moment the selection moves elsewhere (including to no session at all). */
+  private scrolledSession?: DeckSession;
   private tree: TreePrefs;
   private sidebarVisible = true;
   private attached: DeckSession | null = null;
@@ -209,7 +222,7 @@ export class App {
     void this.pollGitStatus();
     setInterval(() => void this.pollGitStatus(), GIT_STATUS_POLL_MS);
 
-    out.write(`${ESC}?1049h${ESC}?25l${ESC}2J`);
+    out.write(`${ESC}?1049h${ESC}?25l${ESC}2J${ENABLE_MOUSE}`);
     process.stdin.setRawMode(true);
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', (data: string) => this.onInput(data));
@@ -654,6 +667,9 @@ export class App {
     }
     this.attached = s;
     this.markSeen(s);
+    // Off for as long as input goes straight to the agent — it never asked for it, and a wheel notch
+    // (or the agent's own mouse handling) would otherwise write raw SGR bytes into its screen.
+    out.write(DISABLE_MOUSE);
     // Paint the mirrored screen immediately (no waiting for the agent), then let the resize-triggered
     // redraw and live output stream straight through.
     const snapshot = live.serializer.serialize({ scrollback: 0 });
@@ -664,7 +680,10 @@ export class App {
   /** Leaves full-screen attached mode: real terminal modes reset, its own title dropped, `attached` cleared. Shared by `detach()` and `switchToInteracting()` so the two can't drift apart. */
   private teardownAttached(): void {
     this.attached = null;
-    out.write(`${RESET_AGENT_MODES}${ESC}?25l`);
+    // RESET_AGENT_MODES already turns mouse reporting back off (among other things the agent may have
+    // changed) — re-enable it for our own list/preview use. `switchToInteracting()` immediately turns
+    // it back off again via `startInteracting()`, a harmless couple of extra bytes either way.
+    out.write(`${RESET_AGENT_MODES}${ESC}?25l${ENABLE_MOUSE}`);
     this.lastTitle = ''; // the agent set its own title while attached
   }
 
@@ -786,6 +805,9 @@ export class App {
     }
     this.interacting = s;
     this.markSeen(s);
+    // Unlike attach(), mouse tracking stays on: the list/preview screen is still up (typed input is
+    // the only thing that goes to the agent), so a wheel notch is still ours to scroll it with — see
+    // onKey's `interacting` branch.
     this.render();
   }
 
@@ -875,6 +897,10 @@ export class App {
       this.previousSession = this.lastSession;
       this.lastSession = current;
     }
+    if (current !== this.scrolledSession) {
+      this.scrolledSession = current;
+      this.previewScroll = 0;
+    }
     const t = this.theme;
     const cols = out.columns || 120;
     const height = out.rows || 30;
@@ -927,6 +953,7 @@ export class App {
             interacting: this.interacting === s,
             exitCode: s.live?.exitCode,
             lastResponse: this.lastResponseOf(s),
+            scrollOffset: this.previewScroll,
           }
         : undefined;
       frame += placeLines(layout.preview, renderPreviewPanel(t, layout.preview, content));
@@ -1020,6 +1047,90 @@ export class App {
     } while (this.rows[i] && this.rows[i].kind === 'divider');
     if (this.rows[i]) {
       this.selected = i;
+    }
+  }
+
+  /** How far back the preview can scroll for the selected session: everything its live PTY's mirror still has in scrollback, 0 with nothing live to scroll into. */
+  private previewMaxScroll(): number {
+    const live = this.current?.live;
+    return live && !live.exited ? live.term.buffer.active.baseY : 0;
+  }
+
+  /** `delta` lines further back into scrollback (positive) or toward the live bottom (negative), clamped to what's there. Caller renders. */
+  private scrollPreview(delta: number): void {
+    this.previewScroll = Math.min(this.previewMaxScroll(), Math.max(0, this.previewScroll + delta));
+  }
+
+  /**
+   * ↑/↓ (`delta` -1/+1, `move`'s own convention): scrolls the selected session's preview instead of
+   * moving the tree selection, whenever it has something live to scroll into. Falls back to `move`
+   * otherwise (no session selected, or nothing live yet to scroll), so plain tree navigation is
+   * untouched. A mouse wheel notch is `onMouseSequence`'s job, not this one — see `ENABLE_MOUSE`.
+   */
+  private onArrow(delta: number): void {
+    if (this.current && this.previewMaxScroll() > 0) {
+      this.scrollPreview(-delta);
+    } else {
+      this.move(delta);
+    }
+  }
+
+  /**
+   * A wheel notch or click, reported because {@link ENABLE_MOUSE} is on — unlike `onArrow`, it never
+   * falls back to moving the tree selection, since scrolling the wheel is never navigation (that
+   * ambiguity is exactly why a real arrow-key press and a terminal's wheel-to-arrow-key translation
+   * used to be indistinguishable). A plain click is parsed the same way and simply consumed; sdeck has
+   * no use for clicks yet.
+   *
+   * A notch scrolls real terminal scrollback if there is any — but many agents (Claude Code among
+   * them) never produce any: they keep their own transcript internally and redraw in place in
+   * response to PageUp/PageDown, rather than ever letting old lines scroll off screen. For those,
+   * `previewMaxScroll()` always reads 0 no matter how long the conversation, so a notch instead
+   * forwards the same PageUp/PageDown a keypress would send straight to the live PTY, exactly as
+   * typing one would (either attached, or from the list — see `onLiveInput`) — the agent pages its own
+   * history the same way either way.
+   */
+  private onMouseSequence(data: string): boolean {
+    const mouse = parseMouseSequence(data);
+    if (!mouse) {
+      return false;
+    }
+    if (mouse.wheel && this.current) {
+      if (this.previewMaxScroll() > 0) {
+        this.scrollPreview(mouse.wheel === 'up' ? 1 : -1);
+      } else {
+        const live = this.current.live;
+        if (live && !live.exited) {
+          live.pty.write(mouse.wheel === 'up' ? '\x1b[5~' : '\x1b[6~');
+        }
+      }
+    }
+    return true;
+  }
+
+  /** PageUp/PageDown/Home/End: a full preview page, or all the way to the top/bottom of scrollback. No-ops (rather than falling back to `move`) when there's nothing to scroll, since these keys have no tree-navigation meaning of their own. */
+  private onPageKey(data: string): boolean {
+    if (!this.current || this.previewMaxScroll() <= 0) {
+      return false;
+    }
+    const page = Math.max(1, this.ptySize()?.rows ?? 10);
+    switch (data) {
+      case '\x1b[5~':
+        this.scrollPreview(page);
+        return true;
+      case '\x1b[6~':
+        this.scrollPreview(-page);
+        return true;
+      case '\x1b[H':
+      case '\x1b[1~':
+        this.scrollPreview(this.previewMaxScroll());
+        return true;
+      case '\x1b[F':
+      case '\x1b[4~':
+        this.scrollPreview(-this.previewMaxScroll());
+        return true;
+      default:
+        return false;
     }
   }
 
@@ -1259,6 +1370,14 @@ export class App {
     }
     const interacting = this.interacting;
     if (interacting) {
+      // Mouse tracking stays on here (see startInteracting()): a wheel notch still scrolls the same
+      // preview shown while just browsing, rather than reaching the agent, which would otherwise see
+      // it as a plain ↑/↓ (with no mouse mode on, that's all a terminal ever sends for it) and likely
+      // treat it as its own prompt-history recall instead of what the user actually did.
+      if (this.onMouseSequence(data)) {
+        this.render();
+        return;
+      }
       this.onLiveInput(interacting.live, data, () => this.stopInteracting(), () => this.switchToAttach(interacting));
       return;
     }
@@ -1280,12 +1399,26 @@ export class App {
       this.render();
       return;
     }
+    if (this.onMouseSequence(data)) {
+      this.render();
+      return;
+    }
+    if (this.onPageKey(data)) {
+      this.render();
+      return;
+    }
     switch (data) {
       case '\x1b[A':
+      case '\x1bOA': // some terminals (and their wheel-to-arrow-key translation) send SS3, not CSI, for ↑
+        this.onArrow(-1);
+        break;
       case 'k':
         this.move(-1);
         break;
       case '\x1b[B':
+      case '\x1bOB': // ↓, same as above
+        this.onArrow(1);
+        break;
       case 'j':
         this.move(1);
         break;
