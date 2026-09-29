@@ -18,6 +18,7 @@ import {
   moveSession,
   parseTreePrefs,
   prependSession,
+  renameSessionId,
   SessionCategory,
   setCollapsed,
   sortSessions,
@@ -108,6 +109,18 @@ test('prependSession puts a new session first, moving it up from an earlier stor
   assert.deepEqual(t2.sessionOrder, { p1: ['b', 'c', 'a'], p2: ['z'] });
   // A project with nothing stored yet starts a fresh order with just this session.
   assert.deepEqual(prependSession(tree, 'p3', 'x').sessionOrder, { p1: ['a', 'b'], p2: ['z'], p3: ['x'] });
+});
+
+test('renameSessionId keeps the old id right after the new one, so an orphaned /clear transcript lands just below it, not at the back', () => {
+  const tree = { ...defaultTreePrefs(), sessionOrder: { p1: ['a', 'b'], p2: ['z'] } };
+  const t = renameSessionId(tree, 'p1', 'a', 'a2');
+  assert.deepEqual(t.sessionOrder, { p1: ['a2', 'a', 'b'], p2: ['z'] });
+  // Clearing again on the same terminal chains the previous orphan right after the newest id.
+  const t2 = renameSessionId(t, 'p1', 'a2', 'a3');
+  assert.deepEqual(t2.sessionOrder, { p1: ['a3', 'a2', 'a', 'b'], p2: ['z'] });
+  // A no-op when the old id was never recorded (falls back to prependSession) or is unchanged.
+  assert.equal(renameSessionId(tree, 'p1', 'x', 'y'), tree);
+  assert.equal(renameSessionId(tree, 'p1', 'a', 'a'), tree);
 });
 
 test('freezeSessionOrder locks in the currently displayed order, once, leaving already-stored sessions untouched', () => {

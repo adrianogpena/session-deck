@@ -438,6 +438,7 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
       ['o', 'Send a one-line prompt without attaching'],
       ['c', 'Copy the last response'],
       ['e  F2', "Rename (same as Claude's /rename)"],
+      ['Ctrl+L', "Clear context (same as Claude's /clear), without attaching — idle, done, or error only"],
       ['x', 'Stop the selected session'],
       ['u', 'Mark as unread (finished, not seen)'],
       ['U', 'Mark as read'],

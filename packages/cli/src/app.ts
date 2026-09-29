@@ -37,6 +37,7 @@ import {
   readDeckConfig,
   readLastAssistantResponse,
   renameFolder,
+  renameSessionId,
   resolveProjectRoot,
   SessionPin,
   setCollapsed,
@@ -62,7 +63,7 @@ import {
   splitKeys,
 } from './keys';
 import { computeLayout, Layout, ptySizeFor, Rect } from './layout';
-import { AgentType, clearExecutableCache, disposeLive, LiveSession, resizeLive, spawnAgent, typeLine } from './liveSession';
+import { AgentType, clearExecutableCache, disposeLive, LiveSession, resizeLive, spawnAgent, typeLine, warmExecutables } from './liveSession';
 import { DeckSession, StatusTracker, discoverSessions, displayTitle, refreshLiveTitle } from './sessions';
 import { discoverLocalSkills, LocalSkill } from './skills';
 import { buildTree, isStarted, projectLabels, TreeOptions, TreeRow } from './tree';
@@ -223,6 +224,7 @@ export class App {
     // the same way the extension does. Both can run at once: the watcher skips writes already made.
     new ClaudeProcessWatcher(() => undefined).start();
     purgeTrash(Date.now(), this.config.trash.retentionDays * DAY_MS);
+    warmExecutables(); // pays the first spawn's `where.exe` lookup now, not on whichever session gets attached first
     await this.discover();
     this.pollProcs();
     setInterval(() => this.pollProcs(), 1000);
@@ -475,6 +477,16 @@ export class App {
     void this.store.updateTree((tree) => prependSession(tree, projectKey, sessionId));
   }
 
+  /** See `renameSessionId`: keeps a session's manual position when e.g. `/clear` gives it a new id. */
+  private applySessionIdChange(projectKey: string, oldId: string, newId: string): void {
+    const change = (tree: TreePrefs) => {
+      const renamed = renameSessionId(tree, projectKey, oldId, newId);
+      return renamed !== tree ? renamed : prependSession(tree, projectKey, newId);
+    };
+    this.tree = change(this.tree);
+    void this.store.updateTree(change);
+  }
+
   /** When the previously selected row is gone (deleted, archived, filtered out), select whatever now sits
    *  where it used to be — the row right after it, else the row right before it — instead of the list's top. */
   private nearestSurvivingRow(previousRows: TreeRow[], previousIndex: number): number | undefined {
@@ -521,12 +533,22 @@ export class App {
       if (s.live && !s.live.exited) {
         const rec = this.procs.forPid(s.live.pid);
         if (rec && rec.sessionId !== s.id) {
+          const oldId = s.id;
           s.id = rec.sessionId;
           s.file = undefined;
           if (s.pendingTopOrder) {
             s.pendingTopOrder = false;
             if (!this.config.ui.recentSessionsFirst) {
               this.applyPrependSession(s.projectKey, s.id);
+            }
+          } else if (oldId) {
+            // /clear: same terminal, new session id, and its old title no longer describes the
+            // (now empty) conversation — show it as fresh and waiting for rename, same as a brand-new one.
+            s.title = s.agent === 'copilot' ? '(new Copilot session)' : '(new session)';
+            if (!this.config.ui.recentSessionsFirst) {
+              // Keep its manual position instead of falling out of `sessionOrder` and landing at
+              // the back of `sortSessionsManual`'s fallback.
+              this.applySessionIdChange(s.projectKey, oldId, s.id);
             }
           }
         }
@@ -1282,6 +1304,7 @@ export class App {
     this.config = next;
     writeDeckConfig(next);
     clearExecutableCache(); // a tools.*.command edit shouldn't need a restart to take effect
+    warmExecutables(); // re-resolve now, not on whichever session gets attached first
     this.rebuildRows(); // e.g. ui.recentProjectsFirst reorders the tree right away
     void this.pollGitStatus(); // turning ui.gitStatus on shows markers right away, not after the next poll
     this.flash(`${field.label} updated`);
@@ -1606,6 +1629,9 @@ export class App {
       case '\x1bOQ': // F2
       case '\x1b[12~': // F2 (some terminals)
         this.rename();
+        break;
+      case '\x0c': // Ctrl+L
+        this.clearContext();
         break;
       case 'x':
         if (this.multiSelected.size) {
@@ -2129,6 +2155,36 @@ export class App {
       };
     } else if (row?.kind === 'project') {
       this.flash('Projects are named after their folder on disk.');
+    }
+  }
+
+  /** Ctrl+L: sends `/clear` into the live session, without attaching. Only when there's nothing to lose by it — idle, done (an unseen reply), or error (e.g. a stuck sign-in screen) — never mid-turn or mid-prompt. */
+  private clearContext(): void {
+    const s = this.current;
+    if (!s) {
+      this.flash('Select a session to clear.');
+      return;
+    }
+    if (this.procs.isElsewhere(s)) {
+      this.flash('That session is running in another terminal. Clear it there with /clear.');
+      return;
+    }
+    const live = s.live;
+    if (!live || live.exited) {
+      this.flash('Select a running session to clear.');
+      return;
+    }
+    const status = this.procs.statusOf(s);
+    if (status !== 'idle' && status !== 'done' && status !== 'error') {
+      this.flash('Session is busy or waiting for you. Clear once it is idle (○), done, or errored.');
+      return;
+    }
+    typeLine(live, '/clear');
+    if (this.config.ui.newSessionFullScreen) {
+      this.attach(s);
+    } else {
+      this.startInteracting(s);
+      this.flash('Cleared');
     }
   }
 

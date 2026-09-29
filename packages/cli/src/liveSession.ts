@@ -37,6 +37,18 @@ export function clearExecutableCache(): void {
   executables.clear();
 }
 
+/**
+ * Pays `resolveExecutable`'s `where.exe` lookup (and, on an npm-only install, the shim-directory and
+ * `package.json` reads) up front for every agent, so it's a one-time startup cost instead of landing on
+ * whichever session gets attached first — that first `spawnAgent()` would otherwise block right as the
+ * screen clears for the mirrored PTY snapshot, turning into a visible stall/flash.
+ */
+export function warmExecutables(): void {
+  for (const agent of Object.keys(NPM_PACKAGES) as AgentType[]) {
+    resolveExecutable(agent);
+  }
+}
+
 /** The npm package that installs each agent's CLI, used to find its real binary when it was only installed via `npm install -g` (no system installer put a `.exe` on PATH). */
 const NPM_PACKAGES: Record<AgentType, string> = {
   claude: '@anthropic-ai/claude-code',

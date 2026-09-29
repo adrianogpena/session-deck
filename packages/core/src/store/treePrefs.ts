@@ -210,6 +210,26 @@ export function prependSession(tree: TreePrefs, projectKey: string, sessionId: s
 }
 
 /**
+ * With `DeckConfig.ui.recentSessionsFirst` off, keeps a session's manual position across an id change —
+ * e.g. `/clear`, which Claude answers with a new session id for the same terminal (see `pollProcs` in
+ * `app.ts`). `oldId`'s old transcript stays on disk and resurfaces as its own (now stopped) session, so
+ * `oldId` is kept right after `newId` instead of dropped — once that orphan is discovered, it lands
+ * directly below the live one rather than at the back of the project (`arrangeByManualOrder`'s fallback
+ * for ids missing from the manual order). A no-op when `oldId` was never recorded, so callers fall back
+ * to `prependSession`.
+ */
+export function renameSessionId(tree: TreePrefs, projectKey: string, oldId: string, newId: string): TreePrefs {
+  const list = tree.sessionOrder[projectKey];
+  if (!list?.includes(oldId) || oldId === newId) {
+    return tree;
+  }
+  return {
+    ...tree,
+    sessionOrder: { ...tree.sessionOrder, [projectKey]: list.flatMap((id) => (id === oldId ? [newId, oldId] : [id])) },
+  };
+}
+
+/**
  * With `DeckConfig.ui.recentSessionsFirst` off, locks in each project's currently displayed session
  * order for any session not yet in `sessionOrder` — otherwise it keeps falling back to
  * most-recent-first (see `sortSessionsManual` in `tree.ts`), so it would still shuffle as it becomes
