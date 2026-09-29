@@ -123,7 +123,8 @@ const PIN_CYCLE: readonly (SessionPin | undefined)[] = [undefined, 'top', 'botto
 /**
  * Claude sessions run in background PTYs owned by this process, each mirrored into a headless xterm
  * so the preview pane can redraw any of them instantly. Enter attaches full-screen (raw passthrough),
- * Ctrl+Q detaches with the session still running.
+ * Ctrl+Q detaches with the session still running. Ctrl+K T swaps attached and interacting for the same
+ * session directly, without detaching to the list first.
  */
 export class App {
   private sessions: DeckSession[] = [];
@@ -142,7 +143,7 @@ export class App {
   private attached: DeckSession | null = null;
   /** Set right after Ctrl+K while attached: the next key decides whether it's `n` (the new-session chord) or an ordinary Ctrl+K meant for the agent. */
   private chordPending = false;
-  /** Typing goes straight to this session's PTY, but (unlike `attached`) the list and preview keep rendering normally. `Ctrl+Q` stops it. */
+  /** Typing goes straight to this session's PTY, but (unlike `attached`) the list and preview keep rendering normally. `Ctrl+Q` stops it, `Ctrl+K T` attaches full-screen instead. */
   private interacting: DeckSession | null = null;
   private message = '';
   private messageTimer?: NodeJS.Timeout;
@@ -675,24 +676,48 @@ export class App {
     this.render();
   }
 
-  private isChordResolution(data: string): boolean {
+  /** Ctrl+K T while attached: back to typing into `s` from the list/preview, without detaching to the list first. */
+  private switchToInteracting(s: DeckSession): void {
+    this.attached = null;
+    out.write(`${RESET_AGENT_MODES}${ESC}?25l`);
+    this.lastTitle = ''; // the agent set its own title while attached
+    this.resizeAllToPane();
+    this.startInteracting(s);
+  }
+
+  /** Ctrl+K T while interacting: attach full-screen to `s`, without stopping back to the list first. */
+  private switchToAttach(s: DeckSession): void {
+    this.interacting = null;
+    this.attach(s);
+  }
+
+  private isNewSessionChord(data: string): boolean {
     return findPlainKey(data, 'n') >= 0 || findPlainKey(data, 'N') >= 0;
+  }
+
+  private isSwitchChord(data: string): boolean {
+    return findPlainKey(data, 't') >= 0 || findPlainKey(data, 'T') >= 0;
   }
 
   /**
    * Input while attached (full-screen) or interacting (typed into from the list) with `live`:
-   * forwarded to its PTY, except Ctrl+Q (`stop` — detach or stop interacting, see `findDetachKey`)
-   * and the `Ctrl+K n` chord, which starts a new session in the same project. `n` is usually typed
-   * just after Ctrl+K, quickly enough to arrive in the same input chunk (unlike Ctrl+Q, which needs
-   * no second key) — so both `findChordKey`'s match end and the *next* chunk, if this one ends right
-   * at the match, are checked for it.
+   * forwarded to its PTY, except Ctrl+Q (`stop` — detach or stop interacting, see `findDetachKey`) and
+   * the Ctrl+K chord, which starts a new session in the same project on `n`/`N`, or swaps attached and
+   * interacting for the same session on `t`/`T` (`switchMode`). The chord's resolving key is usually
+   * typed just after Ctrl+K, quickly enough to arrive in the same input chunk (unlike Ctrl+Q, which
+   * needs no second key) — so both `findChordKey`'s match end and the *next* chunk, if this one ends
+   * right at the match, are checked for it.
    */
-  private onLiveInput(live: LiveSession | undefined, data: string, stop: () => void): void {
+  private onLiveInput(live: LiveSession | undefined, data: string, stop: () => void, switchMode: () => void): void {
     if (this.chordPending) {
       this.chordPending = false;
-      if (this.isChordResolution(data)) {
+      if (this.isNewSessionChord(data)) {
         stop();
         this.newSession('claude');
+        return;
+      }
+      if (this.isSwitchChord(data)) {
+        switchMode();
         return;
       }
       if (live && !live.exited) {
@@ -713,9 +738,14 @@ export class App {
       live.pty.write(data.slice(0, idx));
     }
     if (chord && idx === chord.index) {
-      if (this.isChordResolution(data.slice(chord.end))) {
+      const after = data.slice(chord.end);
+      if (this.isNewSessionChord(after)) {
         stop();
         this.newSession('claude');
+        return;
+      }
+      if (this.isSwitchChord(after)) {
+        switchMode();
         return;
       }
       this.chordPending = true;
@@ -726,7 +756,8 @@ export class App {
 
   /**
    * Types straight into `s` without leaving the list/preview screen — its own PTY is already sized to
-   * the preview pane (background sessions always are), so nothing needs resizing. `Ctrl+Q` stops it.
+   * the preview pane (background sessions always are), so nothing needs resizing. `Ctrl+Q` stops it,
+   * `Ctrl+K T` attaches full-screen instead.
    */
   private startInteracting(s: DeckSession): void {
     const live = this.ensureLive(s);
@@ -894,7 +925,7 @@ export class App {
     } else if (this.message) {
       frame += renderMessageBar(t, cols, this.message);
     } else if (this.interacting) {
-      frame += renderMessageBar(t, cols, `Typing into ${displayTitle(this.interacting, this.store)} · Ctrl+Q to stop`);
+      frame += renderMessageBar(t, cols, `Typing into ${displayTitle(this.interacting, this.store)} · Ctrl+Q to stop · Ctrl+K T to attach`);
     } else {
       frame += renderHelpBar(t, cols);
     }
@@ -1203,12 +1234,12 @@ export class App {
     }
     const attached = this.attached;
     if (attached) {
-      this.onLiveInput(attached.live, data, () => this.detach());
+      this.onLiveInput(attached.live, data, () => this.detach(), () => this.switchToInteracting(attached));
       return;
     }
     const interacting = this.interacting;
     if (interacting) {
-      this.onLiveInput(interacting.live, data, () => this.stopInteracting());
+      this.onLiveInput(interacting.live, data, () => this.stopInteracting(), () => this.switchToAttach(interacting));
       return;
     }
 

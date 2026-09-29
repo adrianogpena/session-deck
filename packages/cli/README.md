@@ -30,6 +30,8 @@ launches the real CLI, it doesn't reimplement either one.
 - **Attach / detach** (`Enter` / `Ctrl+Q`) — the session keeps running in the background while detached.
 - **Type into a session without leaving the list** (`i`) — the sessions panel and preview stay on
   screen while you type, so you can keep an eye on everything else.
+- **Swap attached and typing-in-place** (`Ctrl+K T`) — jump between full-screen and typing from the
+  list for the same session, without detaching to the list in between.
 - **Full-text search** (`/`) across every session's prompts and replies, not just titles.
 - **Status at a glance** — running, waiting for you, finished, idle, error or stopped, with desktop
   notifications the moment a session needs input.

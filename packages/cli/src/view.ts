@@ -407,6 +407,7 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
       ['Ctrl+Q', 'Detach back here; the session keeps running'],
       ['Ctrl+K n', 'New session in the same project, without detaching first'],
       ['i', 'Type into it right here, list and preview still showing'],
+      ['Ctrl+K T', 'Swap attached ⇄ typing here, without detaching to the list first'],
     ],
   },
   {
