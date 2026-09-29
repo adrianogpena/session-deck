@@ -1,6 +1,6 @@
 {
   "name": "sdeck",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Session Deck in the terminal: background Claude Code and Copilot CLI sessions with a live preview and attach/detach, native on Windows",
   "license": "MIT",
   "repository": {
