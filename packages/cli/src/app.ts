@@ -132,6 +132,8 @@ export class App {
   private containers = new Map<string, string[]>();
   /** Index into `rows`: any row but a divider (or 0 when there are none). */
   private selected = 0;
+  /** Checked with Space, for a batch action (archive/stop/delete/move) applied to all of them at once. */
+  private multiSelected = new Set<DeckSession>();
   /** For ` (back to the previous session). */
   private lastSession?: DeckSession;
   private previousSession?: DeckSession;
@@ -276,6 +278,92 @@ export class App {
     return row?.kind === 'session' ? { key: row.session.projectKey, root: row.session.projectRoot } : undefined;
   }
 
+  /** Checked sessions, in `this.sessions` order — stale entries (deleted/vanished elsewhere) are dropped by `rebuildRows`. */
+  private get multiSelection(): DeckSession[] {
+    return this.sessions.filter((s) => this.multiSelected.has(s));
+  }
+
+  /** Space: check/uncheck the selected row for a batch action, then move down like a typical multi-select list. */
+  private toggleMultiSelect(s: DeckSession): void {
+    if (!this.multiSelected.delete(s)) {
+      this.multiSelected.add(s);
+    }
+    this.move(1);
+  }
+
+  /** `A` with a checked batch: archives (or, in the archived view, unarchives) every one of them. */
+  private bulkArchive(targets: DeckSession[]): void {
+    const archive = !this.archivedView;
+    const toUpdate: DeckSession[] = [];
+    let skipped = 0;
+    for (const s of targets) {
+      if (!s.id) {
+        skipped++;
+        continue;
+      }
+      if (archive && s.live && !s.live.exited) {
+        const status = this.procs.statusOf(s);
+        if (status === 'running' || status === 'waiting') {
+          skipped++;
+          continue;
+        }
+        this.kill(s);
+      }
+      toUpdate.push(s);
+    }
+    this.multiSelected.clear();
+    if (toUpdate.length === 0) {
+      this.flash(skipped ? `Nothing archived — ${skipped} still working` : 'Nothing to archive');
+      return;
+    }
+    void Promise.all(toUpdate.map((s) => this.store.updateSession(s.id!, { archived: archive }))).then(() => {
+      this.rebuildRows();
+      this.scheduleRender();
+    });
+    this.flash(`${archive ? 'Archived' : 'Unarchived'} ${toUpdate.length}${skipped ? ` · ${skipped} skipped (still working)` : ''}`);
+  }
+
+  /** `x` with a checked batch: stops every one of them that's running. */
+  private bulkStop(targets: DeckSession[]): void {
+    let stopped = 0;
+    for (const s of targets) {
+      if (s.live) {
+        this.kill(s);
+        stopped++;
+      }
+    }
+    this.multiSelected.clear();
+    this.flash(stopped ? `Stopped ${stopped}${stopped < targets.length ? ` · ${targets.length - stopped} not running` : ''}` : 'None of the selected sessions were running');
+  }
+
+  /** `d` with a checked batch: moves every deletable one (a stopped Claude session on disk) to the trash. Copilot sessions and running ones are skipped. */
+  private bulkDelete(targets: DeckSession[]): void {
+    let deleted = 0;
+    let skipped = 0;
+    for (const s of targets) {
+      if (s.agent === 'copilot' || (s.live && !s.live.exited) || this.procs.isElsewhere(s) || !s.id || !s.file || !fs.existsSync(s.file)) {
+        skipped++;
+        continue;
+      }
+      try {
+        trashClaudeSession(s.file, s.id, displayTitle(s, this.store));
+      } catch {
+        skipped++;
+        continue;
+      }
+      clearSessionStatus(s.id);
+      this.deleted.push(s.id);
+      if (s.live) {
+        disposeLive(s.live);
+      }
+      this.sessions = this.sessions.filter((x) => x !== s);
+      deleted++;
+    }
+    this.multiSelected.clear();
+    this.rebuildRows();
+    this.flash(deleted ? `Moved ${deleted} to the trash${skipped ? ` · ${skipped} skipped` : ''} · Ctrl+Z to undo` : `Nothing deletable in the selection${skipped ? ` (${skipped} skipped)` : ''}`);
+  }
+
   private async discover(): Promise<void> {
     this.sessions = await discoverSessions(this.sessions);
     this.tree = this.store.getTree();
@@ -315,6 +403,13 @@ export class App {
     });
     this.rows = built.rows;
     this.containers = built.containers;
+    if (this.multiSelected.size) {
+      for (const s of this.multiSelected) {
+        if (!this.sessions.includes(s)) {
+          this.multiSelected.delete(s);
+        }
+      }
+    }
     const keep = previous ? this.rows.findIndex((r) => sameRow(r, previous)) : -1;
     this.selected = keep >= 0 ? keep : (this.nearestSurvivingRow(previousRows, previousIndex) ?? Math.max(0, this.rows.findIndex((r) => r.kind === 'session')));
   }
@@ -738,9 +833,17 @@ export class App {
 
     if (layout.list) {
       const listRows: ListRow[] = this.rows.map((r) =>
-        r.kind === 'session' ? { kind: 'session', view: this.viewOf(r.session), isLast: r.isLast, depth: r.depth, pin: r.pin } : r
+        r.kind === 'session'
+          ? { kind: 'session', view: this.viewOf(r.session), isLast: r.isLast, depth: r.depth, pin: r.pin, checked: this.multiSelected.has(r.session) }
+          : r
       );
-      const modes = [this.archivedView ? 'archived' : '', this.filtering ? 'filtered' : '', this.tree.sort === 'actionable' ? 'actionable' : '', this.tree.view === 'active' ? 'active on top' : '']
+      const modes = [
+        this.multiSelected.size ? `${this.multiSelected.size} selected` : '',
+        this.archivedView ? 'archived' : '',
+        this.filtering ? 'filtered' : '',
+        this.tree.sort === 'actionable' ? 'actionable' : '',
+        this.tree.view === 'active' ? 'active on top' : '',
+      ]
         .filter(Boolean)
         .join(' · ');
       const note = this.resizeNote && Date.now() < this.resizeNote.until ? this.resizeNote.text : modes ? `· ${modes}` : '';
@@ -1143,6 +1246,19 @@ export class App {
           this.toggleCollapsed(row);
         }
         break;
+      case ' ':
+        if (row?.kind === 'session') {
+          this.toggleMultiSelect(row.session);
+        }
+        break;
+      case '\x1b':
+        if (this.multiSelected.size) {
+          this.multiSelected.clear();
+          this.flash('Selection cleared');
+        } else {
+          return;
+        }
+        break;
       case '`':
         this.selectPreviousSession();
         break;
@@ -1199,7 +1315,9 @@ export class App {
         this.rename();
         break;
       case 'x':
-        if (s && s.live) {
+        if (this.multiSelected.size) {
+          this.bulkStop(this.multiSelection);
+        } else if (s && s.live) {
           this.kill(s);
           this.flash('Session stopped');
         }
@@ -1238,7 +1356,9 @@ export class App {
         this.reorder(1);
         break;
       case 'd':
-        if (s) {
+        if (this.multiSelected.size) {
+          this.bulkDelete(this.multiSelection);
+        } else if (s) {
           this.deleteSession(s);
         } else if (row?.kind === 'folder') {
           const folderId = row.folderId;
@@ -1539,6 +1659,10 @@ export class App {
 
   /** `A`: archive (hide) or, in the archived view, unarchive. Shared with the extension. */
   private toggleArchived(): void {
+    if (this.multiSelected.size) {
+      this.bulkArchive(this.multiSelection);
+      return;
+    }
     const s = this.current;
     if (!s?.id) {
       this.flash('Select a session to archive.');
@@ -1678,8 +1802,8 @@ export class App {
     this.flash(pin ? `Pinned to the ${pin} of its project` : 'Unpinned');
   }
 
-  /** Creates the folder, moving `projectKey` into it when given. The id is made once, so the local and on-disk trees agree. */
-  private newFolder(rawName: string, projectKey?: string): void {
+  /** Creates the folder, moving `projectKeys` into it when given. The id is made once, so the local and on-disk trees agree. */
+  private newFolder(rawName: string, projectKeys?: string[]): void {
     const name = oneLine(rawName);
     if (!name) {
       return;
@@ -1688,15 +1812,23 @@ export class App {
     const folder = tree.folders.find((f) => f.id === folderId)!;
     this.changeTree((t) => {
       const withFolder = { ...t, folders: [...t.folders, folder] };
-      return projectKey ? moveProjectToFolder(withFolder, projectKey, folderId) : withFolder;
+      return projectKeys?.length ? projectKeys.reduce((acc, key) => moveProjectToFolder(acc, key, folderId), withFolder) : withFolder;
     });
-    if (!projectKey) {
+    if (!projectKeys?.length) {
       this.selectWhere((r) => r.kind === 'folder' && r.folderId === folderId);
     }
-    this.flash(projectKey ? `Moved to "${name}"` : `Folder "${name}" created. Press M on a project to move it in.`);
+    this.flash(
+      projectKeys?.length
+        ? `Moved ${projectKeys.length > 1 ? `${projectKeys.length} projects` : 'project'} to "${name}"`
+        : `Folder "${name}" created. Press M on a project to move it in.`
+    );
   }
 
   private openMovePicker(): void {
+    if (this.multiSelected.size) {
+      this.openBulkMovePicker(this.multiSelection);
+      return;
+    }
     const project = this.selectedProject;
     if (!project) {
       this.flash('Select a project (or one of its sessions) to move it to a folder.');
@@ -1716,7 +1848,30 @@ export class App {
           const folderId = folders[i - 1].id;
           this.changeTree((t) => moveProjectToFolder(t, project.key, folderId));
         } else {
-          this.prompt = { label: 'New folder', value: '', onSubmit: (name) => this.newFolder(name, project.key) };
+          this.prompt = { label: 'New folder', value: '', onSubmit: (name) => this.newFolder(name, [project.key]) };
+        }
+      },
+    };
+  }
+
+  /** `M` with a checked batch: moves every distinct project among the selected sessions to one target folder. */
+  private openBulkMovePicker(targets: DeckSession[]): void {
+    const keys = [...new Set(targets.map((s) => s.projectKey))];
+    const folders = this.tree.folders;
+    const label = `${keys.length} project${keys.length === 1 ? '' : 's'}`;
+    this.picker = {
+      title: `Move ${label} to`,
+      index: 0,
+      items: ['Top level (no folder)', ...folders.map((f) => f.name), '+ New folder…'],
+      onPick: (i) => {
+        this.multiSelected.clear();
+        if (i === 0) {
+          this.changeTree((t) => keys.reduce((acc, key) => moveProjectToFolder(acc, key, null), t));
+        } else if (i <= folders.length) {
+          const folderId = folders[i - 1].id;
+          this.changeTree((t) => keys.reduce((acc, key) => moveProjectToFolder(acc, key, folderId), t));
+        } else {
+          this.prompt = { label: 'New folder', value: '', onSubmit: (name) => this.newFolder(name, keys) };
         }
       },
     };

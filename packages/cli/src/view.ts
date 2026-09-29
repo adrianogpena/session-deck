@@ -59,7 +59,7 @@ interface GroupCounts {
 export type ListRow =
   | ({ kind: 'folder'; name: string; collapsed: boolean; hotkey?: number } & GroupCounts)
   | ({ kind: 'project'; label: string; collapsed: boolean; depth: number; hotkey?: number; git?: GitStatus } & GroupCounts)
-  | { kind: 'session'; view: SessionView; isLast: boolean; depth: number; pin?: 'top' | 'bottom' }
+  | { kind: 'session'; view: SessionView; isLast: boolean; depth: number; pin?: 'top' | 'bottom'; checked?: boolean }
   | { kind: 'divider'; label: string };
 
 function glyph(t: Theme, status: SessionStatus): string {
@@ -162,14 +162,15 @@ function renderGroupRow(t: Theme, width: number, row: Extract<ListRow, { kind: '
   );
 }
 
-function renderSessionRow(t: Theme, width: number, row: Extract<ListRow, { kind: 'session' }>, selected: boolean): string {
+function renderSessionRow(t: Theme, width: number, row: Extract<ListRow, { kind: 'session' }>, selected: boolean, showCheckbox: boolean): string {
   const v = row.view;
   const indent = '  '.repeat(row.depth);
   const connector = row.isLast ? '└─' : '├─';
+  const checkboxPlain = showCheckbox ? (row.checked ? '✔ ' : '· ') : '';
   // Narrow glyphs only: emoji are one column wide in some terminals and two in others.
   const pinMark = row.pin === 'top' ? '↑ ' : row.pin === 'bottom' ? '↓ ' : '';
   const markers = `${pinMark}${v.elsewhere ? '↗ ' : ''}`;
-  const leftPlain = `${indent}${connector} ${GLYPHS[v.status].char} ${markers}`;
+  const leftPlain = `${checkboxPlain}${indent}${connector} ${GLYPHS[v.status].char} ${markers}`;
   const agentText = ` ${v.agent}`;
   const availWidth = Math.max(1, width - textWidth(leftPlain));
   const maxTitleWidth = Math.max(1, availWidth - textWidth(agentText));
@@ -182,9 +183,10 @@ function renderSessionRow(t: Theme, width: number, row: Extract<ListRow, { kind:
     const sel = `${t.bg('accent')}${t.fg('bg')}`;
     return `${sel}${leftPlain}${BOLD}${title}${RESET}${sel}${agentText}${pad}${RESET}`;
   }
+  const checkbox = showCheckbox ? (row.checked ? `${t.fg('accent')}${BOLD}✔${RESET} ` : `${t.fg('textDim')}·${RESET} `) : '';
   const titleStyle = `${active ? BOLD : ''}${v.status === 'exited' ? UNDERLINE : ''}${t.fg('text')}`;
   return (
-    `${indent}${t.fg('border')}${connector}${RESET} ${glyph(t, v.status)} ${pinMark ? `${t.fg('accent')}${pinMark}` : ''}${v.elsewhere ? `${t.fg('purple')}↗ ` : ''}${RESET}` +
+    `${checkbox}${indent}${t.fg('border')}${connector}${RESET} ${glyph(t, v.status)} ${pinMark ? `${t.fg('accent')}${pinMark}` : ''}${v.elsewhere ? `${t.fg('purple')}↗ ` : ''}${RESET}` +
     `${titleStyle}${title}${RESET}${t.fg('textDim')}${agentText}${RESET}${pad}`
   );
 }
@@ -201,6 +203,8 @@ export function renderListPanel(t: Theme, rect: Rect, rows: ListRow[], selected:
   if (rows.length === 0) {
     lines.push(blank(rect.width), `${t.fg('textDim')}${fit(`  ${emptyMessage}`, rect.width)}${RESET}`);
   }
+  // Once anything is checked, every session row reserves the checkbox column so they stay aligned.
+  const showCheckbox = rows.some((r) => r.kind === 'session' && r.checked);
   // Keep the selection in view, roughly centered.
   const start = Math.max(0, Math.min(selected - Math.floor(height / 2), rows.length - height));
   for (let i = 0; i < height && lines.length < rect.height; i++) {
@@ -209,7 +213,7 @@ export function renderListPanel(t: Theme, rect: Rect, rows: ListRow[], selected:
     if (!row) {
       lines.push(blank(rect.width));
     } else if (row.kind === 'session') {
-      lines.push(renderSessionRow(t, rect.width, row, isSelected));
+      lines.push(renderSessionRow(t, rect.width, row, isSelected, showCheckbox));
     } else if (row.kind === 'divider') {
       lines.push(renderDividerRow(t, rect.width, row.label));
     } else {
@@ -336,7 +340,7 @@ type Hint = [key: string, label: string];
 
 /** Widest first; the first variant that fits is shown. */
 const HELP_VARIANTS: Hint[][] = [
-  [['↑↓', 'select'], ['⏎', 'attach'], ['n', 'new'], ['o', 'prompt'], ['e', 'rename'], ['x', 'stop'], ['A', 'archive'], ['d', 'delete'], ['M', 'move'], ['?', 'help'], ['q', 'quit']],
+  [['↑↓', 'select'], ['⏎', 'attach'], ['Space', 'mark'], ['n', 'new'], ['o', 'prompt'], ['e', 'rename'], ['x', 'stop'], ['A', 'archive'], ['d', 'delete'], ['M', 'move'], ['?', 'help'], ['q', 'quit']],
   [['↑↓', 'select'], ['⏎', 'attach'], ['n', 'new'], ['e', 'rename'], ['x', 'stop'], ['?', 'help'], ['q', 'quit']],
   [['⏎', 'attach'], ['?', 'help'], ['q', 'quit']],
   [['?', 'help']],
@@ -409,6 +413,14 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
       ['Ctrl+Z  Z', 'Undo the delete / open the trash'],
       [',', 'Pin: top · bottom · off'],
       ['r', 'Refresh the list'],
+    ],
+  },
+  {
+    title: 'MULTI-SELECT',
+    keys: [
+      ['Space', 'Check the session for a batch action, then move down'],
+      ['Esc', 'Clear the checked sessions'],
+      ['A x d M', 'Archive / stop / delete / move to folder — applied to every checked session'],
     ],
   },
   {
