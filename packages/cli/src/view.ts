@@ -423,6 +423,7 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
       ['← →  Tab', 'Collapse / expand; ← also goes to the parent'],
       ['1-9', 'Jump to a top-level folder or project'],
       ['`', 'Back to the previously selected session'],
+      ['[ ]', 'Previous / next running or waiting session, wrapping around'],
       ['/', "Search every session's prompts and replies"],
     ],
   },
@@ -489,6 +490,7 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
       ['< >', 'Narrow / widen the sessions panel'],
       ['b  Ctrl+B', 'Hide / show the sessions panel'],
       ['T', 'Theme: dark · light · system'],
+      ['m  Ctrl+K m', 'Mouse scrolling: off by default (so click-drag selects text), on to scroll the preview with the wheel'],
     ],
   },
   {

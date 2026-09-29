@@ -198,6 +198,18 @@ export function moveSession(tree: TreePrefs, projectKey: string, sessionId: stri
 }
 
 /**
+ * With `DeckConfig.ui.recentSessionsFirst` off, puts a brand-new session at the very front of its
+ * project's manual order instead of leaving it to fall in at the back of `sortSessionsManual`'s
+ * fallback (see `tree.ts`). Called once, right when the session is created (or, for Claude, once its
+ * id is known) — from then on it only moves via `moveSession` (`K`/`J`) like any other session.
+ */
+export function prependSession(tree: TreePrefs, projectKey: string, sessionId: string): TreePrefs {
+  const existing = tree.sessionOrder[projectKey] ?? [];
+  const list = [sessionId, ...existing.filter((id) => id !== sessionId)];
+  return { ...tree, sessionOrder: { ...tree.sessionOrder, [projectKey]: list } };
+}
+
+/**
  * With `DeckConfig.ui.recentSessionsFirst` off, locks in each project's currently displayed session
  * order for any session not yet in `sessionOrder` — otherwise it keeps falling back to
  * most-recent-first (see `sortSessionsManual` in `tree.ts`), so it would still shuffle as it becomes

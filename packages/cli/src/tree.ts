@@ -54,7 +54,7 @@ interface ProjectBucket {
   visible: DeckSession[];
 }
 
-const isActive = (c: SessionCategory) => c === 'running' || c === 'waiting';
+export const isActive = (c: SessionCategory) => c === 'running' || c === 'waiting';
 
 /** One badge for the whole project: worst (highest) ahead/behind/dirty across its sessions — usually all identical, since they usually share a cwd. */
 function aggregateGit(statuses: (GitStatus | undefined)[]): GitStatus | undefined {
@@ -85,19 +85,25 @@ function activeFirst<T>(items: T[], active: (item: T) => boolean): { active: T[]
 }
 
 /**
- * Pinned bands as in `sortSessions`, but the rest keeps `manualOrder` instead of sorting by recency —
- * new sessions (or ones without an id yet) are appended, most recent first. See `DeckConfig.ui.recentSessionsFirst`.
+ * Pinned bands as in `sortSessions`, but the rest keeps `manualOrder` instead of sorting by recency.
+ * A session just started via "new session" (`pendingTopOrder`, see `startNewSession`) renders at the
+ * very front of the unpinned band right away, before its id is even known — so there's nothing to
+ * jump later once `prependSession` records that position for real. Any other session not yet in
+ * `manualOrder` (first seen, not just created) is appended, most recent first. See
+ * `DeckConfig.ui.recentSessionsFirst`.
  */
 function sortSessionsManual(items: DeckSession[], manualOrder: string[], pinOf: (s: DeckSession) => SessionPin | undefined): DeckSession[] {
   const byRecent = (a: DeckSession, b: DeckSession) => b.mtime - a.mtime;
   const top = items.filter((i) => pinOf(i) === 'top').sort(byRecent);
   const bottom = items.filter((i) => pinOf(i) === 'bottom').sort(byRecent);
   const rest = items.filter((i) => !pinOf(i));
-  const identified = rest.filter((s) => s.id !== null).sort(byRecent);
-  const unidentified = rest.filter((s) => s.id === null).sort(byRecent);
+  const pendingTop = rest.filter((s) => s.pendingTopOrder).sort(byRecent);
+  const remaining = rest.filter((s) => !s.pendingTopOrder);
+  const identified = remaining.filter((s) => s.id !== null).sort(byRecent);
+  const unidentified = remaining.filter((s) => s.id === null).sort(byRecent);
   const byId = new Map(identified.map((s) => [s.id as string, s]));
   const orderedIds = arrangeByManualOrder(identified.map((s) => s.id as string), manualOrder);
-  return [...top, ...orderedIds.map((id) => byId.get(id)!), ...unidentified, ...bottom];
+  return [...top, ...pendingTop, ...orderedIds.map((id) => byId.get(id)!), ...unidentified, ...bottom];
 }
 
 /**

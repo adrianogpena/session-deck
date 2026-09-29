@@ -60,10 +60,12 @@ export const RESET_AGENT_MODES = '\x1b[?9001l\x1b[?2004l\x1b[?1004l\x1b[?1000l\x
 
 /**
  * Basic click/wheel reporting (mode 1000), SGR-encoded (mode 1006) so coordinates never collide with
- * printable bytes. On while browsing the list (a wheel notch then arrives as its own unambiguous
- * sequence, see `onMouseSequence`, instead of the arrow keys a terminal falls back to translating it
- * into with no mouse mode on — which a real arrow-key press also sends, and can't be told apart from).
- * Off whenever input is forwarded to a live agent (`RESET_AGENT_MODES` already turns it back off too).
+ * printable bytes. A wheel notch then arrives as its own unambiguous sequence (see `onMouseSequence`)
+ * instead of the arrow keys a terminal falls back to translating it into with no mouse mode on — which
+ * a real arrow-key press also sends, and can't be told apart from. Off by default (`App.mouseTracking`)
+ * so click-drag still does the terminal's own text selection; `m`/`Ctrl+K M` turns it on to scroll the
+ * preview with the wheel instead. Always off while attached, or whenever input is forwarded to a live
+ * agent (`RESET_AGENT_MODES` already turns it back off too).
  */
 export const ENABLE_MOUSE = '\x1b[?1000h\x1b[?1006h';
 export const DISABLE_MOUSE = '\x1b[?1000l\x1b[?1006l';

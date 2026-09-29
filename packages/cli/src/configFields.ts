@@ -110,6 +110,13 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     editValue: (c) => (c.ui.gitStatus ? 'on' : 'off'),
     apply: (c) => ({ ...c, ui: { ...c.ui, gitStatus: !c.ui.gitStatus } }),
   },
+  {
+    label: 'ui.expandCollapsedOnActiveJump',
+    kind: 'toggle',
+    display: (c) => (c.ui.expandCollapsedOnActiveJump ? 'on' : 'off'),
+    editValue: (c) => (c.ui.expandCollapsedOnActiveJump ? 'on' : 'off'),
+    apply: (c) => ({ ...c, ui: { ...c.ui, expandCollapsedOnActiveJump: !c.ui.expandCollapsedOnActiveJump } }),
+  },
   ...toolFields('claude'),
   ...toolFields('copilot'),
   {

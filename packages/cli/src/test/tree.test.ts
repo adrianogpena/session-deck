@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { defaultTreePrefs, folderNodeKey, freezeSessionOrder, projectNodeKey, SessionCategory, TreePrefs } from '@session-deck/core';
+import { defaultTreePrefs, folderNodeKey, freezeSessionOrder, prependSession, projectNodeKey, SessionCategory, TreePrefs } from '@session-deck/core';
 import type { DeckSession } from '../sessions';
 import { buildTree, projectLabels, TreeRow } from '../tree';
 
@@ -77,6 +77,27 @@ test('reproduces the reported bug: with recentSessionsFirst off, a session that 
   const bumped = [session('a1', 'api', 50), session('a2', 'api', 999), session('w1', 'web', 40), session('d1', 'docs', 30)];
   const second = renderOnce(bumped);
   assert.deepEqual(outline(second.rows).slice(0, 3), ['1P:api', '  s:a1', '  s:a2']); // unchanged: order is frozen, not activity-based
+});
+
+test('with recentSessionsFirst off, a session prepended (as app.ts does for "new session") renders first and stays first once frozen', () => {
+  let tree = { ...defaultTreePrefs(), sessionOrder: { [key('api')]: ['a2', 'a1'] } };
+  tree = prependSession(tree, key('api'), 'a3');
+  const withNew = [...sessions, session('a3', 'api', 5)]; // oldest mtime, but should still land on top
+  const built = buildTree(withNew, tree, opts({ recentSessionsFirst: false }));
+  assert.deepEqual(outline(built.rows).slice(0, 4), ['1P:api', '  s:a3', '  s:a2', '  s:a1']);
+  tree = freezeSessionOrder(tree, built.sessionContainers);
+  const again = buildTree(withNew, tree, opts({ recentSessionsFirst: false }));
+  assert.deepEqual(outline(again.rows).slice(0, 4), ['1P:api', '  s:a3', '  s:a2', '  s:a1']);
+});
+
+test('with recentSessionsFirst off, a pendingTopOrder session renders on top before it even has an id, with no jump once it does', () => {
+  const tree = { ...defaultTreePrefs(), sessionOrder: { [key('api')]: ['a2', 'a1'] } };
+  // Mirrors startNewSession: a brand-new Claude session, id still null, flagged pendingTopOrder.
+  const fresh: DeckSession = { agent: 'claude', id: null, cwd: key('api'), projectRoot: key('api'), projectKey: key('api'), title: '(new session)', mtime: Date.now(), pendingTopOrder: true };
+  const built = buildTree([...sessions, fresh], tree, opts({ recentSessionsFirst: false }));
+  assert.deepEqual(outline(built.rows).slice(0, 4), ['1P:api', '  s:null', '  s:a2', '  s:a1']);
+  // Its id isn't known yet, so it isn't part of the persisted order — only the two real sessions are.
+  assert.deepEqual(built.sessionContainers.get(key('api')), ['a2', 'a1']);
 });
 
 test('buildTree hides the children of collapsed folders and projects', () => {

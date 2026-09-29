@@ -17,6 +17,7 @@ import {
   moveProjectToFolder,
   moveSession,
   parseTreePrefs,
+  prependSession,
   SessionCategory,
   setCollapsed,
   sortSessions,
@@ -96,6 +97,17 @@ test('moveSession swaps displayed neighbors within one project and keeps other p
   const t = moveSession(tree, 'p1', 'c', -1, ['a', 'b', 'c']);
   assert.deepEqual(t.sessionOrder, { p1: ['a', 'x', 'c', 'b'], p2: ['z'] });
   assert.equal(moveSession(tree, 'p1', 'a', -1, ['a', 'b']), tree);
+});
+
+test('prependSession puts a new session first, moving it up from an earlier stored position if any', () => {
+  const tree = { ...defaultTreePrefs(), sessionOrder: { p1: ['a', 'b'], p2: ['z'] } };
+  const t = prependSession(tree, 'p1', 'c');
+  assert.deepEqual(t.sessionOrder, { p1: ['c', 'a', 'b'], p2: ['z'] });
+  // Already-first is a no-op in effect (still first), and other projects are untouched either way.
+  const t2 = prependSession(t, 'p1', 'b');
+  assert.deepEqual(t2.sessionOrder, { p1: ['b', 'c', 'a'], p2: ['z'] });
+  // A project with nothing stored yet starts a fresh order with just this session.
+  assert.deepEqual(prependSession(tree, 'p3', 'x').sessionOrder, { p1: ['a', 'b'], p2: ['z'], p3: ['x'] });
 });
 
 test('freezeSessionOrder locks in the currently displayed order, once, leaving already-stored sessions untouched', () => {

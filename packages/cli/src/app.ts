@@ -32,6 +32,7 @@ import {
   moveProjectToFolder,
   moveSession,
   normalizeFsPath,
+  prependSession,
   projectNodeKey,
   readDeckConfig,
   readLastAssistantResponse,
@@ -63,7 +64,7 @@ import {
 import { computeLayout, Layout, ptySizeFor, Rect } from './layout';
 import { AgentType, clearExecutableCache, disposeLive, LiveSession, resizeLive, spawnAgent, typeLine } from './liveSession';
 import { DeckSession, StatusTracker, discoverSessions, displayTitle, refreshLiveTitle } from './sessions';
-import { buildTree, projectLabels, TreeRow } from './tree';
+import { buildTree, isActive, projectLabels, TreeOptions, TreeRow } from './tree';
 import { extractBackgroundReply, OSC11_QUERY, readOsTheme, Theme, ThemeName } from './theme';
 import {
   configOverlay,
@@ -161,6 +162,8 @@ export class App {
   private chordPending = false;
   /** Typing goes straight to this session's PTY, but (unlike `attached`) the list and preview keep rendering normally. `Ctrl+Q` stops it, `Ctrl+K T` attaches full-screen instead. */
   private interacting: DeckSession | null = null;
+  /** Off by default (and always while attached, see `attach()`) so a click-drag still does the terminal's own text selection. `m` (or `Ctrl+K M` while typing in place) flips it — see `toggleMouseTracking()`. */
+  private mouseTracking = false;
   private message = '';
   private messageTimer?: NodeJS.Timeout;
   private renderTimer?: NodeJS.Timeout;
@@ -225,7 +228,7 @@ export class App {
     void this.pollGitStatus();
     setInterval(() => void this.pollGitStatus(), GIT_STATUS_POLL_MS);
 
-    out.write(`${ESC}?1049h${ESC}?25l${ESC}2J${ENABLE_MOUSE}`);
+    out.write(`${ESC}?1049h${ESC}?25l${ESC}2J`);
     process.stdin.setRawMode(true);
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', (data: string) => this.onInput(data));
@@ -416,12 +419,9 @@ export class App {
     return this.statusFilter.size > 0 || this.timeFilter !== 'all' || !!this.tagFilter;
   }
 
-  /** Re-applies the tree, sort and filters, keeping the selected row selected when it's still shown. */
-  private rebuildRows(): void {
-    const previous = this.selectedRow;
-    const previousIndex = this.selected;
-    const previousRows = this.rows;
-    const built = buildTree(this.unhiddenSessions, this.tree, {
+  /** Options for `buildTree`, shared by the live render and `cycleActiveSession`'s fully-expanded lookup. */
+  private treeBuildOptions(): TreeOptions {
+    return {
       include: (s) => this.isVisible(s),
       categoryOf: (s) => this.procs.categoryOf(s),
       pinOf: (s) => (s.id ? this.store.getSession(s.id)?.pin : undefined),
@@ -430,7 +430,15 @@ export class App {
       recentProjectsFirst: this.config.ui.recentProjectsFirst,
       recentSessionsFirst: this.config.ui.recentSessionsFirst,
       tagsOf: (s) => this.tagsOf(s),
-    });
+    };
+  }
+
+  /** Re-applies the tree, sort and filters, keeping the selected row selected when it's still shown. */
+  private rebuildRows(): void {
+    const previous = this.selectedRow;
+    const previousIndex = this.selected;
+    const previousRows = this.rows;
+    const built = buildTree(this.unhiddenSessions, this.tree, this.treeBuildOptions());
     this.rows = built.rows;
     this.containers = built.containers;
     this.sessionContainers = built.sessionContainers;
@@ -454,6 +462,12 @@ export class App {
       this.tree = next;
       void this.store.updateTree((tree) => freezeSessionOrder(tree, sessionContainers));
     }
+  }
+
+  /** See `prependSession`: puts a just-created session at the top of its project, when `recentSessionsFirst` is off. */
+  private applyPrependSession(projectKey: string, sessionId: string): void {
+    this.tree = prependSession(this.tree, projectKey, sessionId);
+    void this.store.updateTree((tree) => prependSession(tree, projectKey, sessionId));
   }
 
   /** When the previously selected row is gone (deleted, archived, filtered out), select whatever now sits
@@ -504,6 +518,12 @@ export class App {
         if (rec && rec.sessionId !== s.id) {
           s.id = rec.sessionId;
           s.file = undefined;
+          if (s.pendingTopOrder) {
+            s.pendingTopOrder = false;
+            if (!this.config.ui.recentSessionsFirst) {
+              this.applyPrependSession(s.projectKey, s.id);
+            }
+          }
         }
         refreshLiveTitle(s, () => this.scheduleRender());
         this.sendPendingPrompt(s);
@@ -697,9 +717,8 @@ export class App {
   private teardownAttached(): void {
     this.attached = null;
     // RESET_AGENT_MODES already turns mouse reporting back off (among other things the agent may have
-    // changed) — re-enable it for our own list/preview use. `switchToInteracting()` immediately turns
-    // it back off again via `startInteracting()`, a harmless couple of extra bytes either way.
-    out.write(`${RESET_AGENT_MODES}${ESC}?25l${ENABLE_MOUSE}`);
+    // changed) — restore it to whatever `mouseTracking` was before attaching, if it was on.
+    out.write(`${RESET_AGENT_MODES}${ESC}?25l${this.mouseTracking ? ENABLE_MOUSE : ''}`);
     this.lastTitle = ''; // the agent set its own title while attached
   }
 
@@ -748,12 +767,18 @@ export class App {
     return findPlainKey(data, 't') === 0 || findPlainKey(data, 'T') === 0;
   }
 
+  private isMouseChord(data: string): boolean {
+    return findPlainKey(data, 'm') === 0 || findPlainKey(data, 'M') === 0;
+  }
+
   /**
    * Ctrl+K's resolving key, if `text` starts with one — shared by both places `onLiveInput` checks
    * for it (the chord's own chunk, and the chunk after, if it arrived split across two). Returns
-   * whether it resolved (and already acted); adding a third resolving key only means editing here.
+   * whether it resolved (and already acted); adding a fourth resolving key only means editing here.
+   * `toggleMouse` is only passed while interacting (see `onKey`) — while attached, mouse tracking is
+   * always off regardless (see `attach()`), so `m`/`M` there goes to the agent like any other key.
    */
-  private resolveChord(text: string, stop: () => void, switchMode: () => void): boolean {
+  private resolveChord(text: string, stop: () => void, switchMode: () => void, toggleMouse?: () => void): boolean {
     if (this.isNewSessionChord(text)) {
       stop();
       this.newSession('claude');
@@ -763,22 +788,27 @@ export class App {
       switchMode();
       return true;
     }
+    if (toggleMouse && this.isMouseChord(text)) {
+      toggleMouse();
+      return true;
+    }
     return false;
   }
 
   /**
    * Input while attached (full-screen) or interacting (typed into from the list) with `live`:
    * forwarded to its PTY, except Ctrl+Q (`stop` — detach or stop interacting, see `findDetachKey`) and
-   * the Ctrl+K chord, which starts a new session in the same project on `n`/`N`, or swaps attached and
-   * interacting for the same session on `t`/`T` (`switchMode`). The chord's resolving key is usually
-   * typed just after Ctrl+K, quickly enough to arrive in the same input chunk (unlike Ctrl+Q, which
-   * needs no second key) — so both `findChordKey`'s match end and the *next* chunk, if this one ends
-   * right at the match, are checked for it.
+   * the Ctrl+K chord, which starts a new session in the same project on `n`/`N`, swaps attached and
+   * interacting for the same session on `t`/`T` (`switchMode`), or (while interacting only) flips mouse
+   * tracking on `m`/`M` (`toggleMouse`). The chord's resolving key is usually typed just after Ctrl+K,
+   * quickly enough to arrive in the same input chunk (unlike Ctrl+Q, which needs no second key) — so
+   * both `findChordKey`'s match end and the *next* chunk, if this one ends right at the match, are
+   * checked for it.
    */
-  private onLiveInput(live: LiveSession | undefined, data: string, stop: () => void, switchMode: () => void): void {
+  private onLiveInput(live: LiveSession | undefined, data: string, stop: () => void, switchMode: () => void, toggleMouse?: () => void): void {
     if (this.chordPending) {
       this.chordPending = false;
-      if (this.resolveChord(data, stop, switchMode)) {
+      if (this.resolveChord(data, stop, switchMode, toggleMouse)) {
         return;
       }
       if (live && !live.exited) {
@@ -800,7 +830,7 @@ export class App {
     }
     if (chord && idx === chord.index) {
       const after = data.slice(chord.end);
-      if (this.resolveChord(after, stop, switchMode)) {
+      if (this.resolveChord(after, stop, switchMode, toggleMouse)) {
         return;
       }
       this.chordPending = true;
@@ -821,9 +851,9 @@ export class App {
     }
     this.interacting = s;
     this.markSeen(s);
-    // Unlike attach(), mouse tracking stays on: the list/preview screen is still up (typed input is
-    // the only thing that goes to the agent), so a wheel notch is still ours to scroll it with — see
-    // onKey's `interacting` branch.
+    // Unlike attach(), mouse tracking is left as `mouseTracking` currently has it (not forced off): the
+    // list/preview screen is still up (typed input is the only thing that goes to the agent), so a
+    // wheel notch is still ours to scroll it with when it's on — see onKey's `interacting` branch.
     this.render();
   }
 
@@ -1349,6 +1379,14 @@ export class App {
     this.flash(`Theme: ${this.themePreference}`);
   }
 
+  /** `m` from the list, or `Ctrl+K M` while typing in place: flips real mouse reporting on/off (never while attached — see `attach()`). On lets the wheel/click scroll the preview; off (the default) leaves click-drag to the terminal's own text selection. */
+  private toggleMouseTracking(): void {
+    this.mouseTracking = !this.mouseTracking;
+    out.write(this.mouseTracking ? ENABLE_MOUSE : DISABLE_MOUSE);
+    this.flash(this.mouseTracking ? 'Mouse scrolling on — click-drag no longer selects text (m to turn off)' : 'Mouse scrolling off — click-drag selects text again (m to turn on)');
+    this.render();
+  }
+
   private onKey(data: string): void {
     if (this.prompt) {
       this.onPromptKey(this.prompt, data);
@@ -1386,15 +1424,21 @@ export class App {
     }
     const interacting = this.interacting;
     if (interacting) {
-      // Mouse tracking stays on here (see startInteracting()): a wheel notch still scrolls the same
-      // preview shown while just browsing, rather than reaching the agent, which would otherwise see
-      // it as a plain ↑/↓ (with no mouse mode on, that's all a terminal ever sends for it) and likely
-      // treat it as its own prompt-history recall instead of what the user actually did.
+      // When mouseTracking is on, a wheel notch scrolls the same preview shown while just browsing,
+      // rather than reaching the agent, which would otherwise see it as a plain ↑/↓ (with no mouse mode
+      // on, that's all a terminal ever sends for it) and likely treat it as its own prompt-history
+      // recall instead of what the user actually did.
       if (this.onMouseSequence(data)) {
         this.render();
         return;
       }
-      this.onLiveInput(interacting.live, data, () => this.stopInteracting(), () => this.switchToAttach(interacting));
+      this.onLiveInput(
+        interacting.live,
+        data,
+        () => this.stopInteracting(),
+        () => this.switchToAttach(interacting),
+        () => this.toggleMouseTracking()
+      );
       return;
     }
 
@@ -1478,6 +1522,12 @@ export class App {
         break;
       case '`':
         this.selectPreviousSession();
+        break;
+      case ']':
+        this.cycleActiveSession(1);
+        break;
+      case '[':
+        this.cycleActiveSession(-1);
         break;
       case 's':
         if (s && this.procs.isElsewhere(s)) {
@@ -1626,6 +1676,9 @@ export class App {
       case 'T':
         this.cycleTheme();
         break;
+      case 'm':
+        this.toggleMouseTracking();
+        break;
       case '?':
         this.helpScroll = 0;
         break;
@@ -1697,6 +1750,32 @@ export class App {
       return;
     }
     this.jumpToSession(target);
+  }
+
+  /**
+   * `]` / `[`: selects the next / previous running-or-waiting session, wrapping around and skipping
+   * everything else (idle sessions, folders, projects) — so switching between a couple of busy
+   * sessions in different projects takes one press instead of walking every row between them.
+   * With `ui.expandCollapsedOnActiveJump` on (the default), a target hidden inside a collapsed
+   * folder or project is still reached, expanding just that group (via `jumpToSession`); off, only
+   * rows already shown are targets, same as `move`.
+   */
+  private cycleActiveSession(delta: 1 | -1): void {
+    const rows = this.config.ui.expandCollapsedOnActiveJump ? buildTree(this.unhiddenSessions, { ...this.tree, collapsed: [] }, this.treeBuildOptions()).rows : this.rows;
+    const active: { i: number; session: DeckSession }[] = [];
+    rows.forEach((r, i) => {
+      if (r.kind === 'session' && isActive(this.procs.categoryOf(r.session))) {
+        active.push({ i, session: r.session });
+      }
+    });
+    if (!active.length) {
+      this.flash('No running or waiting sessions.');
+      return;
+    }
+    const current = this.selectedRow;
+    const at = current ? rows.findIndex((r) => sameRow(r, current)) : -1;
+    const target = delta > 0 ? (active.find((a) => a.i > at) ?? active[0]) : ([...active].reverse().find((a) => a.i < at) ?? active[active.length - 1]);
+    this.jumpToSession(target.session);
   }
 
   /** Selects `target` in the tree, expanding its project (and folder) if collapsed. Flashes if a filter still hides it. */
@@ -1774,6 +1853,16 @@ export class App {
       title: agent === 'copilot' ? '(new Copilot session)' : '(new session)',
       mtime: Date.now(),
     };
+    if (!this.config.ui.recentSessionsFirst) {
+      // Renders at the top right away either way (see `sortSessionsManual`'s `pendingTopOrder` band).
+      // Copilot already has its id, so its real position can be recorded now; Claude reports its own
+      // id later, asynchronously — `pollProcs` records it then, once `s.id` stops being `null`.
+      fresh.pendingTopOrder = true;
+      if (fresh.id) {
+        fresh.pendingTopOrder = false;
+        this.applyPrependSession(project.key, fresh.id);
+      }
+    }
     this.sessions.unshift(fresh);
     this.rebuildRows();
     this.selectWhere((r) => r.kind === 'session' && r.session === fresh);

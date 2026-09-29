@@ -80,6 +80,13 @@ test('ui.gitStatus toggles regardless of input, on by default', () => {
   assert.equal(f.apply(f.apply(base(), '')!, '')?.ui.gitStatus, true);
 });
 
+test('ui.expandCollapsedOnActiveJump toggles regardless of input, on by default', () => {
+  const f = field('ui.expandCollapsedOnActiveJump');
+  assert.equal(f.display(base()), 'on');
+  assert.equal(f.apply(base(), '')?.ui.expandCollapsedOnActiveJump, false);
+  assert.equal(f.apply(f.apply(base(), '')!, '')?.ui.expandCollapsedOnActiveJump, true);
+});
+
 test('tools.claude.enabled and tools.copilot.enabled toggle independently', () => {
   const claudeEnabled = field('tools.claude.enabled');
   const copilotEnabled = field('tools.copilot.enabled');

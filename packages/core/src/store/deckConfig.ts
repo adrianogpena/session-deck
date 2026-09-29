@@ -43,6 +43,12 @@ export interface DeckConfig {
      * upstream, and the preview panel shows the branch name and counts. Default: true.
      */
     gitStatus: boolean;
+    /**
+     * `[`/`]` (jump to the previous/next running-or-waiting session) reaches into a collapsed folder
+     * or project to select one hidden there, expanding it, when `true` — or only ever jumps between
+     * sessions already shown, same as `j`/`k`, when `false`. Default: true.
+     */
+    expandCollapsedOnActiveJump: boolean;
   };
   tools: {
     claude: ToolConfig;
@@ -69,6 +75,7 @@ function defaultDeckConfig(): DeckConfig {
       recentSessionsFirst: true,
       newSessionFullScreen: true,
       gitStatus: true,
+      expandCollapsedOnActiveJump: true,
     },
     tools: { claude: {}, copilot: {} },
     trash: { retentionDays: DEFAULT_TRASH_RETENTION_DAYS },
@@ -112,7 +119,8 @@ export function parseDeckConfig(raw: string): DeckConfig {
   }
   const { ui, tools, trash } = parsed as Record<string, unknown>;
   if (typeof ui === 'object' && ui !== null) {
-    const { maxSessionsListed, notifications, notifyStatuses, recentProjectsFirst, recentSessionsFirst, newSessionFullScreen, gitStatus } = ui as Record<string, unknown>;
+    const { maxSessionsListed, notifications, notifyStatuses, recentProjectsFirst, recentSessionsFirst, newSessionFullScreen, gitStatus, expandCollapsedOnActiveJump } =
+      ui as Record<string, unknown>;
     if (typeof maxSessionsListed === 'number' && Number.isInteger(maxSessionsListed) && maxSessionsListed > 0) {
       config.ui.maxSessionsListed = maxSessionsListed;
     }
@@ -133,6 +141,9 @@ export function parseDeckConfig(raw: string): DeckConfig {
     }
     if (typeof gitStatus === 'boolean') {
       config.ui.gitStatus = gitStatus;
+    }
+    if (typeof expandCollapsedOnActiveJump === 'boolean') {
+      config.ui.expandCollapsedOnActiveJump = expandCollapsedOnActiveJump;
     }
   }
   if (typeof tools === 'object' && tools !== null) {

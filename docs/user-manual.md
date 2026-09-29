@@ -91,6 +91,14 @@ a colored status dot on each session.
 - **Previous session `` ` `` (backtick)**: goes back to the session you had selected before.
   - If its folder or project is collapsed, it is expanded.
   - If a filter hides it, you're told to clear the filter (`0`).
+- **Jump between active sessions `[` `]`**: selects the previous / next running or waiting session,
+  skipping everything else (idle sessions, folders, projects) and wrapping around from the last back
+  to the first. Useful when the sessions that need you are spread across different projects — one
+  press gets you there instead of walking every row in between.
+  - Reaches into a collapsed folder or project to select one hidden there, expanding it, same as
+    `` ` ``. Set `ui.expandCollapsedOnActiveJump` to `false` in the
+    [global config](#4-global-config-sessiondeckconfigjson) to only ever jump between sessions
+    already shown instead, like `j`/`k`.
 
 ### Using a session
 
@@ -221,8 +229,9 @@ repository form one project. Folders let you group projects further, one level d
     `ui.recentSessionsFirst` to `false` in the [global config](#4-global-config-sessiondeckconfigjson)
     to freeze that order: the next time each project's sessions are shown, whatever order they're
     currently in is locked in, and from then on a session only moves when you move it with `K`/`J`
-    (a brand-new session is appended, most recent first, the first time it's seen). Turning the
-    setting off doesn't undo any shuffling that already happened before you turned it off.
+    (an existing session Session Deck hasn't shown before is appended, most recent first, the first
+    time it's seen — but a session you just started with `n`/`N` always lands at the top). Turning
+    the setting off doesn't undo any shuffling that already happened before you turned it off.
   - Only in the normal view; in the "active on top" view you're asked to switch back (`t`).
 - **Rename folder `e`**: on a folder row, renames it.
 - **Delete folder `d`**: on a folder row, deletes the folder after you confirm with `y`. Its projects
@@ -278,6 +287,11 @@ different projects without moving anything.
 - **Narrow / widen the sessions panel `<` / `>`**: 5% per press, between 15% and 70% of the width.
   Remembered.
 - **Hide / show the sessions panel `b` (or `Ctrl+B`)**: gives the preview the whole width.
+- **Mouse scrolling `m`** (or `Ctrl+K M` while typing into a session with `i`): toggles real mouse
+  reporting. Off by default (not remembered across restarts), so click-drag still does your terminal's
+  own text selection, letting you copy from the preview. Turn it on to scroll the preview with the
+  wheel or a click-drag; turn it back off to select and copy again. Always off while attached
+  (`Enter`) — the agent gets the terminal's mouse events there, not sdeck.
 - **Theme `T`**: cycles dark → light → system (Tokyo Night colors). Remembered.
   - **System** follows your terminal's background color, or Windows' dark/light setting if the
     terminal doesn't report it.
@@ -461,7 +475,8 @@ it up next time it starts).
     "recentProjectsFirst": false,
     "recentSessionsFirst": true,
     "newSessionFullScreen": true,
-    "gitStatus": true
+    "gitStatus": true,
+    "expandCollapsedOnActiveJump": true
   },
   "tools": {
     "claude": { "command": "claude-nightly", "args": ["--model", "opus"] },
@@ -489,6 +504,9 @@ it up next time it starts).
   `false`. Default: on.
 - **`ui.gitStatus`**: `false` turns off the `⇡`/`⇣`/`✱` project badges and the preview panel's branch
   line entirely — no `git status` is run at all. Default: on.
+- **`ui.expandCollapsedOnActiveJump`**: `[`/`]` (jump to the previous/next running-or-waiting session)
+  expands a collapsed folder or project to reach one hidden there when `true` — or skips it, only ever
+  landing on a session already shown, when `false`. Default: on.
 - **`tools.claude` / `tools.copilot`**:
   - **`enabled`**: `false` hides that agent entirely — its sessions aren't discovered, and its `n`/`N`
     new-session key just flashes a message instead of starting one. Default: on.

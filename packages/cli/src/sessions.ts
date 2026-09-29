@@ -43,6 +43,14 @@ export interface DeckSession {
   pendingPrompt?: string;
   /** Found by discovery (a Claude transcript or a Copilot session with a turn): stays listed when stopped. */
   onDisk?: boolean;
+  /**
+   * Set on a session just started via "new session" while `id` isn't recorded in its project's manual
+   * order yet (a brand-new Claude session has no `id` at all until one shows up, see `pollProcs`).
+   * Makes `sortSessionsManual` (`tree.ts`) render it at the top immediately, so `prependSession`ing it
+   * once its real position is recorded — right away for Copilot, once its id is known for Claude —
+   * only ever confirms where it's already shown, never moves it. See `DeckConfig.ui.recentSessionsFirst`.
+   */
+  pendingTopOrder?: boolean;
 }
 
 /**
