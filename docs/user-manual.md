@@ -28,9 +28,9 @@ a colored status dot on each session.
 
 | Symbol | Status | Meaning |
 |---|---|---|
-| `●` green | **Running** | The agent is working. |
+| `●` red | **Running** | The agent is working. |
 | `◐` yellow | **Waiting for you** | The agent asked something (a permission, a choice) and waits for your answer. |
-| `◐` yellow | **Finished, not seen yet** | The agent finished a turn you haven't looked at yet. |
+| `●` green | **Finished, not seen yet** | The agent finished a turn you haven't looked at yet. |
 | `○` | **Idle** | Running and ready for input, nothing new to see. |
 | `⟳` | **Starting** | Just started, not ready yet. |
 | `✕` red | **Error** | A sign-in or API error on its screen (e.g. "run /login"), or the agent exited with an error. |
@@ -117,6 +117,8 @@ a colored status dot on each session.
 - **Stop `x`**: stops the selected session's agent.
   - It stays listed and can be resumed, unless it was a new session where nothing was sent yet;
     that one disappears.
+  - With a checked batch (`Space`): stops every checked session that's running, instead of just the
+    selected one.
 - **Restart `R`**: stops the agent and starts it again on the same conversation. Useful after
   changing settings or MCP servers.
   - A stopped session is just started.
@@ -152,8 +154,10 @@ a colored status dot on each session.
   - A Claude session running in another terminal must be renamed there, with `/rename`.
   - A Copilot session gets a Session Deck name (Copilot has no `/rename`).
   - Projects can't be renamed: they're named after their folder on disk.
-- **Mark as unread `u`**: makes the selected session show as finished, not seen yet (`◐`), until you
-  look at it again. Shared with the extension.
+- **Mark as unread `u`**: makes the selected session show as finished, not seen yet (`●` green), until
+  you look at it again. Shared with the extension.
+- **Mark as read `U`**: the opposite of `u` — clears the "finished, not seen" mark on the selected
+  session right away, without having to attach to it.
 - **Pin `,` (comma)**: pins the selected session within its project. Each press cycles: pinned to
   the top → pinned to the bottom → not pinned.
   - Pinned sessions stay at the top or bottom of their project whatever the sort order.
@@ -162,6 +166,8 @@ a colored status dot on each session.
   Shared with the extension.
   - An idle session is stopped first.
   - A session that's still working isn't archived; you're asked to stop it (`x`) or wait.
+  - With a checked batch (`Space`): archives (or unarchives) every checked session, skipping ones
+    still working.
 - **Archived view `^`**: switches between the active sessions and the archived ones.
   - The panel title shows "· archived" while you're in it.
 - **Delete `d` (on a session)**: moves the session to the trash (`~/.session-deck/trash/`). It
@@ -170,11 +176,25 @@ a colored status dot on each session.
   - Copilot sessions can't be deleted (Copilot keeps them in its own database); archive them
     instead.
   - Items older than 30 days are removed from the trash when Session Deck starts.
+  - With a checked batch (`Space`): moves every deletable one to the trash, skipping Copilot
+    sessions and ones still running.
 - **Undo delete `Ctrl+Z`**: brings back the last deleted session.
   - Press it again for the one deleted before that.
 - **Trash `Z`**: lists the deleted sessions, newest first. Select one and press `Enter` to restore
   it.
   - A session can't be restored if a transcript with the same id is back in its place.
+
+### Multi-select
+
+- **Check `Space`** (on a session row): checks it for a batch action, then moves the selection down
+  like a normal list. Press it again on a checked session to uncheck it.
+  - The header shows how many are checked.
+  - `Esc` clears the whole batch first, before it does anything else.
+- With sessions checked, **Stop `x`**, **Archive `A`**, **Delete `d`**, **Move to folder `M`** and
+  **Tag `L`** act on the whole batch instead of just the selected session — see each key's own entry
+  above (and [Tags](#tags) for `L`).
+  - Each batch action clears the checks afterward and reports how many it acted on and how many it
+    skipped.
 
 ### Folders and order
 
@@ -188,6 +208,8 @@ repository form one project. Folders let you group projects further, one level d
   - **Top level (no folder)**: takes it out of its folder.
   - **A folder name**: moves it there.
   - **+ New folder…**: asks for a name, creates the folder and moves the project into it.
+  - With a checked batch (`Space`): moves every distinct project among the checked sessions to the
+    folder you pick, in one go.
 - **Move up / down `K` / `J` (or `Shift+↑` / `Shift+↓`)**: moves the selected folder, or the selected
   project (a session moves its project), one place up or down.
   - Projects never moved keep a fixed alphabetical order by default — moving one keeps it exactly
