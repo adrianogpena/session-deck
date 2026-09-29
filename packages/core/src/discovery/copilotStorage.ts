@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { DatabaseSync } from 'node:sqlite';
+import { assertSafeSessionId } from '../commands/sessionId';
 
 /** The `copilot` CLI's own home directory — session history lives in `session-store.db` here; there's no `copilot sessions list` command, so reading it directly is the only way to enumerate sessions. */
 export function getCopilotHomeDir(): string {
@@ -14,7 +15,7 @@ function getSessionStorePath(): string {
 
 /** Copilot CLI's own live per-session activity log. Internal, undocumented format — treat its shape as best-effort, not a stable contract. */
 export function getCopilotSessionEventsLogPath(sessionId: string): string {
-  return path.join(getCopilotHomeDir(), 'session-state', sessionId, 'events.jsonl');
+  return path.join(getCopilotHomeDir(), 'session-state', assertSafeSessionId(sessionId), 'events.jsonl');
 }
 
 export function copilotStoreExists(): boolean {

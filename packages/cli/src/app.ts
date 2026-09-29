@@ -661,11 +661,16 @@ export class App {
     resizeLive(live, out.columns || 120, out.rows || 30);
   }
 
-  private detach(note?: string): void {
-    const seen = this.attached;
+  /** Leaves full-screen attached mode: real terminal modes reset, its own title dropped, `attached` cleared. Shared by `detach()` and `switchToInteracting()` so the two can't drift apart. */
+  private teardownAttached(): void {
     this.attached = null;
     out.write(`${RESET_AGENT_MODES}${ESC}?25l`);
     this.lastTitle = ''; // the agent set its own title while attached
+  }
+
+  private detach(note?: string): void {
+    const seen = this.attached;
+    this.teardownAttached();
     if (seen) {
       this.markSeen(seen); // whatever finished while you were attached, you saw
     }
@@ -678,25 +683,52 @@ export class App {
 
   /** Ctrl+K T while attached: back to typing into `s` from the list/preview, without detaching to the list first. */
   private switchToInteracting(s: DeckSession): void {
-    this.attached = null;
-    out.write(`${RESET_AGENT_MODES}${ESC}?25l`);
-    this.lastTitle = ''; // the agent set its own title while attached
+    // Confirmed live first: attached must stay put (not go null with nothing to replace it) if `s`
+    // turns out to be unreachable (e.g. grabbed by another terminal in the same instant).
+    if (!this.ensureLive(s)) {
+      return;
+    }
+    this.teardownAttached();
     this.resizeAllToPane();
     this.startInteracting(s);
   }
 
   /** Ctrl+K T while interacting: attach full-screen to `s`, without stopping back to the list first. */
   private switchToAttach(s: DeckSession): void {
+    if (!this.ensureLive(s)) {
+      return;
+    }
     this.interacting = null;
     this.attach(s);
   }
 
+  // Only the very next key resolves the chord — findPlainKey searches its whole input, which would
+  // otherwise fire on an 'n'/'t' typed anywhere later in the same chunk (e.g. a fast-typed sentence
+  // or paste), silently eating a Ctrl+K meant for the agent and the text along with it.
   private isNewSessionChord(data: string): boolean {
-    return findPlainKey(data, 'n') >= 0 || findPlainKey(data, 'N') >= 0;
+    return findPlainKey(data, 'n') === 0 || findPlainKey(data, 'N') === 0;
   }
 
   private isSwitchChord(data: string): boolean {
-    return findPlainKey(data, 't') >= 0 || findPlainKey(data, 'T') >= 0;
+    return findPlainKey(data, 't') === 0 || findPlainKey(data, 'T') === 0;
+  }
+
+  /**
+   * Ctrl+K's resolving key, if `text` starts with one — shared by both places `onLiveInput` checks
+   * for it (the chord's own chunk, and the chunk after, if it arrived split across two). Returns
+   * whether it resolved (and already acted); adding a third resolving key only means editing here.
+   */
+  private resolveChord(text: string, stop: () => void, switchMode: () => void): boolean {
+    if (this.isNewSessionChord(text)) {
+      stop();
+      this.newSession('claude');
+      return true;
+    }
+    if (this.isSwitchChord(text)) {
+      switchMode();
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -711,13 +743,7 @@ export class App {
   private onLiveInput(live: LiveSession | undefined, data: string, stop: () => void, switchMode: () => void): void {
     if (this.chordPending) {
       this.chordPending = false;
-      if (this.isNewSessionChord(data)) {
-        stop();
-        this.newSession('claude');
-        return;
-      }
-      if (this.isSwitchChord(data)) {
-        switchMode();
+      if (this.resolveChord(data, stop, switchMode)) {
         return;
       }
       if (live && !live.exited) {
@@ -739,13 +765,7 @@ export class App {
     }
     if (chord && idx === chord.index) {
       const after = data.slice(chord.end);
-      if (this.isNewSessionChord(after)) {
-        stop();
-        this.newSession('claude');
-        return;
-      }
-      if (this.isSwitchChord(after)) {
-        switchMode();
+      if (this.resolveChord(after, stop, switchMode)) {
         return;
       }
       this.chordPending = true;

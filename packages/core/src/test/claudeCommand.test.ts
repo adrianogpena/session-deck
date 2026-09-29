@@ -17,7 +17,7 @@ test('buildClaudeResumeCommand adds --dangerously-skip-permissions when asked', 
 });
 
 test('buildClaudeResumeCommand rejects a session id containing shell metacharacters', () => {
-  assert.throws(() => buildClaudeResumeCommand('abc; rm -rf ~', false), /Refusing to build a terminal command/);
+  assert.throws(() => buildClaudeResumeCommand('abc; rm -rf ~', false), /Refusing to use an unexpected session id/);
 });
 
 test('buildClaudeNewSessionCommand', () => {
@@ -40,5 +40,5 @@ test('buildClaudeForkCommand adds --dangerously-skip-permissions before --resume
 });
 
 test('buildClaudeForkCommand rejects a session id containing shell metacharacters', () => {
-  assert.throws(() => buildClaudeForkCommand('abc; rm -rf ~', false), /Refusing to build a terminal command/);
+  assert.throws(() => buildClaudeForkCommand('abc; rm -rf ~', false), /Refusing to use an unexpected session id/);
 });

@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import { getCopilotSessionEventsLogPath } from '../discovery/copilotStorage';
 import { clearSessionStatus, writeSessionStatus, SessionStatus } from './sessionStatus';
+import { isSafeSessionId } from '../commands/sessionId';
 
 /**
  * Copilot CLI's `events.jsonl` event types mapped to Session Deck's coarse status. Unlisted types
@@ -81,7 +82,9 @@ export class CopilotStatusWatcher {
   constructor(private readonly log: (message: string) => void) {}
 
   start(sessionId: string): void {
-    if (this.tails.has(sessionId)) {
+    // Guards getCopilotSessionEventsLogPath's own check here (rather than relying on a try/catch),
+    // since waitForFile's recursive setTimeout retries aren't wrapped by one.
+    if (this.tails.has(sessionId) || !isSafeSessionId(sessionId)) {
       return;
     }
     const state: TailState = { offset: 0, carry: '' };

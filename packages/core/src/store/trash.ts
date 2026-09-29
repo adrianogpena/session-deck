@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { getDeckHomeDir } from './deckStore';
+import { assertSafeSessionId, isSafeSessionId } from '../commands/sessionId';
 
 /** A deleted session, kept restorable in `~/.session-deck/trash/` until it's older than {@link TRASH_TTL_MS}. */
 export interface TrashedSession {
@@ -28,7 +29,12 @@ function companionDir(transcriptPath: string): string {
 }
 
 function trashedTranscript(sessionId: string): string {
-  return path.join(getTrashDir(), `${sessionId}.jsonl`);
+  return path.join(getTrashDir(), `${assertSafeSessionId(sessionId)}.jsonl`);
+}
+
+/** Where a session's companion folder (see {@link companionDir}) lives once trashed. */
+function trashedCompanionDir(sessionId: string): string {
+  return path.join(getTrashDir(), assertSafeSessionId(sessionId));
 }
 
 /** Newest first. Tolerant of a missing or damaged manifest (reads as empty). */
@@ -69,7 +75,7 @@ export function trashClaudeSession(transcriptPath: string, sessionId: string, ti
   const entry: TrashedSession = { sessionId, agent: 'claude', title, originalPath: transcriptPath, trashedAt: Date.now() };
   move(transcriptPath, trashedTranscript(sessionId));
   if (fs.existsSync(companionDir(transcriptPath))) {
-    move(companionDir(transcriptPath), path.join(getTrashDir(), sessionId));
+    move(companionDir(transcriptPath), trashedCompanionDir(sessionId));
   }
   writeTrash([entry, ...listTrash().filter((e) => e.sessionId !== sessionId)]);
   return entry;
@@ -86,7 +92,7 @@ export function restoreSession(sessionId: string): TrashedSession {
     throw new Error('A transcript with the same id already exists where this one was.');
   }
   move(trashedTranscript(sessionId), entry.originalPath);
-  const companion = path.join(getTrashDir(), sessionId);
+  const companion = trashedCompanionDir(sessionId);
   if (fs.existsSync(companion)) {
     move(companion, companionDir(entry.originalPath));
   }
@@ -97,13 +103,16 @@ export function restoreSession(sessionId: string): TrashedSession {
 /** Permanently removes trashed sessions older than `ttlMs`. Returns how many were removed. */
 export function purgeTrash(nowMs: number = Date.now(), ttlMs: number = TRASH_TTL_MS): number {
   const entries = listTrash();
-  const expired = entries.filter((e) => nowMs - e.trashedAt > ttlMs);
+  // isSafeSessionId, not assertSafeSessionId: this runs unguarded at startup (see cli/src/app.ts's
+  // `run()`), so one malformed manifest entry must not throw and abort the whole purge — it's just
+  // left in place, same as any other entry that isn't old enough yet.
+  const expired = entries.filter((e) => nowMs - e.trashedAt > ttlMs && isSafeSessionId(e.sessionId));
   if (expired.length === 0) {
     return 0;
   }
   for (const e of expired) {
     fs.rmSync(trashedTranscript(e.sessionId), { force: true });
-    fs.rmSync(path.join(getTrashDir(), e.sessionId), { recursive: true, force: true });
+    fs.rmSync(trashedCompanionDir(e.sessionId), { recursive: true, force: true });
   }
   writeTrash(entries.filter((e) => !expired.includes(e)));
   return expired.length;

@@ -181,20 +181,26 @@ export async function activate(context: vscode.ExtensionContext) {
     waitingNotifier.check(terminalService.getOpenSessions(), (sessionId) => terminalService.revealSession(sessionId));
   });
 
+  const refreshAll = () => {
+    treeProvider.refresh();
+    activeSessionProvider.refresh();
+  };
+
   // Auto-refresh when any workspace folder's project list file changes (a plain glob string
   // watches every open folder, not just the first — see getConfigGlobPattern).
   const configPattern = getConfigGlobPattern();
   if (configPattern) {
-    const refreshAll = () => {
-      treeProvider.refresh();
-      activeSessionProvider.refresh();
-    };
     const configWatcher = vscode.workspace.createFileSystemWatcher(configPattern);
     configWatcher.onDidChange(refreshAll);
     configWatcher.onDidCreate(refreshAll);
     configWatcher.onDidDelete(refreshAll);
     context.subscriptions.push(configWatcher);
   }
+
+  // readWorkspaceProjectEntries() reads nothing until the workspace is trusted (see its doc comment)
+  // — pick up whatever session-deck.json already has the moment the user grants trust, rather than
+  // requiring a manual refresh or window reload.
+  context.subscriptions.push(vscode.workspace.onDidGrantWorkspaceTrust(refreshAll));
 }
 
 /** Opens a session as a virtual read-only markdown document, in a reused VS Code preview tab. */

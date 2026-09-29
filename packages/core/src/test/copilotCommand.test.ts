@@ -17,7 +17,7 @@ test('buildCopilotResumeCommand adds --allow-all when asked', () => {
 });
 
 test('buildCopilotResumeCommand rejects a session id containing shell metacharacters', () => {
-  assert.throws(() => buildCopilotResumeCommand('abc; rm -rf ~', false), /Refusing to build a terminal command/);
+  assert.throws(() => buildCopilotResumeCommand('abc; rm -rf ~', false), /Refusing to use an unexpected session id/);
 });
 
 test('buildCopilotNewSessionCommand pre-assigns the given session id', () => {
@@ -35,5 +35,5 @@ test('buildCopilotNewSessionCommand adds --allow-all when asked', () => {
 });
 
 test('buildCopilotNewSessionCommand rejects a session id containing shell metacharacters', () => {
-  assert.throws(() => buildCopilotNewSessionCommand('abc; rm -rf ~', false), /Refusing to build a terminal command/);
+  assert.throws(() => buildCopilotNewSessionCommand('abc; rm -rf ~', false), /Refusing to use an unexpected session id/);
 });

@@ -69,8 +69,19 @@ function matchesRoot(entry: WorkspaceProjectEntry, rootPath: string): boolean {
   return normalizeFsPath(entry.root) === normalizeFsPath(rootPath);
 }
 
-/** `undefined` means no workspace folder has a `.vscode/session-deck.json` yet. Otherwise, every open folder's file (if any) is merged into one de-duplicated list, by normalized root. */
+/**
+ * `undefined` means no workspace folder has a `.vscode/session-deck.json` yet, or the workspace isn't
+ * trusted. Otherwise, every open folder's file (if any) is merged into one de-duplicated list, by
+ * normalized root. Gated on `vscode.workspace.isTrusted`: this file can arrive already committed
+ * inside a cloned repo, and its entries drive the tree (which projects show, and `git` runs against
+ * their `root`) and can silently waive the "dangerously skip permissions" confirmation for a project
+ * (`getWorkspaceProjectEntry`) — the same class of repo-supplied instruction VS Code's own workspace
+ * trust already gates (tasks.json, launch.json, etc.), so it's read the same way here.
+ */
 export function readWorkspaceProjectEntries(): WorkspaceProjectEntry[] | undefined {
+  if (!vscode.workspace.isTrusted) {
+    return undefined;
+  }
   const folders = vscode.workspace.workspaceFolders ?? [];
   const merged: WorkspaceProjectEntry[] = [];
   const seenRoots = new Set<string>();

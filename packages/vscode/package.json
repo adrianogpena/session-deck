@@ -18,6 +18,12 @@
   "engines": {
     "vscode": "^1.93.0"
   },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "A workspace's own .vscode/session-deck.json (project list, per-project settings) is ignored until the workspace is trusted, since it can be committed inside a cloned repo."
+    }
+  },
   "categories": [
     "Chat",
     "Other"

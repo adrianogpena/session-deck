@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { DeckStore } from '../store/deckStore';
+import { isSafeSessionId } from '../commands/sessionId';
 
 export type SessionStatus = 'running' | 'waiting' | 'done' | 'error';
 
@@ -22,6 +23,9 @@ export function ensureSessionStatusDir(): void {
 
 /** Removes a session's status file. Idempotent — a no-op if there's nothing to clear. */
 export function clearSessionStatus(sessionId: string): void {
+  if (!isSafeSessionId(sessionId)) {
+    return; // not a real session id (e.g. a malformed pid-file record) — nothing of ours to clear
+  }
   const dir = getSessionStatusDir();
   try {
     fs.rmSync(path.join(dir, `${sessionId}.json`), { force: true });
@@ -37,6 +41,9 @@ export function clearSessionStatus(sessionId: string): void {
 
 /** Writes a session's status directly — the general case both `markSessionError` and `copilotStatusWatcher.ts` build on. */
 export function writeSessionStatus(sessionId: string, status: SessionStatus): void {
+  if (!isSafeSessionId(sessionId)) {
+    return; // not a real session id — refuse rather than write outside the status dir
+  }
   ensureSessionStatusDir();
   const filePath = path.join(getSessionStatusDir(), `${sessionId}.json`);
   fs.writeFileSync(filePath, JSON.stringify({ status, updatedAt: Date.now() }), 'utf8');
@@ -49,6 +56,9 @@ export function markSessionError(sessionId: string): void {
 
 /** `undefined` means "no status" — nothing's happened yet, or the process already exited. */
 export function readSessionStatus(sessionId: string): SessionStatusRecord | undefined {
+  if (!isSafeSessionId(sessionId)) {
+    return undefined; // not a real session id — same as "no status" rather than reading outside the status dir
+  }
   const filePath = path.join(getSessionStatusDir(), `${sessionId}.json`);
   try {
     const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -125,6 +135,9 @@ export function readEffectiveSessionStatus(sessionId: string): SessionStatusReco
  * atomic (`wx`), so exactly one caller gets `true`. Older markers for the session are removed.
  */
 export function claimNotification(sessionId: string, updatedAt: number): boolean {
+  if (!isSafeSessionId(sessionId)) {
+    return false; // not a real session id — nothing to claim
+  }
   ensureSessionStatusDir();
   const dir = getSessionStatusDir();
   const marker = `${sessionId}.${updatedAt}.notified`;
