@@ -60,7 +60,8 @@ export type ListRow =
   | ({ kind: 'folder'; name: string; collapsed: boolean; hotkey?: number } & GroupCounts)
   | ({ kind: 'project'; label: string; collapsed: boolean; depth: number; hotkey?: number; git?: GitStatus } & GroupCounts)
   | { kind: 'session'; view: SessionView; isLast: boolean; depth: number; pin?: 'top' | 'bottom'; checked?: boolean }
-  | { kind: 'divider'; label: string };
+  | { kind: 'divider'; label: string }
+  | { kind: 'tag'; name: string; count: number; active: boolean };
 
 function glyph(t: Theme, status: SessionStatus): string {
   const g = GLYPHS[status];
@@ -96,7 +97,8 @@ export function renderPills(
   total: number,
   counts: Record<StatusCategory, number>,
   statusFilter: ReadonlySet<StatusCategory>,
-  timeFilter: TimeFilter
+  timeFilter: TimeFilter,
+  tagFilter?: string
 ): string {
   const pill = (label: string, active: boolean, labelStyle: string) =>
     active ? `${t.bg('accent')}${t.fg('bg')}${BOLD} ${label} ${RESET}` : ` ${labelStyle}${label}${RESET} `;
@@ -111,6 +113,11 @@ export function renderPills(
   const time = TIME_LABEL[timeFilter];
   out += `${t.fg('border')}│${RESET}` + pill(time, timeFilter !== 'all', t.fg('purple'));
   plainWidth += 1 + textWidth(time) + 2;
+  if (tagFilter) {
+    const label = `# ${tagFilter}`;
+    out += `${t.fg('border')}│${RESET}` + pill(label, true, t.fg('cyan'));
+    plainWidth += 1 + textWidth(label) + 2;
+  }
   const hint = '! @ # & ~ filter · * time · 0 clear ';
   const gap = cols - plainWidth - textWidth(hint);
   if (gap >= 2) {
@@ -196,6 +203,21 @@ function renderDividerRow(t: Theme, width: number, label: string): string {
   return `${t.fg('border')}──${t.fg('textDim')}${text}${t.fg('border')}${'─'.repeat(Math.max(0, width - 2 - textWidth(text)))}${RESET}`;
 }
 
+/** `# name (n)`, at the bottom of the list. Enter filters to it (again clears); d removes it from every project. */
+function renderTagRow(t: Theme, width: number, row: Extract<ListRow, { kind: 'tag' }>, selected: boolean): string {
+  const lead = '  ';
+  const label = `# ${row.name}`;
+  const suffix = ` (${row.count})`;
+  const text = fit(label, Math.max(1, width - textWidth(lead) - textWidth(suffix))).trimEnd();
+  const pad = blank(width - textWidth(lead) - textWidth(text) - textWidth(suffix));
+  if (selected) {
+    const sel = `${t.bg('accent')}${t.fg('bg')}`;
+    return `${sel}${lead}${BOLD}${text}${RESET}${sel}${suffix}${pad}${RESET}`;
+  }
+  const style = row.active ? `${BOLD}${t.fg('cyan')}` : t.fg('cyan');
+  return `${t.fg('textDim')}${lead}${style}${text}${RESET}${t.fg('textDim')}${suffix}${RESET}${pad}`;
+}
+
 /** Lines for the sessions panel, exactly `rect.width` columns each, `rect.height` lines. */
 export function renderListPanel(t: Theme, rect: Rect, rows: ListRow[], selected: number, note: string, emptyMessage: string): string[] {
   const lines = panelHeader(t, rect.width, 'SESSIONS', note);
@@ -216,6 +238,8 @@ export function renderListPanel(t: Theme, rect: Rect, rows: ListRow[], selected:
       lines.push(renderSessionRow(t, rect.width, row, isSelected, showCheckbox));
     } else if (row.kind === 'divider') {
       lines.push(renderDividerRow(t, rect.width, row.label));
+    } else if (row.kind === 'tag') {
+      lines.push(renderTagRow(t, rect.width, row, isSelected));
     } else {
       lines.push(renderGroupRow(t, rect.width, row, isSelected));
     }
@@ -420,7 +444,7 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
     keys: [
       ['Space', 'Check the session for a batch action, then move down'],
       ['Esc', 'Clear the checked sessions'],
-      ['A x d M', 'Archive / stop / delete / move to folder — applied to every checked session'],
+      ['A x d M L', 'Archive / stop / delete / move to folder / tag — applied to every checked session'],
     ],
   },
   {
@@ -433,6 +457,14 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
       ['d', 'Remove the selected project from the list (p to add it back)'],
       ['S', 'Sort sessions: recent · actionable'],
       ['t', 'View: normal · active on top'],
+    ],
+  },
+  {
+    title: 'TAGS',
+    keys: [
+      ['L', 'Add / edit tags on the session (checked batch: add to all)'],
+      ['Enter', 'On a tag (bottom of the list): filter to it, again to clear'],
+      ['d', 'On a tag: remove it from every session'],
     ],
   },
   {

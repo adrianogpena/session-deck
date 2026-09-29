@@ -100,3 +100,29 @@ test('DeckStore.setProjectHidden persists across instances and a project can be 
   await store.setProjectHidden('/proj', false);
   assert.deepEqual(new DeckStore(file).getHiddenProjects(), []);
 });
+
+test('applySessionPatch trims, dedupes and drops blanks in tags, removing the field once empty', () => {
+  let state = applySessionPatch({ version: 1, sessions: {} }, 's', { tags: [' foo ', 'foo', 'bar', '  '] });
+  assert.deepEqual(state.sessions.s, { tags: ['foo', 'bar'] });
+  state = applySessionPatch(state, 's', { tags: [] });
+  assert.equal('s' in state.sessions, false);
+});
+
+test('parseDeckState keeps valid session tag lists and drops empty/invalid ones', () => {
+  const state = parseDeckState(
+    JSON.stringify({ version: 1, sessions: { a: { tags: ['foo', 'foo', 5, ' bar '] }, b: { tags: [] }, c: { tags: 'nope' } } })
+  );
+  assert.deepEqual(state?.sessions, { a: { tags: ['foo', 'bar'] } });
+});
+
+test('DeckStore.updateSession persists tags across instances and getAllTags collects distinct tags alphabetically', async () => {
+  const file = tempStorePath();
+  const store = new DeckStore(file);
+  await store.updateSession('a', { tags: ['zeta', 'alpha'] });
+  await store.updateSession('b', { tags: ['alpha', 'beta'] });
+  assert.deepEqual(new DeckStore(file).getSession('a')?.tags, ['zeta', 'alpha']);
+  assert.deepEqual(new DeckStore(file).getAllTags(), ['alpha', 'beta', 'zeta']);
+  await store.updateSession('a', { tags: [] });
+  assert.deepEqual(new DeckStore(file).getSession('a')?.tags, undefined);
+  assert.deepEqual(new DeckStore(file).getAllTags(), ['alpha', 'beta']);
+});

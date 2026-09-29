@@ -17,6 +17,7 @@ function outline(rows: TreeRow[]): string[] {
     if (r.kind === 'folder') return `${r.hotkey ?? ' '}F:${r.name}(${r.count})${r.collapsed ? '+' : ''}`;
     if (r.kind === 'project') return `${r.hotkey ?? ' '}${'  '.repeat(r.depth)}P:${r.label}${r.collapsed ? '+' : ''}`;
     if (r.kind === 'session') return `${'  '.repeat(r.depth)}s:${r.session.id}${r.pin ? '^' : ''}`;
+    if (r.kind === 'tag') return `T:${r.name}(${r.count})`;
     return '--';
   });
 }
@@ -30,6 +31,7 @@ const opts = (overrides: Partial<Parameters<typeof buildTree>[2]> = {}) => ({
   gitOf: () => undefined,
   filtering: false,
   recentProjectsFirst: false,
+  tagsOf: () => [],
   ...overrides,
 });
 const workTree = (): TreePrefs => ({ ...defaultTreePrefs(), folders: [{ id: 'f1', name: 'Work', projects: [key('web'), key('docs')] }] });
@@ -81,6 +83,24 @@ test('buildTree aggregates git status across a project\'s sessions to the worst 
   const project = (label: string) => rows.find((r): r is Extract<TreeRow, { kind: 'project' }> => r.kind === 'project' && r.label === label)!;
   assert.deepEqual(project('api').git, { ahead: 2, behind: 0, dirty: 5 });
   assert.equal(project('docs').git, undefined); // d1 has no entry in gitBySessionId
+});
+
+test('buildTree appends a TAGS divider and one row per distinct tag, counting sessions, independent of the current filter', () => {
+  const tagsBySession: Record<string, string[]> = { a1: ['urgent', 'vwde'], w1: ['vwde'] };
+  const rows = buildTree(sessions, defaultTreePrefs(), opts({ tagsOf: (s) => tagsBySession[s.id!] ?? [] })).rows;
+  assert.deepEqual(
+    rows.filter((r) => r.kind === 'tag' || (r.kind === 'divider' && r.label === 'TAGS')),
+    [
+      { kind: 'divider', label: 'TAGS' },
+      { kind: 'tag', name: 'urgent', count: 1 },
+      { kind: 'tag', name: 'vwde', count: 2 },
+    ]
+  );
+});
+
+test('buildTree omits the TAGS section entirely when nothing is tagged', () => {
+  const rows = buildTree(sessions, defaultTreePrefs(), opts()).rows;
+  assert.equal(rows.some((r) => r.kind === 'tag' || (r.kind === 'divider' && r.label === 'TAGS')), false);
 });
 
 test('projectLabels adds the parent folder only when two projects share a name', () => {

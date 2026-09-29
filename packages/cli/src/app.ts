@@ -155,6 +155,8 @@ export class App {
   private search: Search | null = null;
   private statusFilter = new Set<StatusCategory>();
   private timeFilter: TimeFilter = 'all';
+  /** Set from a tag row at the bottom of the list (Enter): narrows the tree to sessions carrying that tag. */
+  private tagFilter?: string;
   /** Shown next to the SESSIONS title for a moment after resizing. */
   private resizeNote?: { text: string; until: number };
   private readonly procs = new StatusTracker();
@@ -371,7 +373,16 @@ export class App {
   }
 
   private isVisible(s: DeckSession): boolean {
-    return this.isArchived(s) === this.archivedView && matchesStatusFilter(this.procs.categoryOf(s), this.statusFilter) && withinTimeFilter(s.mtime, this.timeFilter);
+    return (
+      this.isArchived(s) === this.archivedView &&
+      matchesStatusFilter(this.procs.categoryOf(s), this.statusFilter) &&
+      withinTimeFilter(s.mtime, this.timeFilter) &&
+      (!this.tagFilter || this.tagsOf(s).includes(this.tagFilter))
+    );
+  }
+
+  private tagsOf(s: DeckSession): string[] {
+    return (s.id && this.store.getSession(s.id)?.tags) || [];
   }
 
   /** Every session, minus ones belonging to a project removed with `d` (see `DeckStore.setProjectHidden`). */
@@ -385,7 +396,7 @@ export class App {
   }
 
   private get filtering(): boolean {
-    return this.statusFilter.size > 0 || this.timeFilter !== 'all';
+    return this.statusFilter.size > 0 || this.timeFilter !== 'all' || !!this.tagFilter;
   }
 
   /** Re-applies the tree, sort and filters, keeping the selected row selected when it's still shown. */
@@ -400,6 +411,7 @@ export class App {
       gitOf: (s) => (this.config.ui.gitStatus ? this.gitStatus.get(s.cwd) : undefined),
       filtering: this.filtering,
       recentProjectsFirst: this.config.ui.recentProjectsFirst,
+      tagsOf: (s) => this.tagsOf(s),
     });
     this.rows = built.rows;
     this.containers = built.containers;
@@ -829,13 +841,15 @@ export class App {
     let frame = `${ESC}?2026h${ESC}0m`;
     // Truncated as a safety net: a wrapped top row would push the whole frame down.
     frame += `${ESC}1;1H${fitAnsi(renderHeader(t, cols, counts, liveCount, themeLabel(this.themePreference, this.theme.name), VERSION), cols)}`;
-    frame += `${ESC}2;1H${fitAnsi(renderPills(t, cols, inView.length, counts, this.statusFilter, this.timeFilter), cols)}`;
+    frame += `${ESC}2;1H${fitAnsi(renderPills(t, cols, inView.length, counts, this.statusFilter, this.timeFilter, this.tagFilter), cols)}`;
 
     if (layout.list) {
       const listRows: ListRow[] = this.rows.map((r) =>
         r.kind === 'session'
           ? { kind: 'session', view: this.viewOf(r.session), isLast: r.isLast, depth: r.depth, pin: r.pin, checked: this.multiSelected.has(r.session) }
-          : r
+          : r.kind === 'tag'
+            ? { ...r, active: this.tagFilter === r.name }
+            : r
       );
       const modes = [
         this.multiSelected.size ? `${this.multiSelected.size} selected` : '',
@@ -1244,6 +1258,9 @@ export class App {
         }
         if (row?.kind === 'folder' || row?.kind === 'project') {
           this.toggleCollapsed(row);
+        } else if (row?.kind === 'tag') {
+          this.tagFilter = this.tagFilter === row.name ? undefined : row.name;
+          this.rebuildRows();
         }
         break;
       case ' ':
@@ -1347,6 +1364,9 @@ export class App {
       case 'M':
         this.openMovePicker();
         break;
+      case 'L':
+        this.openTagPrompt();
+        break;
       case 'K':
       case '\x1b[1;2A': // Shift+↑
         this.reorder(-1);
@@ -1368,6 +1388,9 @@ export class App {
           };
         } else if (row?.kind === 'project') {
           this.removeProject(row.projectKey, row.label);
+        } else if (row?.kind === 'tag') {
+          const name = row.name;
+          this.confirm = { question: `Remove tag "${name}" from every project?`, onYes: () => this.removeTagEverywhere(name) };
         }
         break;
       case 'S':
@@ -1385,6 +1408,7 @@ export class App {
       case '0':
         this.statusFilter.clear();
         this.timeFilter = 'all';
+        this.tagFilter = undefined;
         this.rebuildRows();
         break;
       case '<':
@@ -1877,6 +1901,73 @@ export class App {
     };
   }
 
+  /** `L`: edit the selected session's own tags, or (with a checked batch) add tag(s) to every checked session. */
+  private openTagPrompt(): void {
+    if (this.multiSelected.size) {
+      const targets = this.multiSelection.filter((s) => s.id);
+      this.prompt = {
+        label: `Add tag(s) to ${targets.length} session${targets.length === 1 ? '' : 's'}`,
+        value: '',
+        onSubmit: (value) => this.addTagsToSessions(targets, value),
+      };
+      return;
+    }
+    const s = this.current;
+    if (!s?.id) {
+      this.flash(s ? 'Send something first: a new session has nothing to tag yet.' : 'Select a session to tag.');
+      return;
+    }
+    this.prompt = {
+      label: `Tags for ${displayTitle(s, this.store)} (comma-separated)`,
+      value: this.tagsOf(s).join(', '),
+      onSubmit: (value) => this.setSessionTags(s.id!, value),
+    };
+  }
+
+  private parseTagsInput(raw: string): string[] {
+    return [...new Set(raw.split(',').map((t) => t.trim()).filter(Boolean))];
+  }
+
+  private setSessionTags(sessionId: string, raw: string): void {
+    const tags = this.parseTagsInput(raw);
+    void this.store.updateSession(sessionId, { tags }).then(() => {
+      this.rebuildRows();
+      this.scheduleRender();
+    });
+    this.flash(tags.length ? `Tags: ${tags.join(', ')}` : 'Tags cleared');
+  }
+
+  /** `L` with a checked batch: unions the entered tag(s) into every checked session's existing tags (never replaces them). */
+  private addTagsToSessions(targets: DeckSession[], raw: string): void {
+    const added = this.parseTagsInput(raw);
+    this.multiSelected.clear();
+    if (!added.length) {
+      this.rebuildRows();
+      this.flash('Selection cleared');
+      return;
+    }
+    void Promise.all(
+      targets.map((s) => this.store.updateSession(s.id!, { tags: [...new Set([...this.tagsOf(s), ...added])] }))
+    ).then(() => {
+      this.rebuildRows();
+      this.scheduleRender();
+    });
+    this.flash(`Added "${added.join(', ')}" to ${targets.length} session${targets.length === 1 ? '' : 's'}`);
+  }
+
+  /** `d` on a tag row (bottom of the list): drops it from every session that carries it. */
+  private removeTagEverywhere(name: string): void {
+    const targets = this.sessions.filter((s) => this.tagsOf(s).includes(name));
+    if (this.tagFilter === name) {
+      this.tagFilter = undefined;
+    }
+    void Promise.all(targets.map((s) => this.store.updateSession(s.id!, { tags: this.tagsOf(s).filter((t) => t !== name) }))).then(() => {
+      this.rebuildRows();
+      this.scheduleRender();
+    });
+    this.flash(`Removed tag "${name}" from ${targets.length} session${targets.length === 1 ? '' : 's'}`);
+  }
+
   /** K/J: moves the selected folder, or the selected project (a session moves its project), up or down. */
   private reorder(delta: number): void {
     const row = this.selectedRow;
@@ -1946,6 +2037,9 @@ function sameRow(a: TreeRow, b: TreeRow): boolean {
   }
   if (a.kind === 'project' && b.kind === 'project') {
     return a.projectKey === b.projectKey;
+  }
+  if (a.kind === 'tag' && b.kind === 'tag') {
+    return a.name === b.name;
   }
   return a.kind === 'folder' && b.kind === 'folder' && a.folderId === b.folderId;
 }

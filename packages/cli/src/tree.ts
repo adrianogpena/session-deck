@@ -20,7 +20,8 @@ export type TreeRow =
       git?: GitStatus;
     }
   | { kind: 'session'; session: DeckSession; isLast: boolean; depth: number; pin?: SessionPin }
-  | { kind: 'divider'; label: string };
+  | { kind: 'divider'; label: string }
+  | { kind: 'tag'; name: string; count: number };
 
 export interface TreeOptions {
   include(s: DeckSession): boolean;
@@ -32,6 +33,8 @@ export interface TreeOptions {
   filtering: boolean;
   /** Projects never moved (`K`/`J`) sort by most-recent-activity when true, alphabetically (fixed) when false. See `DeckConfig.ui.recentProjectsFirst`. */
   recentProjectsFirst: boolean;
+  /** A session's own tags, for the tag summary section at the bottom of the tree. */
+  tagsOf(s: DeckSession): string[];
 }
 
 export interface BuiltTree {
@@ -174,5 +177,19 @@ export function buildTree(sessions: DeckSession[], tree: TreePrefs, opts: TreeOp
     folderItems.forEach(emitFolder);
     rootItems.forEach((b) => emitProject(b, 0));
   }
+
+  const tagCounts = new Map<string, number>();
+  for (const s of sessions) {
+    for (const tag of opts.tagsOf(s)) {
+      tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+    }
+  }
+  if (tagCounts.size) {
+    rows.push({ kind: 'divider', label: 'TAGS' });
+    for (const [name, count] of [...tagCounts.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      rows.push({ kind: 'tag', name, count });
+    }
+  }
+
   return { rows, containers };
 }

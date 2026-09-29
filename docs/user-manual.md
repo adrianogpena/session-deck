@@ -211,8 +211,26 @@ repository form one project. Folders let you group projects further, one level d
   - "Waiting" includes finished-not-seen sessions.
   - Folders and projects with nothing matching are hidden.
 - **Time `*`**: cycles through all time → today → last 3 days → last 7 days.
-- **Clear filters `0`**: removes the status and time filters.
+- **Clear filters `0`**: removes the status, time and tag filters.
 - The panel title shows "· filtered" while a filter is on.
+
+### Tags
+
+Free-form labels on individual sessions — orthogonal to folders, so you can group sessions across
+different projects without moving anything.
+
+- **Tag `L`**: opens a text prompt for the selected session's own tags (comma-separated), pre-filled
+  with its current ones. Submitting replaces the list; clearing the text removes all its tags.
+  - With a checked batch (`Space`): adds the tag(s) you type to every checked session, on top of
+    whatever tags each one already has.
+  - Tags belong to the session, not its project — tagging one session doesn't tag the rest of the
+    project's sessions.
+- **The `TAGS` section**, at the bottom of the sessions panel: one row per tag in use and how many
+  sessions currently carry it. Shown only once at least one session has a tag.
+  - **Filter to it `Enter`**: narrows the whole tree to sessions with that tag, wherever they live.
+    Press `Enter` on it again to clear the filter (`0` also clears it, along with the status and time
+    filters). The active tag also shows as a pill on the filter row.
+  - **Remove everywhere `d`**: after confirming, strips that tag from every session that has it.
 
 ### Search
 
@@ -454,7 +472,7 @@ it up next time it starts).
 
 | Location | What's there |
 |---|---|
-| `~/.session-deck/state.json` | Shared by both front ends: names, archive flags, pins, seen marks, folders, order, sort, collapsed state, and the terminal UI's theme and panel width. |
+| `~/.session-deck/state.json` | Shared by both front ends: names, archive flags, pins, seen marks, folders, order, sort, collapsed state, and the terminal UI's theme and panel width. Also holds session tags, which only the terminal UI manages and filters by today. |
 | `~/.session-deck/config.json` | Global, hand-edited settings — mainly for the terminal UI. |
 | `~/.session-deck/trash/` | Sessions deleted in the terminal UI (restorable for 30 days). |
 | `~/.claude/session-deck-status/` | Each session's current status, written by both front ends. |

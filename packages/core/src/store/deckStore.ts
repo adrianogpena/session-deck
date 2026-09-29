@@ -12,6 +12,8 @@ export interface SessionPrefs {
   pin?: SessionPin;
   /** `updatedAt` of the "done"/"error" status the user has seen (see `acknowledgeSessionStatus`). A newer one is unseen. */
   seenAt?: number;
+  /** Free-form labels, this session only (not shared with its project's other sessions). Empty lists are dropped. */
+  tags?: string[];
 }
 
 export type ThemePreference = 'dark' | 'light' | 'system';
@@ -64,7 +66,12 @@ export function parseDeckState(raw: string): DeckStateFile | undefined {
   if (typeof parsed !== 'object' || parsed === null) {
     return undefined;
   }
-  const { sessions, ui, tree, hiddenProjects } = parsed as { sessions?: unknown; ui?: unknown; tree?: unknown; hiddenProjects?: unknown };
+  const { sessions, ui, tree, hiddenProjects } = parsed as {
+    sessions?: unknown;
+    ui?: unknown;
+    tree?: unknown;
+    hiddenProjects?: unknown;
+  };
   const state = emptyState();
   const uiPrefs = parseUiPrefs(ui);
   if (uiPrefs) {
@@ -87,7 +94,7 @@ export function parseDeckState(raw: string): DeckStateFile | undefined {
     if (typeof value !== 'object' || value === null) {
       continue;
     }
-    const { name, archived, pin, seenAt } = value as Record<string, unknown>;
+    const { name, archived, pin, seenAt, tags } = value as Record<string, unknown>;
     const prefs: SessionPrefs = {};
     if (typeof name === 'string' && name.trim()) {
       prefs.name = name;
@@ -100,6 +107,12 @@ export function parseDeckState(raw: string): DeckStateFile | undefined {
     }
     if (typeof seenAt === 'number' && seenAt > 0) {
       prefs.seenAt = seenAt;
+    }
+    if (Array.isArray(tags)) {
+      const normalized = normalizeTags(tags);
+      if (normalized.length) {
+        prefs.tags = normalized;
+      }
     }
     if (Object.keys(prefs).length) {
       state.sessions[id] = prefs;
@@ -121,6 +134,21 @@ function parseUiPrefs(ui: unknown): UiPrefs | undefined {
     prefs.sidebarPct = sidebarPct;
   }
   return Object.keys(prefs).length ? prefs : undefined;
+}
+
+/** Trims, drops blanks, and dedupes (exact match) while keeping first-seen order. */
+function normalizeTags(tags: readonly unknown[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const t of tags) {
+    if (typeof t !== 'string') continue;
+    const trimmed = t.trim();
+    if (trimmed && !seen.has(trimmed)) {
+      seen.add(trimmed);
+      result.push(trimmed);
+    }
+  }
+  return result;
 }
 
 /** Pure: merges `patch` into the UI prefs. An `undefined` or out-of-range value clears that field. */
@@ -160,6 +188,14 @@ export function applySessionPatch(state: DeckStateFile, sessionId: string, patch
       next.seenAt = patch.seenAt;
     } else {
       delete next.seenAt;
+    }
+  }
+  if ('tags' in patch) {
+    const normalized = normalizeTags(patch.tags ?? []);
+    if (normalized.length) {
+      next.tags = normalized;
+    } else {
+      delete next.tags;
     }
   }
   const sessions = { ...state.sessions };
@@ -247,6 +283,15 @@ export class DeckStore {
   /** Hides (or brings back) a project by key. See {@link DeckStateFile.hiddenProjects}. */
   async setProjectHidden(projectKey: string, hidden: boolean): Promise<void> {
     await this.writeAtomic(applyHiddenProjectPatch(this.readForWrite(), projectKey, hidden));
+  }
+
+  /** Every distinct tag in use across all sessions, alphabetically, for the tag summary at the bottom of the tree. */
+  getAllTags(): string[] {
+    const tags = new Set<string>();
+    for (const prefs of Object.values(this.read().sessions)) {
+      prefs.tags?.forEach((t) => tags.add(t));
+    }
+    return [...tags].sort((a, b) => a.localeCompare(b));
   }
 
   /** `change` gets the tree as it is on disk right now (not the cached copy), so edits from the other front end are kept. */
