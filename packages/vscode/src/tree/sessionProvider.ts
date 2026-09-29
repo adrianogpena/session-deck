@@ -17,7 +17,7 @@ import { ensureSessionStatusDir, getSessionStatusDir, readEffectiveSessionStatus
 import { sessionStatusUri } from '../status/sessionStatusDecorationProvider';
 import { DeckState } from '../config/state';
 import { readWorkspaceProjectEntries } from '../config/workspaceConfig';
-import { selectSessionsToArchive } from '@session-deck/core';
+import { selectSessionsToArchive, selectSessionsToStop } from '@session-deck/core';
 import { agentIconPath } from './agentIcons';
 
 export type AgentType = 'claude' | 'copilot';
@@ -27,6 +27,9 @@ const AGENTS: readonly AgentType[] = ['claude', 'copilot'];
 
 /** How many of a project's most recent sessions the main tree shows by default. Overridable via `maxSessionsShown`. */
 const MAX_SESSIONS_PER_PROJECT_VIEW = 5;
+
+/** Idle threshold (in minutes) past which `stopIdleSessions` closes a session's terminal. Overridable via `stopIdleMinutes`. */
+const DEFAULT_STOP_IDLE_MINUTES = 30;
 
 /** Caps concurrent `git` processes `discoverGroups` spawns when resolving cwds to project roots. */
 const GIT_RESOLVE_CONCURRENCY = 8;
@@ -85,7 +88,10 @@ export class ProjectGroupNode {
     public readonly totalSessionCount: number,
     public readonly maxSessionsShown: number = MAX_SESSIONS_PER_PROJECT_VIEW,
     public readonly emoji?: string,
-    public readonly color?: string
+    public readonly color?: string,
+    /** Opt-in: auto-close a session's terminal once idle past `stopIdleMinutes`. See `WorkspaceProjectEntry.stopIdleSessions`. */
+    public readonly stopIdleSessions: boolean = false,
+    public readonly stopIdleMinutes: number = DEFAULT_STOP_IDLE_MINUTES
   ) {}
 }
 
@@ -143,7 +149,9 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
     private readonly state: DeckState,
     private readonly extensionUri: vscode.Uri,
     /** Called with the ids of any sessions `enforceArchiveCap` just auto-archived, so their terminals (if open) can be closed. */
-    private readonly onSessionsArchived?: (sessionIds: string[]) => void
+    private readonly onSessionsArchived?: (sessionIds: string[]) => void,
+    /** Called with the ids of any sessions `enforceIdleStop` just found idle past their project's threshold, so their terminals can be closed. Independent of archiving/pinning. */
+    private readonly onSessionsIdleStopped?: (sessionIds: string[]) => void
   ) {}
 
   refresh(): void {
@@ -394,7 +402,9 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
             totalSessionCount,
             entry.maxSessionsShown ?? MAX_SESSIONS_PER_PROJECT_VIEW,
             entry.emoji,
-            entry.color
+            entry.color,
+            entry.stopIdleSessions ?? false,
+            entry.stopIdleMinutes ?? DEFAULT_STOP_IDLE_MINUTES
           )
         );
       }
@@ -412,7 +422,9 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
             rows.length,
             entry.maxSessionsShown ?? MAX_SESSIONS_PER_PROJECT_VIEW,
             entry.emoji,
-            entry.color
+            entry.color,
+            entry.stopIdleSessions ?? false,
+            entry.stopIdleMinutes ?? DEFAULT_STOP_IDLE_MINUTES
           )
         );
       }
@@ -427,6 +439,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
       group.agent === 'claude' ? this.gatherClaudeCandidates(group) : await this.gatherCopilotCandidates(group);
     candidates.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
     await this.enforceArchiveCap(group, candidates);
+    this.enforceIdleStop(group, candidates);
     return candidates;
   }
 
@@ -511,6 +524,26 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
       await this.state.setSessionArchived(sessionId, true);
     }
     this.onSessionsArchived?.(toArchive);
+  }
+
+  /**
+   * Opt-in per project (`stopIdleSessions`): closes the terminal of any of this group's sessions
+   * that have sat idle for at least `stopIdleMinutes`, to free the PTY/memory — but never archives
+   * them, and runs regardless of archive/pin state, since an idle terminal still costs resources
+   * whether or not it's shown in the tree.
+   */
+  private enforceIdleStop(group: ProjectGroupNode, candidates: SessionCandidate[]): void {
+    if (!group.stopIdleSessions) {
+      return;
+    }
+    const toStop = selectSessionsToStop(
+      candidates.map((c) => ({ sessionId: c.sessionId, lastActivity: c.mtime })),
+      group.stopIdleMinutes
+    );
+    if (toStop.length === 0) {
+      return;
+    }
+    this.onSessionsIdleStopped?.(toStop);
   }
 
   /** Every session across every project and both agents, archived included — used by Search, uncapped unlike the tree. */

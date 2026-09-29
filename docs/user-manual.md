@@ -459,6 +459,9 @@ The list of projects this workspace shows. **Add Project**, **Rename Project**, 
   `blue`, `purple`, `brown`, `black` or `white`. Ignored when `emoji` is set.
 - **`maxSessionsShown`**: how many sessions show before older ones auto-archive. Default: 5.
 - **`dangerouslySkipPermissions`**: `true` skips the skip-permissions confirmation for this project.
+- **`stopIdleSessions`**: `true` auto-closes a session's terminal once it's sat idle past
+  `stopIdleMinutes`, to free the PTY/memory — independent of archiving, and off by default.
+- **`stopIdleMinutes`**: how many minutes of inactivity trigger `stopIdleSessions`. Default: 30.
 - **`hidden`**: `true` keeps the entry but hides the project.
 
 In a multi-root workspace, each folder can have its own file; the tree shows all of them together.

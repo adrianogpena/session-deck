@@ -97,6 +97,8 @@ Project**/**Edit Project List**, or hand-edit it directly:
 | `color` | `string` | A named color swatch prefixed onto the label instead (ignored if `emoji` is set). |
 | `maxSessionsShown` | `number` | How many active sessions show before the rest auto-archive. Default `5`. |
 | `dangerouslySkipPermissions` | `boolean` | Skip the "Skip Permissions" confirmation dialog for this project specifically. |
+| `stopIdleSessions` | `boolean` | Auto-close a session's terminal once idle past `stopIdleMinutes`, to free the PTY/memory. Off by default; independent of archiving. |
+| `stopIdleMinutes` | `number` | Idle minutes before `stopIdleSessions` closes a terminal. Default `30`. |
 | `hidden` | `boolean` | Keep the entry in the file but leave it out of the tree. |
 
 In a multi-root workspace, each folder can have its own `session-deck.json` — the tree shows the

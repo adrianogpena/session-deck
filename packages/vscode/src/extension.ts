@@ -59,11 +59,13 @@ export async function activate(context: vscode.ExtensionContext) {
   }
   const terminalService = new AgentTerminalService(outputChannel, context.extensionUri);
   // An auto-archived session shouldn't be left running in a now-hidden tab.
-  const treeProvider = new SessionTreeProvider(state, context.extensionUri, (sessionIds) => {
+  const closeTerminals = (sessionIds: string[]) => {
     for (const sessionId of sessionIds) {
       terminalService.closeSessionTerminal(sessionId);
     }
-  });
+  };
+  // Opt-in per project: free the PTY/memory of a session that's sat idle past its threshold.
+  const treeProvider = new SessionTreeProvider(state, context.extensionUri, closeTerminals, closeTerminals);
   const activeSessionProvider = new ActiveSessionProvider(treeProvider, terminalService, context.extensionUri);
   // resources/icon.png (not the tree's claude-mark.svg): most OS notifiers expect a raster icon.
   const waitingNotifier = new WaitingNotifier(path.join(context.extensionPath, 'resources', 'icon.png'));

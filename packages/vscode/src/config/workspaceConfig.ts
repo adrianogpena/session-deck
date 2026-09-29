@@ -11,6 +11,10 @@ export interface WorkspaceProjectEntry {
   dangerouslySkipPermissions?: boolean;
   /** Per-project override of `MAX_SESSIONS_PER_PROJECT_VIEW`. */
   maxSessionsShown?: number;
+  /** Opt-in, like `dangerouslySkipPermissions`: auto-close a session's terminal once it's sat idle past `stopIdleMinutes`, to free the PTY/memory. Off by default — archiving alone doesn't stop a still-running session. */
+  stopIdleSessions?: boolean;
+  /** Per-project override of `DEFAULT_STOP_IDLE_MINUTES`. Only used when `stopIdleSessions` is `true`. */
+  stopIdleMinutes?: number;
   /** A literal emoji prefixed onto the project's tree label — takes priority over `color` if both are set. */
   emoji?: string;
   /** A named color swatch (see `COLOR_SWATCH_EMOJI`) prefixed onto the label — plain text, not a colored icon, since `TreeItem.iconPath` colors wash out when a row is selected. */

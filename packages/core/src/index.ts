@@ -15,6 +15,7 @@ export * from './status/claudeProcessWatcher';
 export * from './status/copilotStatusWatcher';
 export * from './status/sessionStatus';
 export * from './status/waitingNotifier';
+export * from './stopIdlePolicy';
 export * from './store/deckConfig';
 export * from './store/deckStore';
 export * from './store/treePrefs';
