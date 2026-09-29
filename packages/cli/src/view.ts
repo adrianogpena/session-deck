@@ -539,12 +539,13 @@ export function helpOverlay(t: Theme, cols: number, rows: number, scroll: number
   return { x: Math.max(0, Math.floor((cols - width) / 2)), y: Math.max(0, Math.floor((rows - lines.length) / 2)), lines, maxScroll };
 }
 
-const CONFIG_LABEL_COLUMN = 22;
+// Wide enough for the longest field label (`ui.expandCollapsedOnActiveJump`) plus a gap before the value.
+const CONFIG_LABEL_COLUMN = Math.max(...CONFIG_FIELDS.map((f) => f.label.length)) + 2;
 
 /**
  * The settings popup (`C`): every value from `~/.session-deck/config.json` Session Deck is actually
  * using, editable in place. `selected` indexes into `CONFIG_FIELDS` and is drawn like a picker's
- * highlighted row.
+ * highlighted row. Scrolls to keep the selected row in view, like `pickerOverlay`.
  */
 export function configOverlay(
   t: Theme,
@@ -554,7 +555,12 @@ export function configOverlay(
   configPath: string,
   selected: number
 ): { x: number; y: number; lines: string[] } {
-  const width = Math.min(72, cols - 4);
+  const footerText = '↑↓ select · Enter toggle/edit · Esc or C to close';
+  // Only the label/value columns and the footer hint drive the width — the config path is left to
+  // truncate, since a long filesystem path shouldn't blow the popup out to fill a wide terminal.
+  const maxValueWidth = Math.max(...CONFIG_FIELDS.map((f) => textWidth(f.display(config))));
+  const neededInner = Math.max(CONFIG_LABEL_COLUMN + maxValueWidth, textWidth(footerText));
+  const width = Math.min(cols - 4, neededInner + 6);
   const inner = width - 6; // borders + two spaces of padding on each side
   const s = t.bg('surface');
   const fieldRow = (index: number): string => {
@@ -568,16 +574,22 @@ export function configOverlay(
   // A blank line before each new group of fields (their label shares everything up to the last '.').
   const groupOf = (label: string) => label.slice(0, label.lastIndexOf('.'));
   const content: string[] = [`${t.fg('textDim')}${fit(configPath, inner)}`, blank(inner)];
+  let selectedLine = 2;
   CONFIG_FIELDS.forEach((field, index) => {
     if (index > 0 && groupOf(field.label) !== groupOf(CONFIG_FIELDS[index - 1].label)) {
       content.push(blank(inner));
     }
+    if (index === selected) {
+      selectedLine = content.length;
+    }
     content.push(fieldRow(index));
   });
-  content.push(blank(inner), `${t.fg('textDim')}${fit('↑↓ select · Enter toggle/edit · Esc or C to close', inner)}`);
+  content.push(blank(inner), `${t.fg('textDim')}${fit(footerText, inner)}`);
 
-  const maxBody = Math.max(3, rows - 5);
-  const visible = content.slice(0, maxBody);
+  const maxBody = Math.max(3, rows - 6);
+  const maxScroll = Math.max(0, content.length - maxBody);
+  const offset = Math.max(0, Math.min(maxScroll, selectedLine - Math.floor(maxBody / 2)));
+  const visible = content.slice(offset, offset + maxBody);
   const border = `${s}${t.fg('purple')}`;
   const title = ' CONFIG ';
   const left = Math.floor((width - 2 - title.length) / 2);
@@ -585,6 +597,7 @@ export function configOverlay(
     `${border}╭${'─'.repeat(left)}${BOLD}${title}${RESET}${border}${'─'.repeat(width - 2 - left - title.length)}╮${RESET}`,
     `${border}│${s}${blank(width - 2)}${border}│${RESET}`,
     ...visible.map((l) => `${border}│${s}  ${l}${RESET}${s}  ${border}│${RESET}`),
+    `${border}│${s}${t.fg('yellow')}${fit(offset < maxScroll ? '  ▼ more below' : offset > 0 ? '  ▲ more above' : '', width - 2)}${border}│${RESET}`,
     `${border}╰${'─'.repeat(width - 2)}╯${RESET}`,
   ];
   return { x: Math.max(0, Math.floor((cols - width) / 2)), y: Math.max(0, Math.floor((rows - lines.length) / 2)), lines };
