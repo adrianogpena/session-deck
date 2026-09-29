@@ -56,6 +56,14 @@ interface ProjectBucket {
 
 export const isActive = (c: SessionCategory) => c === 'running' || c === 'waiting';
 
+/**
+ * Running, waiting (which already folds in "finished, not seen yet" — see `categoryOf`), or idle:
+ * anything actually started here, as opposed to stopped or erroring. Used by `[`/`]` (see
+ * `App.cycleActiveSession`) — a broader net than `isActive`, which only hoists running/waiting groups
+ * in the "active on top" view.
+ */
+export const isStarted = (c: SessionCategory) => c === 'running' || c === 'waiting' || c === 'idle';
+
 /** One badge for the whole project: worst (highest) ahead/behind/dirty across its sessions — usually all identical, since they usually share a cwd. */
 function aggregateGit(statuses: (GitStatus | undefined)[]): GitStatus | undefined {
   const present = statuses.filter((g): g is GitStatus => !!g);

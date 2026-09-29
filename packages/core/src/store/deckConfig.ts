@@ -44,9 +44,9 @@ export interface DeckConfig {
      */
     gitStatus: boolean;
     /**
-     * `[`/`]` (jump to the previous/next running-or-waiting session) reaches into a collapsed folder
-     * or project to select one hidden there, expanding it, when `true` — or only ever jumps between
-     * sessions already shown, same as `j`/`k`, when `false`. Default: true.
+     * `[`/`]` (jump to the previous/next started session — running, waiting or idle) reaches into a
+     * collapsed folder or project to select one hidden there, expanding it, when `true` — or only ever
+     * jumps between sessions already shown, same as `j`/`k`, when `false`. Default: true.
      */
     expandCollapsedOnActiveJump: boolean;
   };

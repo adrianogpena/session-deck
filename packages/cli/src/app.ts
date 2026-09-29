@@ -64,7 +64,7 @@ import {
 import { computeLayout, Layout, ptySizeFor, Rect } from './layout';
 import { AgentType, clearExecutableCache, disposeLive, LiveSession, resizeLive, spawnAgent, typeLine } from './liveSession';
 import { DeckSession, StatusTracker, discoverSessions, displayTitle, refreshLiveTitle } from './sessions';
-import { buildTree, isActive, projectLabels, TreeOptions, TreeRow } from './tree';
+import { buildTree, isStarted, projectLabels, TreeOptions, TreeRow } from './tree';
 import { extractBackgroundReply, OSC11_QUERY, readOsTheme, Theme, ThemeName } from './theme';
 import {
   configOverlay,
@@ -1753,9 +1753,10 @@ export class App {
   }
 
   /**
-   * `]` / `[`: selects the next / previous running-or-waiting session, wrapping around and skipping
-   * everything else (idle sessions, folders, projects) — so switching between a couple of busy
-   * sessions in different projects takes one press instead of walking every row between them.
+   * `]` / `[`: selects the next / previous started session — running, waiting (which already folds in
+   * "finished, not seen yet") or idle — wrapping around and skipping only stopped or erroring ones,
+   * plus folders and projects. So switching between the sessions you're actually using, spread across
+   * different projects, takes one press instead of walking every row between them.
    * With `ui.expandCollapsedOnActiveJump` on (the default), a target hidden inside a collapsed
    * folder or project is still reached, expanding just that group (via `jumpToSession`); off, only
    * rows already shown are targets, same as `move`.
@@ -1764,12 +1765,12 @@ export class App {
     const rows = this.config.ui.expandCollapsedOnActiveJump ? buildTree(this.unhiddenSessions, { ...this.tree, collapsed: [] }, this.treeBuildOptions()).rows : this.rows;
     const active: { i: number; session: DeckSession }[] = [];
     rows.forEach((r, i) => {
-      if (r.kind === 'session' && isActive(this.procs.categoryOf(r.session))) {
+      if (r.kind === 'session' && isStarted(this.procs.categoryOf(r.session))) {
         active.push({ i, session: r.session });
       }
     });
     if (!active.length) {
-      this.flash('No running or waiting sessions.');
+      this.flash('No started sessions.');
       return;
     }
     const current = this.selectedRow;

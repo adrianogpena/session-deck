@@ -91,10 +91,11 @@ a colored status dot on each session.
 - **Previous session `` ` `` (backtick)**: goes back to the session you had selected before.
   - If its folder or project is collapsed, it is expanded.
   - If a filter hides it, you're told to clear the filter (`0`).
-- **Jump between active sessions `[` `]`**: selects the previous / next running or waiting session,
-  skipping everything else (idle sessions, folders, projects) and wrapping around from the last back
-  to the first. Useful when the sessions that need you are spread across different projects — one
-  press gets you there instead of walking every row in between.
+- **Jump between started sessions `[` `]`**: selects the previous / next session that's running,
+  waiting, or idle — any session actually started here — skipping stopped and erroring ones, folders
+  and projects, and wrapping around from the last back to the first. Useful when the sessions you're
+  using are spread across different projects — one press gets you there instead of walking every row
+  in between.
   - Reaches into a collapsed folder or project to select one hidden there, expanding it, same as
     `` ` ``. Set `ui.expandCollapsedOnActiveJump` to `false` in the
     [global config](#4-global-config-sessiondeckconfigjson) to only ever jump between sessions
@@ -504,9 +505,9 @@ it up next time it starts).
   `false`. Default: on.
 - **`ui.gitStatus`**: `false` turns off the `⇡`/`⇣`/`✱` project badges and the preview panel's branch
   line entirely — no `git status` is run at all. Default: on.
-- **`ui.expandCollapsedOnActiveJump`**: `[`/`]` (jump to the previous/next running-or-waiting session)
-  expands a collapsed folder or project to reach one hidden there when `true` — or skips it, only ever
-  landing on a session already shown, when `false`. Default: on.
+- **`ui.expandCollapsedOnActiveJump`**: `[`/`]` (jump to the previous/next started session — running,
+  waiting or idle) expands a collapsed folder or project to reach one hidden there when `true` — or
+  skips it, only ever landing on a session already shown, when `false`. Default: on.
 - **`tools.claude` / `tools.copilot`**:
   - **`enabled`**: `false` hides that agent entirely — its sessions aren't discovered, and its `n`/`N`
     new-session key just flashes a message instead of starting one. Default: on.
