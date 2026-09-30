@@ -1079,7 +1079,7 @@ export class App {
     } else if (this.message) {
       frame += renderMessageBar(t, cols, this.message);
     } else if (this.interacting) {
-      frame += renderMessageBar(t, cols, `Typing into ${displayTitle(this.interacting, this.store)} · Ctrl+Q to stop · Ctrl+K T to attach`);
+      frame += renderMessageBar(t, cols, `Typing into session · Ctrl+Q to stop · Ctrl+K T to attach`);
     } else {
       frame += renderHelpBar(t, cols);
     }
