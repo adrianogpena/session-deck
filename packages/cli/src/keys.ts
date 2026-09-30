@@ -34,9 +34,10 @@ export function findDetachKey(data: string): number {
 
 /**
  * Where the Ctrl+K chord's prefix starts and ends in `data`, or null (resolved by a following `n`/`N`
- * for a new session, or `t`/`T` to swap attach/interacting — see `onLiveInput`). `end` matters because
- * a chord typed quickly can arrive with its resolving key already in the same chunk, right after the
- * match — unlike Ctrl+Q, this key needs to look past its own match to find that out.
+ * for a new session, `t`/`T` to swap attach/interacting, or `q`/`Q` to stop the session — see
+ * `onLiveInput`). `end` matters because a chord typed quickly can arrive with its resolving key
+ * already in the same chunk, right after the match — unlike Ctrl+Q, this key needs to look past its
+ * own match to find that out.
  */
 export function findChordKey(data: string): { index: number; end: number } | null {
   const m = matchCtrlKey(data, CHORD_PATTERN);

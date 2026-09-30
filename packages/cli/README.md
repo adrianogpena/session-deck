@@ -28,6 +28,7 @@ launches the real CLI, it doesn't reimplement either one.
 - **Every session, one screen** — grouped automatically by git project, with manual folders on top.
 - **Live preview** of the selected session's real screen, without attaching to it.
 - **Attach / detach** (`Enter` / `Ctrl+Q`) — the session keeps running in the background while detached.
+- **Detach and stop** (`Ctrl+K q`) — detaches and stops the session's agent in one step.
 - **Type into a session without leaving the list** (`i`) — the sessions panel and preview stay on
   screen while you type, so you can keep an eye on everything else.
 - **Swap attached and typing-in-place** (`Ctrl+K T`) — jump between full-screen and typing from the

@@ -111,6 +111,8 @@ a colored status dot on each session.
 - **Detach `Ctrl+Q` (while attached)**: back to Session Deck. The session keeps running in the
   background.
   - Whatever finished while you were attached is marked as seen.
+- **Detach and stop `Ctrl+K` then `q` (while attached)**: back to Session Deck, and stops the
+  session's agent too — the same as detaching and then pressing `x`.
 - **New session `Ctrl+K` then `n` (while attached)**: detaches and starts a new Claude Code session
   in the same project (the same folder, if the attached session is in a subfolder of it) — without
   going back to the list first.
@@ -119,7 +121,8 @@ a colored status dot on each session.
   you type goes straight to the selected session, live, without leaving the list. Useful for sending
   a longer or multi-step reply while still keeping an eye on your other sessions.
   - A stopped session is started first.
-  - `Ctrl+Q` stops it, the same key that detaches from a full attach.
+  - `Ctrl+Q` stops it, the same key that detaches from a full attach; `Ctrl+K` then `q` also stops
+    the session's agent.
   - Marks the session as seen, same as attaching.
 - **Start in background `s`**: starts a stopped session without attaching. Its screen shows in the
   preview.

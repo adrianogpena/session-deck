@@ -30,6 +30,6 @@ npm run lint
 
 - **Extension:** press `F5` to launch an Extension Development Host. `npm run package:vscode` builds a `.vsix`.
 - **Terminal UI:** `npm run sdeck` from a real terminal (Windows Terminal, PowerShell). Ctrl+Q detaches from
-  an attached session.
+  an attached session; Ctrl+K q detaches and stops it.
 
 Every command and key is explained in the [user manual](docs/user-manual.md). Plans and design notes are in [`docs/`](docs).

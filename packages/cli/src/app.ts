@@ -138,8 +138,9 @@ const PIN_CYCLE: readonly (SessionPin | undefined)[] = [undefined, 'top', 'botto
 /**
  * Claude sessions run in background PTYs owned by this process, each mirrored into a headless xterm
  * so the preview pane can redraw any of them instantly. Enter attaches full-screen (raw passthrough),
- * Ctrl+Q detaches with the session still running. Ctrl+K T swaps attached and interacting for the same
- * session directly, without detaching to the list first.
+ * Ctrl+Q detaches with the session still running, Ctrl+K Q detaches and stops it outright (same as `x`
+ * from the list). Ctrl+K T swaps attached and interacting for the same session directly, without
+ * detaching to the list first.
  */
 export class App {
   private sessions: DeckSession[] = [];
@@ -163,7 +164,7 @@ export class App {
   private attached: DeckSession | null = null;
   /** Set right after Ctrl+K while attached: the next key decides whether it's `n` (the new-session chord) or an ordinary Ctrl+K meant for the agent. */
   private chordPending = false;
-  /** Typing goes straight to this session's PTY, but (unlike `attached`) the list and preview keep rendering normally. `Ctrl+Q` stops it, `Ctrl+K T` attaches full-screen instead. */
+  /** Typing goes straight to this session's PTY, but (unlike `attached`) the list and preview keep rendering normally. `Ctrl+Q` stops it, `Ctrl+K Q` stops it and kills the session, `Ctrl+K T` attaches full-screen instead. */
   private interacting: DeckSession | null = null;
   /** Off by default (and always while attached, see `attach()`) so a click-drag still does the terminal's own text selection. `m` (or `Ctrl+K M` while typing in place) flips it — see `toggleMouseTracking()`. */
   private mouseTracking = false;
@@ -762,6 +763,13 @@ export class App {
     this.render();
   }
 
+  /** Ctrl+K Q: leaves attached/interacting mode via `leave`, then stops `s` outright — same as `x` from the list. */
+  private stopSession(s: DeckSession, leave: () => void): void {
+    leave();
+    this.kill(s);
+    this.flash('Session stopped');
+  }
+
   /** Ctrl+K T while attached: back to typing into `s` from the list/preview, without detaching to the list first. */
   private switchToInteracting(s: DeckSession): void {
     // Confirmed live first: attached must stay put (not go null with nothing to replace it) if `s`
@@ -798,14 +806,18 @@ export class App {
     return findPlainKey(data, 'm') === 0 || findPlainKey(data, 'M') === 0;
   }
 
+  private isStopSessionChord(data: string): boolean {
+    return findPlainKey(data, 'q') === 0 || findPlainKey(data, 'Q') === 0;
+  }
+
   /**
    * Ctrl+K's resolving key, if `text` starts with one — shared by both places `onLiveInput` checks
    * for it (the chord's own chunk, and the chunk after, if it arrived split across two). Returns
-   * whether it resolved (and already acted); adding a fourth resolving key only means editing here.
+   * whether it resolved (and already acted); adding a further resolving key only means editing here.
    * `toggleMouse` is only passed while interacting (see `onKey`) — while attached, mouse tracking is
    * always off regardless (see `attach()`), so `m`/`M` there goes to the agent like any other key.
    */
-  private resolveChord(text: string, stop: () => void, switchMode: () => void, toggleMouse?: () => void): boolean {
+  private resolveChord(text: string, stop: () => void, switchMode: () => void, stopSession: () => void, toggleMouse?: () => void): boolean {
     if (this.isNewSessionChord(text)) {
       stop();
       this.newSession('claude');
@@ -813,6 +825,10 @@ export class App {
     }
     if (this.isSwitchChord(text)) {
       switchMode();
+      return true;
+    }
+    if (this.isStopSessionChord(text)) {
+      stopSession();
       return true;
     }
     if (toggleMouse && this.isMouseChord(text)) {
@@ -826,16 +842,26 @@ export class App {
    * Input while attached (full-screen) or interacting (typed into from the list) with `live`:
    * forwarded to its PTY, except Ctrl+Q (`stop` — detach or stop interacting, see `findDetachKey`) and
    * the Ctrl+K chord, which starts a new session in the same project on `n`/`N`, swaps attached and
-   * interacting for the same session on `t`/`T` (`switchMode`), or (while interacting only) flips mouse
-   * tracking on `m`/`M` (`toggleMouse`). The chord's resolving key is usually typed just after Ctrl+K,
-   * quickly enough to arrive in the same input chunk (unlike Ctrl+Q, which needs no second key) — so
-   * both `findChordKey`'s match end and the *next* chunk, if this one ends right at the match, are
-   * checked for it.
+   * interacting for the same session on `t`/`T` (`switchMode`), stops the session outright on `q`/`Q`
+   * (`stopSession` — same as `x` from the list; there's no separate Ctrl+Alt+Q, since Windows Terminal
+   * doesn't reliably report that combination — some layouts compose it into a printable character
+   * instead of a Ctrl+Alt-modified Q), or (while interacting only) flips mouse tracking on `m`/`M`
+   * (`toggleMouse`). The chord's resolving key is usually typed just after Ctrl+K, quickly enough to
+   * arrive in the same input chunk (unlike Ctrl+Q, which needs no second key) — so both
+   * `findChordKey`'s match end and the *next* chunk, if this one ends right at the match, are checked
+   * for it.
    */
-  private onLiveInput(live: LiveSession | undefined, data: string, stop: () => void, switchMode: () => void, toggleMouse?: () => void): void {
+  private onLiveInput(
+    live: LiveSession | undefined,
+    data: string,
+    stop: () => void,
+    switchMode: () => void,
+    stopSession: () => void,
+    toggleMouse?: () => void
+  ): void {
     if (this.chordPending) {
       this.chordPending = false;
-      if (this.resolveChord(data, stop, switchMode, toggleMouse)) {
+      if (this.resolveChord(data, stop, switchMode, stopSession, toggleMouse)) {
         return;
       }
       if (live && !live.exited) {
@@ -857,7 +883,7 @@ export class App {
     }
     if (chord && idx === chord.index) {
       const after = data.slice(chord.end);
-      if (this.resolveChord(after, stop, switchMode, toggleMouse)) {
+      if (this.resolveChord(after, stop, switchMode, stopSession, toggleMouse)) {
         return;
       }
       this.chordPending = true;
@@ -868,8 +894,9 @@ export class App {
 
   /**
    * Types straight into `s` without leaving the list/preview screen — its own PTY is already sized to
-   * the preview pane (background sessions always are), so nothing needs resizing. `Ctrl+Q` stops it,
-   * `Ctrl+K T` attaches full-screen instead.
+   * the preview pane (background sessions always are), so nothing needs resizing. `Ctrl+Q` stops
+   * interacting, `Ctrl+K Q` stops interacting and kills the session, `Ctrl+K T` attaches full-screen
+   * instead.
    */
   private startInteracting(s: DeckSession): void {
     const live = this.ensureLive(s);
@@ -1468,7 +1495,13 @@ export class App {
     }
     const attached = this.attached;
     if (attached) {
-      this.onLiveInput(attached.live, data, () => this.detach(), () => this.switchToInteracting(attached));
+      this.onLiveInput(
+        attached.live,
+        data,
+        () => this.detach(),
+        () => this.switchToInteracting(attached),
+        () => this.stopSession(attached, () => this.detach())
+      );
       return;
     }
     const interacting = this.interacting;
@@ -1486,6 +1519,7 @@ export class App {
         data,
         () => this.stopInteracting(),
         () => this.switchToAttach(interacting),
+        () => this.stopSession(interacting, () => this.stopInteracting()),
         () => this.toggleMouseTracking()
       );
       return;
