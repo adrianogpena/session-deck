@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { parseNameAndDescription } from './frontmatter';
 
 /**
  * The four states Claude Code's `skillOverrides` setting can put a skill in:
@@ -27,49 +28,13 @@ export function getClaudeSettingsPath(): string {
   return path.join(os.homedir(), '.claude', 'settings.json');
 }
 
-function extractFrontmatterField(body: string, key: string): string | undefined {
-  const lines = body.split(/\r?\n/);
-  const pattern = new RegExp(`^${key}:\\s*(.*)$`);
-  for (let i = 0; i < lines.length; i++) {
-    const m = pattern.exec(lines[i]);
-    if (!m) {
-      continue;
-    }
-    const rest = m[1].trim();
-    if (rest === '>' || rest === '>-' || rest === '|' || rest === '|-') {
-      // A folded/literal block scalar: gather the more-indented lines that follow, folded onto one line.
-      const indent = /^\s*/.exec(lines[i])![0].length;
-      const collected: string[] = [];
-      for (let j = i + 1; j < lines.length; j++) {
-        const line = lines[j];
-        if (line.trim() === '') {
-          continue;
-        }
-        if (/^\s*/.exec(line)![0].length <= indent) {
-          break;
-        }
-        collected.push(line.trim());
-      }
-      return collected.join(' ');
-    }
-    const value = rest.replace(/^['"]|['"]$/g, '');
-    return value || undefined;
-  }
-  return undefined;
-}
-
 /**
  * Pulls `name`/`description` out of a SKILL.md's YAML frontmatter. Not a real YAML parser — every
  * skill in practice uses either a plain scalar or a folded (`>`) / literal (`|`) block for these two
  * keys, and that's all this handles.
  */
 export function parseSkillFrontmatter(text: string): { name?: string; description?: string } {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
-  if (!match) {
-    return {};
-  }
-  const body = match[1];
-  return { name: extractFrontmatterField(body, 'name'), description: extractFrontmatterField(body, 'description') };
+  return parseNameAndDescription(text);
 }
 
 /** `skillOverrides` from `~/.claude/settings.json` — `{}` if the file is missing, unreadable, or has none. */

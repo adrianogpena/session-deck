@@ -5,6 +5,7 @@ import { CONFIG_FIELDS } from './configFields';
 import { STATUS_CATEGORIES, StatusCategory, TimeFilter } from './filters';
 import { PANEL_HEADER_ROWS, Rect } from './layout';
 import type { SessionStatus } from './sessions';
+import type { LocalAgent } from './agents';
 import type { LocalSkill, SkillState } from './skills';
 import { Role, Theme, ThemeName } from './theme';
 
@@ -501,7 +502,7 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
     keys: [
       ['?', 'This help'],
       ['C', 'Show the config file in use'],
-      ['w', 'Show local skills, grouped by state (on · name-only · user-invocable-only · off)'],
+      ['w', 'Show local skills / agents (← → switches tabs)'],
       ['q  Ctrl+C', 'Quit (stops background sessions)'],
     ],
   },
@@ -605,7 +606,9 @@ export function configOverlay(
   return { x: Math.max(0, Math.floor((cols - width) / 2)), y: Math.max(0, Math.floor((rows - lines.length) / 2)), lines };
 }
 
-const SKILL_NAME_COLUMN = 32;
+export type SkillsPopupTab = 'skills' | 'agents';
+
+const POPUP_NAME_COLUMN = 32;
 
 const SKILL_STATE_ORDER: readonly SkillState[] = ['on', 'name-only', 'user-invocable-only', 'off'];
 
@@ -616,13 +619,10 @@ const SKILL_STATE_LABELS: Record<SkillState, string> = {
   off: 'OFF — removed entirely, even from /',
 };
 
-/**
- * The skills popup (`w`): every skill from `discoverLocalSkills`, grouped by its effective
- * `skillOverrides` state (a skill with no override shows as `on`). Scrolls like the help overlay.
- */
-export function skillsOverlay(t: Theme, cols: number, rows: number, skills: readonly LocalSkill[], scroll: number): { x: number; y: number; lines: string[]; maxScroll: number } {
-  const width = Math.min(88, cols - 4);
-  const inner = width - 6;
+const POPUP_TAB_LABELS: Record<SkillsPopupTab, string> = { skills: 'Skills', agents: 'Agents' };
+const POPUP_TABS: readonly SkillsPopupTab[] = ['skills', 'agents'];
+
+function skillsTabLines(t: Theme, inner: number, skills: readonly LocalSkill[]): string[] {
   const content: string[] = [];
   if (skills.length === 0) {
     content.push(`${t.fg('textDim')}${fit('No local skills found under ~/.claude/skills.', inner)}`);
@@ -635,23 +635,68 @@ export function skillsOverlay(t: Theme, cols: number, rows: number, skills: read
     content.push(`${BOLD}${t.fg('cyan')}${fit(`${SKILL_STATE_LABELS[state]} (${group.length})`, inner)}`);
     for (const skill of group) {
       content.push(
-        `${BOLD}${t.fg('purple')}${fit(skill.name, SKILL_NAME_COLUMN)}${RESET}${t.bg('surface')}${t.fg('text')}${fit(skill.description, inner - SKILL_NAME_COLUMN)}`
+        `${BOLD}${t.fg('purple')}${fit(skill.name, POPUP_NAME_COLUMN)}${RESET}${t.bg('surface')}${t.fg('text')}${fit(skill.description, inner - POPUP_NAME_COLUMN)}`
       );
     }
     content.push(blank(inner));
   }
-  content.push(`${t.fg('textDim')}${fit('Esc or w to close', inner)}`);
+  return content;
+}
 
-  const maxBody = Math.max(3, rows - 6);
+function agentsTabLines(t: Theme, inner: number, agents: readonly LocalAgent[]): string[] {
+  const content: string[] = [];
+  if (agents.length === 0) {
+    content.push(`${t.fg('textDim')}${fit('No local agents found under ~/.claude/agents.', inner)}`);
+  }
+  for (const agent of agents) {
+    content.push(
+      `${BOLD}${t.fg('purple')}${fit(agent.name, POPUP_NAME_COLUMN)}${RESET}${t.bg('surface')}${t.fg('text')}${fit(agent.description, inner - POPUP_NAME_COLUMN)}`
+    );
+  }
+  return content;
+}
+
+function popupTabsRow(t: Theme, active: SkillsPopupTab, width: number): string {
+  const s = t.bg('surface');
+  const segments = POPUP_TABS.map((tab) => {
+    const label = ` ${POPUP_TAB_LABELS[tab]} `;
+    return tab === active ? `${t.bg('accent')}${t.fg('bg')}${BOLD}${label}${RESET}${s}` : `${t.fg('textDim')}${label}${RESET}${s}`;
+  });
+  return fitAnsi(segments.join('  '), width);
+}
+
+/**
+ * The skills/agents popup (`w`): local skills from `discoverLocalSkills`, grouped by their effective
+ * `skillOverrides` state (a skill with no override shows as `on`), or local subagents from
+ * `discoverLocalAgents` sorted alphabetically — subagents have no `skillOverrides`-style visibility
+ * state, so there's nothing to group by there. `← →` switches tabs; scrolls like the help overlay.
+ */
+export function skillsOverlay(
+  t: Theme,
+  cols: number,
+  rows: number,
+  tab: SkillsPopupTab,
+  skills: readonly LocalSkill[],
+  agents: readonly LocalAgent[],
+  scroll: number
+): { x: number; y: number; lines: string[]; maxScroll: number } {
+  const width = Math.min(88, cols - 4);
+  const inner = width - 6;
+  const content = tab === 'skills' ? skillsTabLines(t, inner, skills) : agentsTabLines(t, inner, agents);
+  content.push(blank(inner));
+  content.push(`${t.fg('textDim')}${fit('← → switch tabs · Esc or w to close', inner)}`);
+
+  const maxBody = Math.max(3, rows - 7);
   const maxScroll = Math.max(0, content.length - maxBody);
   const offset = Math.min(scroll, maxScroll);
   const visible = content.slice(offset, offset + maxBody);
   const s = t.bg('surface');
   const border = `${s}${t.fg('purple')}`;
-  const title = ' SKILLS ';
+  const title = ' SKILLS & AGENTS ';
   const left = Math.floor((width - 2 - title.length) / 2);
   const lines = [
     `${border}╭${'─'.repeat(left)}${BOLD}${title}${RESET}${border}${'─'.repeat(width - 2 - left - title.length)}╮${RESET}`,
+    `${border}│${s}  ${popupTabsRow(t, tab, inner)}${RESET}${s}  ${border}│${RESET}`,
     `${border}│${s}${blank(width - 2)}${border}│${RESET}`,
     ...visible.map((l) => `${border}│${s}  ${l}${RESET}${s}  ${border}│${RESET}`),
     `${border}│${s}${t.fg('yellow')}${fit(offset < maxScroll ? '  ▼ more below' : offset > 0 ? '  ▲ more above' : '', width - 2)}${border}│${RESET}`,

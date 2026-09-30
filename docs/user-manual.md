@@ -305,12 +305,17 @@ different projects without moving anything.
   [section 4](#4-global-config-sessiondeckconfigjson)). `↑` `↓` selects a setting; `Enter` toggles it
   (`ui.notifications`) or opens a text prompt pre-filled with its current value (everything else) —
   submitting saves straight to the file. `Esc`, `C` or `q` close it.
-- **Skills `w`**: read-only. Lists every personal skill directly under `~/.claude/skills` (Claude
-  Code's own skills directory — not `sdeck`'s), grouped by its effective state: `on` (visible +
-  auto-triggerable), `name-only` (name visible, no description), `user-invocable-only` (fully hidden
-  from context, still in `/`), or `off` (removed entirely, even from `/`). That state is
-  `skillOverrides[name]` from Claude Code's `~/.claude/settings.json`, or `on` when there's no
-  override. `↑` `↓` scroll it; `Esc`, `w` or `q` close it.
+- **Skills / agents `w`**: read-only, two tabs (`← →` to switch):
+  - **Skills**: every personal skill directly under `~/.claude/skills` (Claude Code's own skills
+    directory — not `sdeck`'s), grouped by its effective state: `on` (visible + auto-triggerable),
+    `name-only` (name visible, no description), `user-invocable-only` (fully hidden from context,
+    still in `/`), or `off` (removed entirely, even from `/`). That state is `skillOverrides[name]`
+    from Claude Code's `~/.claude/settings.json`, or `on` when there's no override.
+  - **Agents**: every personal subagent directly under `~/.claude/agents`, identified by
+    name/description from the one `*.agent.md` file inside each subagent's folder. Sorted
+    alphabetically — subagents have no `skillOverrides`-style visibility state to group by.
+
+  `↑` `↓` scroll the current tab; `Esc`, `w` or `q` close it.
 
 ### Text input, lists and questions
 

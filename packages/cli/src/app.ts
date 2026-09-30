@@ -62,6 +62,7 @@ import {
   RESET_AGENT_MODES,
   splitKeys,
 } from './keys';
+import { discoverLocalAgents, LocalAgent } from './agents';
 import { computeLayout, Layout, ptySizeFor, Rect } from './layout';
 import { AgentType, clearExecutableCache, disposeLive, LiveSession, resizeLive, spawnAgent, typeLine, warmExecutables } from './liveSession';
 import { DeckSession, StatusTracker, discoverSessions, displayTitle, refreshLiveTitle } from './sessions';
@@ -87,6 +88,7 @@ import {
   SearchResultRow,
   SessionView,
   skillsOverlay,
+  SkillsPopupTab,
   themeLabel,
 } from './view';
 
@@ -176,9 +178,14 @@ export class App {
   private confirm: Confirm | null = null;
   private helpScroll: number | null = null;
   private configSelected: number | null = null;
-  /** `w`: local skills read from `~/.claude/skills` the moment the popup opens, grouped by state in the overlay. */
+  /**
+   * `w`: local skills (`~/.claude/skills`) and subagents (`~/.claude/agents`) read the moment the
+   * popup opens; `skillsPopupTab` (← →) picks which of the two the overlay shows.
+   */
   private skillsScroll: number | null = null;
+  private skillsPopupTab: SkillsPopupTab = 'skills';
   private skills: LocalSkill[] = [];
+  private agents: LocalAgent[] = [];
   private search: Search | null = null;
   private statusFilter = new Set<StatusCategory>();
   private timeFilter: TimeFilter = 'all';
@@ -1091,7 +1098,7 @@ export class App {
       overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
     }
     if (this.skillsScroll !== null) {
-      const overlay = skillsOverlay(t, cols, height, this.skills, this.skillsScroll);
+      const overlay = skillsOverlay(t, cols, height, this.skillsPopupTab, this.skills, this.agents, this.skillsScroll);
       this.skillsScroll = Math.min(this.skillsScroll, overlay.maxScroll);
       overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
     }
@@ -1307,6 +1314,9 @@ export class App {
       this.skillsScroll = Math.max(0, (this.skillsScroll ?? 0) - 1);
     } else if (data === '\x1b[B' || data === 'j') {
       this.skillsScroll = (this.skillsScroll ?? 0) + 1;
+    } else if (data === '\x1b[C' || data === '\x1b[D') {
+      this.skillsPopupTab = this.skillsPopupTab === 'skills' ? 'agents' : 'skills';
+      this.skillsScroll = 0;
     }
     this.render();
   }
@@ -1773,6 +1783,8 @@ export class App {
         break;
       case 'w':
         this.skills = discoverLocalSkills();
+        this.agents = discoverLocalAgents();
+        this.skillsPopupTab = 'skills';
         this.skillsScroll = 0;
         break;
       case '/':
