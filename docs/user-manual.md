@@ -291,7 +291,8 @@ different projects without moving anything.
 
 - **Narrow / widen the sessions panel `<` / `>`**: 5% per press, between 15% and 70% of the width.
   Remembered.
-- **Hide / show the sessions panel `b` (or `Ctrl+B`)**: gives the preview the whole width.
+- **Hide / show the sessions panel `b`** (or `Ctrl+K B` while typing into a session with `i`): gives
+  the preview the whole width.
 - **Mouse scrolling `m`** (or `Ctrl+K M` while typing into a session with `i`): toggles real mouse
   reporting. Off by default (not remembered across restarts), so click-drag still does your terminal's
   own text selection, letting you copy from the preview. Turn it on to scroll the preview with the

@@ -822,6 +822,10 @@ export class App {
     return findPlainKey(data, 'm') === 0 || findPlainKey(data, 'M') === 0;
   }
 
+  private isSidebarChord(data: string): boolean {
+    return findPlainKey(data, 'b') === 0 || findPlainKey(data, 'B') === 0;
+  }
+
   private isStopSessionChord(data: string): boolean {
     return findPlainKey(data, 'q') === 0 || findPlainKey(data, 'Q') === 0;
   }
@@ -830,10 +834,18 @@ export class App {
    * Ctrl+K's resolving key, if `text` starts with one — shared by both places `onLiveInput` checks
    * for it (the chord's own chunk, and the chunk after, if it arrived split across two). Returns
    * whether it resolved (and already acted); adding a further resolving key only means editing here.
-   * `toggleMouse` is only passed while interacting (see `onKey`) — while attached, mouse tracking is
-   * always off regardless (see `attach()`), so `m`/`M` there goes to the agent like any other key.
+   * `toggleMouse` and `toggleSidebar` are only passed while interacting (see `onKey`) — while attached,
+   * mouse tracking is always off regardless (see `attach()`) and there's no panel to show, so `m`/`M`
+   * and `b`/`B` there go straight to the agent like any other key.
    */
-  private resolveChord(text: string, stop: () => void, switchMode: () => void, stopSession: () => void, toggleMouse?: () => void): boolean {
+  private resolveChord(
+    text: string,
+    stop: () => void,
+    switchMode: () => void,
+    stopSession: () => void,
+    toggleMouse?: () => void,
+    toggleSidebar?: () => void
+  ): boolean {
     if (this.isNewSessionChord(text)) {
       stop();
       this.newSession('claude');
@@ -851,6 +863,10 @@ export class App {
       toggleMouse();
       return true;
     }
+    if (toggleSidebar && this.isSidebarChord(text)) {
+      toggleSidebar();
+      return true;
+    }
     return false;
   }
 
@@ -862,10 +878,10 @@ export class App {
    * (`stopSession` — same as `x` from the list; there's no separate Ctrl+Alt+Q, since Windows Terminal
    * doesn't reliably report that combination — some layouts compose it into a printable character
    * instead of a Ctrl+Alt-modified Q), or (while interacting only) flips mouse tracking on `m`/`M`
-   * (`toggleMouse`). The chord's resolving key is usually typed just after Ctrl+K, quickly enough to
-   * arrive in the same input chunk (unlike Ctrl+Q, which needs no second key) — so both
-   * `findChordKey`'s match end and the *next* chunk, if this one ends right at the match, are checked
-   * for it.
+   * (`toggleMouse`) or the sessions panel on `b`/`B` (`toggleSidebar`). The chord's resolving key is
+   * usually typed just after Ctrl+K, quickly enough to arrive in the same input chunk (unlike Ctrl+Q,
+   * which needs no second key) — so both `findChordKey`'s match end and the *next* chunk, if this one
+   * ends right at the match, are checked for it.
    */
   private onLiveInput(
     live: LiveSession | undefined,
@@ -873,11 +889,12 @@ export class App {
     stop: () => void,
     switchMode: () => void,
     stopSession: () => void,
-    toggleMouse?: () => void
+    toggleMouse?: () => void,
+    toggleSidebar?: () => void
   ): void {
     if (this.chordPending) {
       this.chordPending = false;
-      if (this.resolveChord(data, stop, switchMode, stopSession, toggleMouse)) {
+      if (this.resolveChord(data, stop, switchMode, stopSession, toggleMouse, toggleSidebar)) {
         return;
       }
       if (live && !live.exited) {
@@ -899,7 +916,7 @@ export class App {
     }
     if (chord && idx === chord.index) {
       const after = data.slice(chord.end);
-      if (this.resolveChord(after, stop, switchMode, stopSession, toggleMouse)) {
+      if (this.resolveChord(after, stop, switchMode, stopSession, toggleMouse, toggleSidebar)) {
         return;
       }
       this.chordPending = true;
@@ -1474,6 +1491,13 @@ export class App {
     this.resizeAllToPane();
   }
 
+  /** `b` from the list, or `Ctrl+K B` while typing in place: hides/shows the sessions panel, giving the preview the whole width. Not offered while attached — there's no panel to show there (see `attach()`). */
+  private toggleSidebar(): void {
+    this.sidebarVisible = !this.sidebarVisible;
+    out.write(`${ESC}2J`);
+    this.resizeAllToPane();
+  }
+
   private cycleTheme(): void {
     this.themePreference = THEME_CYCLE[(THEME_CYCLE.indexOf(this.themePreference) + 1) % THEME_CYCLE.length];
     void this.store.updateUi({ theme: this.themePreference });
@@ -1554,7 +1578,8 @@ export class App {
         () => this.stopInteracting(),
         () => this.switchToAttach(interacting),
         () => this.stopSession(interacting, () => this.stopInteracting()),
-        () => this.toggleMouseTracking()
+        () => this.toggleMouseTracking(),
+        () => this.toggleSidebar()
       );
       return;
     }
@@ -1788,10 +1813,7 @@ export class App {
         this.resizeSidebar(SIDEBAR_STEP);
         break;
       case 'b':
-      case '\x02': // Ctrl+B
-        this.sidebarVisible = !this.sidebarVisible;
-        out.write(`${ESC}2J`);
-        this.resizeAllToPane();
+        this.toggleSidebar();
         break;
       case 'T':
         this.cycleTheme();
