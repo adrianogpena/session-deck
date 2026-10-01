@@ -75,6 +75,7 @@ import {
   helpOverlay,
   ListRow,
   pickerOverlay,
+  quitConfirmOverlay,
   renderConfirmBar,
   renderGroupPreviewPanel,
   renderHeader,
@@ -123,6 +124,12 @@ interface Picker {
 interface Confirm {
   question: string;
   onYes(): void;
+}
+
+/** Centered "quit with active sessions" warning while open: ←→/Tab moves the selection, Enter picks it, Esc cancels. Opens with `selected: 'no'`. */
+interface QuitConfirm {
+  activeCount: number;
+  selected: 'yes' | 'no';
 }
 
 /** Global search (`/`) while open: live-filtered as `query` changes, full session content fetched lazily on first use. */
@@ -176,6 +183,7 @@ export class App {
   private prompt: Prompt | null = null;
   private picker: Picker | null = null;
   private confirm: Confirm | null = null;
+  private quitConfirm: QuitConfirm | null = null;
   private helpScroll: number | null = null;
   private configSelected: number | null = null;
   /**
@@ -1108,6 +1116,10 @@ export class App {
       const overlay = searchOverlay(t, cols, height, this.search.query, this.search.loading, rows, this.search.index);
       overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
     }
+    if (this.quitConfirm) {
+      const overlay = quitConfirmOverlay(t, cols, height, this.quitConfirm.activeCount, this.quitConfirm.selected);
+      overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
+    }
     frame += `${ESC}?2026l`;
     out.write(frame);
   }
@@ -1501,6 +1513,10 @@ export class App {
         onYes();
       }
       this.render();
+      return;
+    }
+    if (this.quitConfirm) {
+      this.onQuitConfirmKey(data);
       return;
     }
     const attached = this.attached;
@@ -2437,6 +2453,39 @@ export class App {
   }
 
   private quit(): void {
+    const activeCount = this.sessions.filter((s) => {
+      if (!s.live || s.live.exited) {
+        return false;
+      }
+      const status = this.procs.statusOf(s);
+      return status === 'running' || status === 'waiting';
+    }).length;
+    if (activeCount === 0) {
+      this.quitNow();
+      return;
+    }
+    this.quitConfirm = { activeCount, selected: 'no' };
+    this.render();
+  }
+
+  private onQuitConfirmKey(data: string): void {
+    const qc = this.quitConfirm;
+    if (!qc) {
+      return;
+    }
+    if (data === '\x1b[C' || data === '\x1b[D' || data === '\t') {
+      qc.selected = qc.selected === 'yes' ? 'no' : 'yes';
+    } else if ((data === '\r' && qc.selected === 'yes') || data === 'y' || data === 'Y') {
+      this.quitConfirm = null;
+      this.quitNow();
+      return;
+    } else if (data === '\r' || data === 'n' || data === 'N' || data === '\x1b' || data === 'q' || data === '\x03') {
+      this.quitConfirm = null;
+    }
+    this.render();
+  }
+
+  private quitNow(): void {
     this.copilotWatcher.dispose();
     for (const s of this.sessions) {
       if (s.live && !s.live.exited) {

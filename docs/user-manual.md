@@ -53,6 +53,7 @@ a colored status dot on each session.
   `npm run build`), in a real terminal (Windows Terminal, PowerShell, the VS Code terminal).
 - **Quit `q` or `Ctrl+C`**: closes Session Deck.
   - Every session running inside it is stopped too; they can be resumed later.
+  - If any session is still running or waiting, a confirmation popup opens first (Yes/No, defaults to No; ←→/Tab to move, Enter to pick, Esc cancels).
 
 ### The screen
 

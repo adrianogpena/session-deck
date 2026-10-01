@@ -734,6 +734,38 @@ export function pickerOverlay(t: Theme, cols: number, rows: number, title: strin
   return { x: Math.max(0, Math.floor((cols - width) / 2)), y: Math.max(0, Math.floor((rows - lines.length) / 2)), lines };
 }
 
+/** Centered "quit with active sessions" warning (Ctrl+C / q with something running or waiting): Yes/No buttons, default on No. */
+export function quitConfirmOverlay(t: Theme, cols: number, rows: number, activeCount: number, selected: 'yes' | 'no'): { x: number; y: number; lines: string[] } {
+  const message = `${activeCount} session${activeCount === 1 ? '' : 's'} still running will be stopped.`;
+  const width = Math.min(cols - 4, Math.max(textWidth(message) + 8, 40));
+  const inner = width - 4;
+  const s = t.bg('surface');
+  const border = `${s}${t.fg('yellow')}`;
+  const heading = ' QUIT SESSION DECK? ';
+
+  const yesText = ' Yes ';
+  const noText = ' No ';
+  const gap = '  ';
+  const buttonsWidth = textWidth(yesText) + textWidth(gap) + textWidth(noText);
+  const leftPad = Math.max(0, Math.floor((inner - buttonsWidth) / 2));
+  const rightPad = Math.max(0, inner - buttonsWidth - leftPad);
+  const button = (text: string, isSelected: boolean): string =>
+    isSelected ? `${t.bg('accent')}${t.fg('bg')}${BOLD}${text}${RESET}${s}` : `${t.fg('text')}${text}${RESET}${s}`;
+  const buttonsLine = `${' '.repeat(leftPad)}${button(yesText, selected === 'yes')}${gap}${button(noText, selected === 'no')}${' '.repeat(rightPad)}`;
+
+  const blank = ' '.repeat(inner);
+  const lines = [
+    `${border}╭─${BOLD}${fit(heading, width - 4).trimEnd()}${RESET}${border}${'─'.repeat(Math.max(0, width - 3 - textWidth(heading)))}╮${RESET}`,
+    `${border}│${s} ${blank}${s} ${border}│${RESET}`,
+    `${border}│${s} ${t.fg('text')}${fit(message, inner)}${RESET}${s} ${border}│${RESET}`,
+    `${border}│${s} ${blank}${s} ${border}│${RESET}`,
+    `${border}│${s} ${buttonsLine}${s} ${border}│${RESET}`,
+    `${border}│${s} ${blank}${s} ${border}│${RESET}`,
+    `${border}╰${'─'.repeat(width - 2)}╯${RESET}`,
+  ];
+  return { x: Math.max(0, Math.floor((cols - width) / 2)), y: Math.max(0, Math.floor((rows - lines.length) / 2)), lines };
+}
+
 export interface SearchResultRow {
   view: SessionView;
   projectLabel: string;
