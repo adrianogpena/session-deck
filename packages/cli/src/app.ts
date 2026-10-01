@@ -18,6 +18,7 @@ import {
   trashClaudeSession,
   ClaudeProcessWatcher,
   clearSessionMetaCache,
+  ClaudeTranscriptTailer,
   createFolder,
   DeckStore,
   deleteFolder,
@@ -47,6 +48,7 @@ import {
   setCollapsed,
   SIDEBAR_PCT_MAX,
   SIDEBAR_PCT_MIN,
+  TailedTurn,
   ThemePreference,
   TreePrefs,
   WaitingNotifier,
@@ -208,6 +210,11 @@ export class App {
   private readonly procs = new StatusTracker();
   /** Tails the events log of Copilot sessions running here, writing their status files. */
   private readonly copilotWatcher = new CopilotStatusWatcher(() => undefined);
+  /** Live, read-only preview of whichever elsewhere session is currently previewed — see `syncLivePreview`. */
+  private readonly livePreviewTailer = new ClaudeTranscriptTailer(() => undefined);
+  private livePreviewTurns: TailedTurn[] = [];
+  /** The session `livePreviewTailer` is currently attached to (or `undefined`), so it can be re-synced the moment the selection changes. */
+  private livePreviewFor?: DeckSession;
   /** `git status` per session cwd, for the row's ⇡/⇣/✱ markers and the preview panel's branch line. Off entirely when `ui.gitStatus` is false. */
   private readonly gitStatus = new GitStatusTracker();
   /** `^`: show archived sessions (only) instead of the active ones. */
@@ -1061,6 +1068,7 @@ export class App {
       this.scrolledSession = current;
       this.previewScroll = 0;
     }
+    this.syncLivePreview(current);
     const t = this.theme;
     const cols = out.columns || 120;
     const height = out.rows || 30;
@@ -1120,6 +1128,7 @@ export class App {
             interacting: this.interacting === s,
             exitCode: s.live?.exitCode,
             lastResponse: this.lastResponseOf(s),
+            liveTurns: this.procs.isElsewhere(s) ? this.livePreviewTurns : undefined,
             scrollOffset: this.previewScroll,
           }
         : undefined;
@@ -1174,6 +1183,25 @@ export class App {
     }
     frame += `${ESC}?2026l`;
     out.write(frame);
+  }
+
+  /** Keeps the live-preview tailer attached to whichever elsewhere session is currently previewed (and only that one), re-syncing whenever the selection changes. */
+  private syncLivePreview(current: DeckSession | undefined): void {
+    if (current === this.livePreviewFor) {
+      return;
+    }
+    this.livePreviewFor = current;
+    this.livePreviewTurns = [];
+    if (current?.file && this.procs.isElsewhere(current)) {
+      this.livePreviewTailer.attach(current.file, (turns) => {
+        if (this.livePreviewFor === current) {
+          this.livePreviewTurns = turns;
+          this.scheduleRender();
+        }
+      });
+    } else {
+      this.livePreviewTailer.detach();
+    }
   }
 
   /** Starts loading a stopped session's last reply the first time it's previewed. */
@@ -2544,6 +2572,7 @@ export class App {
 
   private quitNow(): void {
     this.copilotWatcher.dispose();
+    this.livePreviewTailer.dispose();
     for (const s of this.sessions) {
       if (s.live && !s.live.exited) {
         try {

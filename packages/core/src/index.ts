@@ -12,6 +12,7 @@ export * from './discovery/pathUtils';
 export * from './format';
 export * from './fuzzyMatch';
 export * from './status/claudeProcessWatcher';
+export * from './status/claudeTranscriptTailer';
 export * from './status/copilotStatusWatcher';
 export * from './status/sessionStatus';
 export * from './status/sessionUsage';

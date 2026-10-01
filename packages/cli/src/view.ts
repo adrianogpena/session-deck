@@ -1,5 +1,5 @@
 import type { Terminal } from '@xterm/headless';
-import type { DailySpend, DeckConfig, GitStatus, UsageMetric } from '@session-deck/core';
+import type { DailySpend, DeckConfig, GitStatus, TailedTurn, UsageMetric } from '@session-deck/core';
 import { renderUsageBar, usageSeverity, USAGE_METRIC_LABELS } from '@session-deck/core';
 import { fit, fitAnsi, fitTail, renderTerm, textWidth, wrap } from './ansi';
 import { CONFIG_FIELDS } from './configFields';
@@ -366,6 +366,22 @@ export interface PreviewContent {
   lastResponse?: string | null;
   /** Lines scrolled back from the live bottom (↑↓/PageUp/PageDown/Home/End while this session is selected), see `renderTerm`. */
   scrollOffset?: number;
+  /** Tailed turns for a session open elsewhere (`view.elsewhere`), newest last. `undefined`/empty while the tailer is still backfilling. */
+  liveTurns?: TailedTurn[];
+}
+
+/** Renders tailed turns for an elsewhere session's preview as a read-only mini-transcript, tail-clipped to `height` lines (latest activity anchored to the bottom, like a live terminal). */
+function renderLiveTurns(t: Theme, turns: TailedTurn[], width: number, height: number): string[] {
+  const lines: string[] = [];
+  for (const turn of turns) {
+    const label = turn.role === 'user' ? `${BOLD}${t.fg('cyan')}You${RESET}` : `${BOLD}${t.fg('orange')}Claude${RESET}`;
+    lines.push(fitAnsi(`  ${label}`, width));
+    for (const line of wrap(turn.text, Math.max(10, width - 4))) {
+      lines.push(fitAnsi(`  ${t.fg('text')}${line}${RESET}`, width));
+    }
+    lines.push(blank(width));
+  }
+  return lines.length > height ? lines.slice(lines.length - height) : lines;
 }
 
 /** Lines for the preview panel: a title + meta header, then the live screen or a summary. */
@@ -391,10 +407,26 @@ export function renderPreviewPanel(t: Theme, rect: Rect, content: PreviewContent
     return [titleLine, metaLine, ...renderTerm(content.term, rect.width, bodyHeight, !!content.interacting, content.scrollOffset)];
   }
 
+  if (v.elsewhere) {
+    const header = fitAnsi(
+      `  ${t.fg('yellow')}Open in another terminal.${RESET} ${t.fg('textDim')}Live preview, read-only · close it there to open it here.${RESET}`,
+      rect.width
+    );
+    const turnsHeight = bodyHeight - 1;
+    const turnLines = content.liveTurns?.length
+      ? renderLiveTurns(t, content.liveTurns, rect.width, turnsHeight)
+      : [fitAnsi(`  ${t.fg('textDim')}loading…${RESET}`, rect.width)];
+    // The header stays pinned right under the meta line; the turns themselves are bottom-anchored
+    // (blank padding above, not below) so the latest activity sits at the bottom, like a live terminal.
+    while (turnLines.length < turnsHeight) {
+      turnLines.unshift(blank(rect.width));
+    }
+    return [titleLine, metaLine, header, ...turnLines.slice(-turnsHeight)];
+  }
+
   const key = (k: string) => `${BOLD}${t.fg('accent')}${k}${RESET}${t.fg('textDim')}`;
-  const action = v.elsewhere
-    ? `${t.fg('yellow')}Open in another terminal. Close it there to open it here.`
-    : v.status === 'exited'
+  const action =
+    v.status === 'exited'
       ? `${t.fg('red')}Exited (code ${content.exitCode}).${t.fg('textDim')} ${key('Enter')} restart · ${key('x')} clear`
       : `${t.fg('textDim')}${key('Enter')} start + attach · ${key('s')} start in background`;
   const body = [
