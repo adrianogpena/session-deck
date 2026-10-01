@@ -1024,16 +1024,20 @@ export class App {
     const counts = Object.fromEntries(STATUS_CATEGORIES.map((c) => [c, 0])) as Record<StatusCategory, number>;
     const unhidden = this.unhiddenSessions;
     const inView = unhidden.filter((s) => this.isArchived(s) === this.archivedView);
+    let doneCount = 0;
     for (const s of inView) {
       counts[this.procs.categoryOf(s)]++;
+      if (this.procs.statusOf(s) === 'done') {
+        doneCount++;
+      }
     }
     const liveCount = unhidden.filter((s) => s.live && !s.live.exited).length;
     this.updateTitle(counts.waiting);
 
     let frame = `${ESC}?2026h${ESC}0m`;
     // Truncated as a safety net: a wrapped top row would push the whole frame down.
-    frame += `${ESC}1;1H${fitAnsi(renderHeader(t, cols, counts, liveCount, themeLabel(this.themePreference, this.theme.name), VERSION), cols)}`;
-    frame += `${ESC}2;1H${fitAnsi(renderPills(t, cols, inView.length, counts, this.statusFilter, this.timeFilter, this.tagFilter), cols)}`;
+    frame += `${ESC}1;1H${fitAnsi(renderHeader(t, cols, counts, doneCount, liveCount, themeLabel(this.themePreference, this.theme.name), VERSION), cols)}`;
+    frame += `${ESC}2;1H${fitAnsi(renderPills(t, cols, inView.length, counts, doneCount, this.statusFilter, this.timeFilter, this.tagFilter), cols)}`;
 
     if (layout.list) {
       const listRows: ListRow[] = this.rows.map((r) =>

@@ -27,7 +27,7 @@ const GLYPHS: Record<SessionStatus, { char: string; role: Role; bold: boolean }>
 };
 
 const CATEGORY_GLYPHS: Record<StatusCategory, { char: string; role: Role }> = {
-  running: { char: '●', role: 'green' },
+  running: { char: '●', role: 'red' },
   waiting: { char: '◐', role: 'yellow' },
   idle: { char: '○', role: 'textDim' },
   error: { char: '✕', role: 'red' },
@@ -78,10 +78,18 @@ function blank(width: number): string {
 // Top: header bar and filter pills
 // ---------------------------------------------------------------------------------------------
 
-export function renderHeader(t: Theme, cols: number, counts: Record<StatusCategory, number>, liveCount: number, themeLabel: string, version: string): string {
+export function renderHeader(
+  t: Theme,
+  cols: number,
+  counts: Record<StatusCategory, number>,
+  doneCount: number,
+  liveCount: number,
+  themeLabel: string,
+  version: string,
+): string {
   const dot = (char: string, active: boolean, role: Role) => `${t.fg(active ? role : 'textDim')}${char}`;
-  const logo = `${t.fg('border')}⟨${dot('●', counts.running > 0, 'green')}${t.fg('border')}│${dot('◐', counts.waiting > 0, 'yellow')}${t.fg('border')}│${dot('○', counts.idle > 0, 'text')}${t.fg('border')}⟩`;
-  const leftPlain = ' ⟨●│◐│○⟩ Session Deck';
+  const logo = `${t.fg('border')}⟨${dot('●', counts.running > 0, 'red')}${t.fg('border')}│${dot('◐', counts.waiting > 0, 'yellow')}${t.fg('border')}│${dot('●', doneCount > 0, 'green')}${t.fg('border')}│${dot('○', counts.idle > 0, 'text')}${t.fg('border')}⟩`;
+  const leftPlain = ' ⟨●│◐│●│○⟩ Session Deck';
   const right = `${liveCount} live · ${themeLabel} · v${version} `;
   const gap = cols - textWidth(leftPlain) - textWidth(right);
   const bar = t.bg('surface');
@@ -98,6 +106,7 @@ export function renderPills(
   cols: number,
   total: number,
   counts: Record<StatusCategory, number>,
+  doneCount: number,
   statusFilter: ReadonlySet<StatusCategory>,
   timeFilter: TimeFilter,
   tagFilter?: string
@@ -111,6 +120,12 @@ export function renderPills(
     const label = `${g.char} ${counts[category]}`;
     out += pill(label, statusFilter.has(category), t.fg(g.role));
     plainWidth += textWidth(label) + 2;
+    // "done" (finished, not yet seen) folds into the "waiting" filter category, so its pill rides along right after it.
+    if (category === 'waiting') {
+      const doneLabel = `● ${doneCount}`;
+      out += pill(doneLabel, statusFilter.has('waiting'), t.fg('green'));
+      plainWidth += textWidth(doneLabel) + 2;
+    }
   }
   const time = TIME_LABEL[timeFilter];
   out += `${t.fg('border')}│${RESET}` + pill(time, timeFilter !== 'all', t.fg('purple'));
