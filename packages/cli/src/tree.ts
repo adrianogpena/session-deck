@@ -26,6 +26,12 @@ export type TreeRow =
 export interface TreeOptions {
   include(s: DeckSession): boolean;
   categoryOf(s: DeckSession): SessionCategory;
+  /**
+   * True for a finished-but-unseen session — `categoryOf` folds it into `'waiting'` for sort/filter
+   * purposes, but project/folder badges and top-level counts must show it as done, not waiting.
+   * Optional so callers (and tests) that never produce "done" sessions can omit it.
+   */
+  isDoneUnseen?(s: DeckSession): boolean;
   pinOf(s: DeckSession): SessionPin | undefined;
   /** `undefined` when `ui.gitStatus` is off, or the session's cwd isn't a git repo (or hasn't been polled yet). */
   gitOf(s: DeckSession): GitStatus | undefined;
@@ -141,11 +147,11 @@ export function buildTree(sessions: DeckSession[], tree: TreePrefs, opts: TreeOp
   const arranged = arrangeProjects(tree, defaultOrder);
   const collapsed = new Set(tree.collapsed);
   const counts = (list: DeckSession[]) => {
-    const categories = list.map(opts.categoryOf);
-    return { count: list.length, running: categories.filter((c) => c === 'running').length, waiting: categories.filter((c) => c === 'waiting').length };
+    const waiting = list.filter((s) => opts.categoryOf(s) === 'waiting' && !opts.isDoneUnseen?.(s)).length;
+    return { count: list.length, running: list.filter((s) => opts.categoryOf(s) === 'running').length, waiting };
   };
   const shownProjects = (keys: string[]) => keys.map((k) => buckets.get(k)!).filter((b) => b.visible.length > 0 || !opts.filtering);
-  const projectActive = (b: ProjectBucket) => b.visible.some((s) => isActive(opts.categoryOf(s)));
+  const projectActive = (b: ProjectBucket) => b.visible.some((s) => isActive(opts.categoryOf(s)) && !opts.isDoneUnseen?.(s));
 
   const rows: TreeRow[] = [];
   const containers = new Map<string, string[]>();

@@ -447,6 +447,7 @@ export class App {
     return {
       include: (s) => this.isVisible(s),
       categoryOf: (s) => this.procs.categoryOf(s),
+      isDoneUnseen: (s) => this.procs.statusOf(s) === 'done',
       pinOf: (s) => (s.id ? this.store.getSession(s.id)?.pin : undefined),
       gitOf: (s) => (this.config.ui.gitStatus ? this.gitStatus.get(s.cwd) : undefined),
       filtering: this.filtering,
@@ -1026,9 +1027,12 @@ export class App {
     const inView = unhidden.filter((s) => this.isArchived(s) === this.archivedView);
     let doneCount = 0;
     for (const s of inView) {
-      counts[this.procs.categoryOf(s)]++;
+      // A finished-but-unseen session is its own bucket here, not folded into "waiting" the way
+      // categoryOf does for sort/filter purposes — these counts must reflect real status.
       if (this.procs.statusOf(s) === 'done') {
         doneCount++;
+      } else {
+        counts[this.procs.categoryOf(s)]++;
       }
     }
     const liveCount = unhidden.filter((s) => s.live && !s.live.exited).length;
