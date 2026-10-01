@@ -92,6 +92,21 @@ test('parseDeckConfig accepts a valid tools.*.args array', () => {
   assert.deepEqual(config.tools.copilot.args, ['--allow-all']);
 });
 
+test('parseDeckConfig defaults every catalog agent to {} and accepts settings for one', () => {
+  const empty = parseDeckConfig('{}');
+  assert.deepEqual(empty.tools.codex, {});
+  const config = parseDeckConfig(JSON.stringify({ tools: { codex: { enabled: false, command: 'codex-beta' } } }));
+  assert.equal(config.tools.codex.enabled, false);
+  assert.equal(config.tools.codex.command, 'codex-beta');
+  // Unrelated agents are untouched.
+  assert.deepEqual(config.tools.claude, {});
+});
+
+test('parseDeckConfig preserves settings for an agent id not in the current catalog', () => {
+  const config = parseDeckConfig(JSON.stringify({ tools: { 'some-future-agent': { command: 'whatever' } } }));
+  assert.equal(config.tools['some-future-agent'].command, 'whatever');
+});
+
 test('readDeckConfig returns the defaults when the file does not exist', () => {
   const config = readDeckConfig(path.join(os.tmpdir(), `session-deck-config-test-missing-${Date.now()}.json`));
   assert.equal(config.ui.maxSessionsListed, 30);

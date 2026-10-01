@@ -66,6 +66,18 @@ test('applyUiPatch merges, clears with undefined, and drops an empty ui section'
   assert.equal('ui' in state, false);
 });
 
+test('parseDeckState keeps a non-blank ui.activeAgent and drops a blank one', () => {
+  assert.deepEqual(parseDeckState(JSON.stringify({ version: 1, sessions: {}, ui: { activeAgent: 'codex' } }))?.ui, {
+    activeAgent: 'codex',
+  });
+  assert.equal(parseDeckState(JSON.stringify({ version: 1, sessions: {}, ui: { activeAgent: '   ' } }))?.ui, undefined);
+});
+
+test('applyUiPatch round-trips ui.activeAgent alongside the other UI prefs', () => {
+  const state = applyUiPatch({ version: 1, sessions: {} }, { theme: 'dark', activeAgent: 'copilot' });
+  assert.deepEqual(state.ui, { theme: 'dark', activeAgent: 'copilot' });
+});
+
 test('DeckStore keeps UI prefs when a session is updated, and sessions when UI prefs are', async () => {
   const file = tempStorePath();
   const store = new DeckStore(file);

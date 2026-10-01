@@ -99,6 +99,12 @@ test('tools.claude.enabled and tools.copilot.enabled toggle independently', () =
   assert.equal(claudeEnabled.display(claudeEnabled.apply(off, '')!), 'on');
 });
 
+test('CONFIG_FIELDS builds tools.*.* fields for every catalog agent, not just claude/copilot', () => {
+  const f = field('tools.codex.enabled');
+  assert.equal(f.display(base()), 'on');
+  assert.equal(f.apply(base(), '')!.tools.codex.enabled, false);
+});
+
 test('trash.retentionDays accepts a positive integer and rejects everything else', () => {
   const f = field('trash.retentionDays');
   assert.equal(f.apply(base(), '7')?.trash.retentionDays, 7);

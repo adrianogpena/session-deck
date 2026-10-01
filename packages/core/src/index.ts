@@ -1,4 +1,5 @@
 // Everything vscode-free that Session Deck's front ends (VS Code extension, terminal UI) share.
+export * from './agentCatalog';
 export * from './archivePolicy';
 export * from './commands/claudeCommand';
 export * from './commands/copilotCommand';

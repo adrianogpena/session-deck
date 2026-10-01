@@ -270,8 +270,10 @@ export class StatusTracker {
       const status = CLAUDE_STATUS[rec.status] || 'idle';
       return status === 'idle' && unseen === 'done' ? 'done' : status;
     };
-    if (s.agent === 'copilot') {
-      return this.copilotStatusOf(s, unseen);
+    if (s.agent !== 'claude') {
+      // Copilot and every basic-tier catalog agent: no process registry of their own, so status comes
+      // from the shared status file (liveness-only for a catalog agent — see `app.ts`'s `start`/`kill`).
+      return this.writtenStatusOf(s, unseen);
     }
     if (s.live) {
       if (s.live.exited) {
@@ -290,8 +292,8 @@ export class StatusTracker {
     return unseen === 'done' ? 'done' : unseen === 'error' ? 'exited' : 'stopped';
   }
 
-  /** Copilot has no process registry: a live session here reads its status file; elsewhere can't be told apart from stopped. */
-  private copilotStatusOf(s: DeckSession, unseen: 'done' | 'error' | undefined): SessionStatus {
+  /** Copilot and basic-tier catalog agents have no process registry: a live session here reads its status file; elsewhere can't be told apart from stopped. */
+  private writtenStatusOf(s: DeckSession, unseen: 'done' | 'error' | undefined): SessionStatus {
     if (!s.live) {
       return unseen === 'done' ? 'done' : unseen === 'error' ? 'exited' : 'stopped';
     }

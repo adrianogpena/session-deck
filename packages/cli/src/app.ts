@@ -4,11 +4,14 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   acknowledgeSessionStatus,
+  agentDisplayName,
   AlertEntry,
+  allAgentIds,
   appendClaudeRenameRecords,
   clearSessionStatus,
   copilotSessionSearchText,
   CopilotStatusWatcher,
+  isBuiltinAgent,
   lastCopilotAssistantResponse,
   listTrash,
   mapWithConcurrency,
@@ -57,6 +60,7 @@ import {
   TreePrefs,
   WaitingNotifier,
   writeDeckConfig,
+  writeSessionStatus,
 } from '@session-deck/core';
 import { ESC, fitAnsi, oneLine } from './ansi';
 import { CONFIG_FIELDS } from './configFields';
@@ -76,7 +80,7 @@ import {
 } from './keys';
 import { discoverLocalAgents, LocalAgent } from './agents';
 import { computeLayout, Layout, ptySizeFor, Rect } from './layout';
-import { AgentType, clearExecutableCache, disposeLive, LiveSession, resizeLive, spawnAgent, typeLine, warmExecutables } from './liveSession';
+import { AgentType, clearExecutableCache, disposeLive, isAgentAvailable, LiveSession, resizeLive, spawnAgent, typeLine, warmExecutables } from './liveSession';
 import { DeckSession, StatusTracker, discoverSessions, displayTitle, refreshLiveTitle } from './sessions';
 import { discoverLocalSkills, LocalSkill } from './skills';
 import { buildTree, isStarted, projectLabels, TreeOptions, TreeRow, UsageSectionInput } from './tree';
@@ -250,6 +254,12 @@ export class App {
   /** Settings from `~/.session-deck/config.json` — edited in place by the config popup (`C`), or by hand (restart to pick up a hand-made change). */
   private config = readDeckConfig();
   private sidebarPct: number;
+  /**
+   * The Session Deck Agent: which agent `n` starts, and which agent's own info/config popups (Skills &
+   * Agents, `w`) are shown for. Set from the `F3` picker, persisted — see `UiPrefs.activeAgent`. `N`
+   * offers the same picker for one new session only, without changing this.
+   */
+  private activeAgent: AgentType;
   private themePreference: ThemePreference;
   private systemTheme: ThemeName = 'dark';
   /** Once the terminal has answered an OSC 11 query, its background decides "system" (not the OS setting). */
@@ -268,6 +278,7 @@ export class App {
   constructor() {
     const ui = this.store.getUi();
     this.sidebarPct = ui.sidebarPct ?? DEFAULT_SIDEBAR_PCT;
+    this.activeAgent = ui.activeAgent ?? 'claude';
     this.themePreference = ui.theme ?? 'system';
     this.tree = this.store.getTree();
   }
@@ -662,31 +673,47 @@ export class App {
     }
     const { cols, rows } = this.ptySize() ?? { cols: 80, rows: 24 };
     const sessionId = s.id;
-    s.live = spawnAgent(s.agent, sessionId, !!s.isNew, s.cwd, cols, rows, {
-      onData: (data) => {
-        if (this.attached === s) {
-          out.write(data);
-        } else if (this.current === s) {
-          this.scheduleRender();
-        }
-      },
-      isAttached: () => this.attached === s,
-      onExit: (exitCode) => {
-        if (s.agent === 'copilot' && sessionId) {
-          this.copilotWatcher.stop(sessionId);
-        }
-        if (this.attached === s) {
-          this.detach(`Session exited (code ${exitCode})`);
-        } else if (this.interacting === s) {
-          this.interacting = null;
-          this.flash(`Session exited (code ${exitCode})`);
-        } else {
-          this.scheduleRender();
-        }
-      },
-    });
+    let live: LiveSession;
+    try {
+      live = spawnAgent(s.agent, sessionId, !!s.isNew, s.cwd, cols, rows, {
+        onData: (data) => {
+          if (this.attached === s) {
+            out.write(data);
+          } else if (this.current === s) {
+            this.scheduleRender();
+          }
+        },
+        isAttached: () => this.attached === s,
+        onExit: (exitCode) => {
+          if (s.agent === 'copilot' && sessionId) {
+            this.copilotWatcher.stop(sessionId);
+          } else if (!isBuiltinAgent(s.agent) && sessionId) {
+            clearSessionStatus(sessionId);
+          }
+          if (this.attached === s) {
+            this.detach(`Session exited (code ${exitCode})`);
+          } else if (this.interacting === s) {
+            this.interacting = null;
+            this.flash(`Session exited (code ${exitCode})`);
+          } else {
+            this.scheduleRender();
+          }
+        },
+      });
+    } catch (err) {
+      // node-pty throws synchronously (rather than an async exit) when the executable can't be found
+      // or run at all — most commonly a catalog-tier agent (see `agentCatalog.ts`) that isn't actually
+      // installed. Left uncaught, this would otherwise crash the whole app (an uncaught exception).
+      this.flash(`Could not start ${agentDisplayName(s.agent)}: ${(err as Error).message || 'not found on PATH'}`);
+      return false;
+    }
+    s.live = live;
     if (s.agent === 'copilot' && sessionId) {
       this.copilotWatcher.start(sessionId);
+    } else if (!isBuiltinAgent(s.agent) && sessionId) {
+      // Basic-tier catalog agent: no status file of its own to tail, so liveness is all there is —
+      // written once here, read back by `StatusTracker.writtenStatusOf` while the PTY is alive.
+      writeSessionStatus(sessionId, 'running');
     }
     s.isNew = false; // from now on it resumes its own id
     return true;
@@ -698,6 +725,8 @@ export class App {
     }
     if (s.agent === 'copilot' && s.id) {
       this.copilotWatcher.stop(s.id);
+    } else if (!isBuiltinAgent(s.agent) && s.id) {
+      clearSessionStatus(s.id);
     }
     s.live = undefined;
     // Stays listed only if it's resumable: found on disk, or (Claude) its transcript exists by now. A new
@@ -794,6 +823,12 @@ export class App {
         this.kill(s);
       }
       if (!this.start(s)) {
+        // A brand-new session (e.g. "n" on an agent that turned out not to be installed) that never
+        // got to run has nothing to resume — don't leave a dead entry cluttering the list.
+        if (!s.onDisk && !(s.file && fs.existsSync(s.file))) {
+          this.sessions = this.sessions.filter((x) => x !== s);
+          this.rebuildRows();
+        }
         return undefined;
       }
     }
@@ -1025,8 +1060,8 @@ export class App {
     if (!name || name === displayTitle(s, this.store)) {
       return;
     }
-    if (s.agent === 'copilot') {
-      // Copilot has no /rename: a Session Deck name, shared with the extension.
+    if (s.agent !== 'claude') {
+      // Copilot, and every basic-tier catalog agent, has no /rename: a Session Deck name, shared with the extension.
       if (s.id) {
         void this.store.updateSession(s.id, { name }).then(() => this.scheduleRender());
         this.flash(`Renamed to "${name}"`);
@@ -1194,7 +1229,7 @@ export class App {
       overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
     }
     if (this.skillsScroll !== null) {
-      const overlay = skillsOverlay(t, cols, height, this.skillsPopupTab, this.skills, this.agents, this.skillsScroll);
+      const overlay = skillsOverlay(t, cols, height, this.skillsPopupTab, this.skills, this.agents, this.skillsScroll, this.activeAgent);
       this.skillsScroll = Math.min(this.skillsScroll, overlay.maxScroll);
       overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
     }
@@ -1846,10 +1881,14 @@ export class App {
         }
         break;
       case 'n':
-        this.newSession('claude');
+        this.newSession(this.activeAgent);
         return;
       case 'N':
-        this.newSession('copilot');
+        this.openAgentPicker({ setActive: false });
+        return;
+      case '\x1bOR': // F3
+      case '\x1b[13~': // F3 (some terminals)
+        this.openAgentPicker({ setActive: true });
         return;
       case 'p':
         this.openAddProject();
@@ -1987,8 +2026,10 @@ export class App {
         this.configSelected = 0;
         break;
       case 'w':
-        this.skills = discoverLocalSkills();
-        this.agents = discoverLocalAgents();
+        // Skills and subagents are a Claude Code concept — shown only when that's the Session Deck
+        // Agent (see `openAgentPicker`); the popup itself explains it has nothing to show otherwise.
+        this.skills = this.activeAgent === 'claude' ? discoverLocalSkills() : [];
+        this.agents = this.activeAgent === 'claude' ? discoverLocalAgents() : [];
         this.skillsPopupTab = 'skills';
         this.skillsScroll = 0;
         break;
@@ -2113,8 +2154,8 @@ export class App {
   }
 
   private newSession(agent: AgentType): void {
-    if (this.config.tools[agent].enabled === false) {
-      this.flash(`${agent === 'claude' ? 'Claude' : 'Copilot'} is disabled (tools.${agent}.enabled: false in the config).`);
+    if (this.config.tools[agent]?.enabled === false) {
+      this.flash(`${agentDisplayName(agent)} is disabled (tools.${agent}.enabled: false in the config).`);
       this.render();
       return;
     }
@@ -2126,6 +2167,40 @@ export class App {
       return;
     }
     this.startNewSession(agent, s ? s.cwd : project.root, project);
+  }
+
+  /**
+   * `F3` sets the Session Deck Agent: not just `n`'s default for a new session, but which agent's own
+   * info/config popups (currently just Skills & Agents, `w`) are shown for. `N` opens the same picker
+   * for a one-off new session, without changing it. Lists every enabled agent — built-in (Claude,
+   * Copilot, listed unconditionally, same as always) and basic-tier catalog agents (see `allAgentIds()`),
+   * but only ones `isAgentAvailable` actually finds on this machine — no point offering e.g. Codex if
+   * it isn't installed, when picking it could only ever end in a "not found" flash.
+   */
+  private openAgentPicker({ setActive }: { setActive: boolean }): void {
+    const candidates = allAgentIds().filter(
+      (id) => this.config.tools[id]?.enabled !== false && (isBuiltinAgent(id) || isAgentAvailable(id))
+    );
+    if (candidates.length === 0) {
+      this.flash('No agent is both enabled and installed.');
+      return;
+    }
+    const startIndex = Math.max(0, candidates.indexOf(this.activeAgent));
+    this.picker = {
+      title: setActive ? 'Session Deck Agent' : 'New session · choose an agent',
+      items: candidates.map((id) => `${id === this.activeAgent ? '*' : ' '} ${agentDisplayName(id)}`),
+      index: startIndex,
+      onPick: (i) => {
+        const agent = candidates[i];
+        if (setActive) {
+          this.activeAgent = agent;
+          void this.store.updateUi({ activeAgent: agent });
+          this.flash(`Session Deck Agent: ${agentDisplayName(agent)}`);
+        } else {
+          this.newSession(agent);
+        }
+      },
+    };
   }
 
   /** `p`: a new Claude session in any folder, which lists its project once a prompt is sent. */
@@ -2144,9 +2219,10 @@ export class App {
       this.render();
       return;
     }
-    const agent: AgentType = this.config.tools.claude.enabled === false ? 'copilot' : 'claude';
-    if (this.config.tools[agent].enabled === false) {
-      this.flash('Claude and Copilot are both disabled in the config.');
+    const enabled = (id: AgentType) => this.config.tools[id]?.enabled !== false;
+    const agent: AgentType | undefined = enabled(this.activeAgent) ? this.activeAgent : allAgentIds().find(enabled);
+    if (!agent) {
+      this.flash('Every agent is disabled in the config.');
       this.render();
       return;
     }
@@ -2157,15 +2233,16 @@ export class App {
   }
 
   private startNewSession(agent: AgentType, cwd: string, project: { key: string; root: string }): void {
-    // Copilot takes a pre-assigned id; Claude reports its own once started.
+    // Claude reports its own id once started; every other agent (Copilot, or a basic-tier catalog
+    // agent) takes a pre-assigned one, so its status file can be keyed by id from the start.
     const fresh: DeckSession = {
       agent,
-      id: agent === 'copilot' ? randomUUID() : null,
-      isNew: agent === 'copilot',
+      id: agent === 'claude' ? null : randomUUID(),
+      isNew: agent !== 'claude',
       cwd,
       projectRoot: project.root,
       projectKey: project.key,
-      title: agent === 'copilot' ? '(new Copilot session)' : '(new session)',
+      title: agent === 'claude' ? '(new session)' : `(new ${agentDisplayName(agent)} session)`,
       mtime: Date.now(),
     };
     if (!this.config.ui.recentSessionsFirst) {
@@ -2274,6 +2351,8 @@ export class App {
       disposeLive(s.live);
       if (s.agent === 'copilot' && s.id) {
         this.copilotWatcher.stop(s.id);
+      } else if (!isBuiltinAgent(s.agent) && s.id) {
+        clearSessionStatus(s.id);
       }
       s.live = undefined;
     }

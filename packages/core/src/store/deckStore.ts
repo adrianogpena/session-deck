@@ -23,6 +23,13 @@ export interface UiPrefs {
   theme?: ThemePreference;
   /** Sessions panel width, as a percentage of the terminal width. */
   sidebarPct?: number;
+  /**
+   * The Session Deck Agent (terminal UI only — the extension has no such global, session-scoped
+   * concept): which agent `n` (new session) starts, and which agent's own info/config popups (e.g.
+   * Skills & Agents) are shown for. Set from the `F3` picker. An unrecognized or removed catalog id
+   * just falls back to `claude`.
+   */
+  activeAgent?: string;
 }
 
 export interface DeckStateFile {
@@ -125,13 +132,16 @@ function parseUiPrefs(ui: unknown): UiPrefs | undefined {
   if (typeof ui !== 'object' || ui === null) {
     return undefined;
   }
-  const { theme, sidebarPct } = ui as Record<string, unknown>;
+  const { theme, sidebarPct, activeAgent } = ui as Record<string, unknown>;
   const prefs: UiPrefs = {};
   if (THEMES.includes(theme as ThemePreference)) {
     prefs.theme = theme as ThemePreference;
   }
   if (typeof sidebarPct === 'number' && sidebarPct >= SIDEBAR_PCT_MIN && sidebarPct <= SIDEBAR_PCT_MAX) {
     prefs.sidebarPct = sidebarPct;
+  }
+  if (typeof activeAgent === 'string' && activeAgent.trim()) {
+    prefs.activeAgent = activeAgent.trim();
   }
   return Object.keys(prefs).length ? prefs : undefined;
 }

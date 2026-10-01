@@ -1,6 +1,6 @@
 import type { Terminal } from '@xterm/headless';
 import type { AlertEntry, DailySpend, DeckConfig, GitStatus, TailedTurn, TraceStep, UsageMetric } from '@session-deck/core';
-import { humanizeSince, renderUsageBar, usageSeverity, USAGE_METRIC_LABELS } from '@session-deck/core';
+import { agentDisplayName, humanizeSince, renderUsageBar, usageSeverity, USAGE_METRIC_LABELS } from '@session-deck/core';
 import { fit, fitAnsi, fitTail, renderTerm, textWidth, wrap } from './ansi';
 import { CONFIG_FIELDS } from './configFields';
 import { STATUS_CATEGORIES, StatusCategory, TimeFilter } from './filters';
@@ -523,7 +523,9 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
     keys: [
       ['s', 'Start in the background'],
       ['R', 'Restart (a fresh process, same conversation)'],
-      ['n  N', 'New Claude / Copilot session in the project'],
+      ['n', "New session in the project, with n's default agent"],
+      ['N', "New session in the project, choosing the agent just this once (doesn't change n's default)"],
+      ['F3', "Pick n's default agent"],
       ['p', 'Add a project: new session in any folder'],
       ['o', 'Send a one-line prompt without attaching'],
       ['c', 'Copy the last response'],
@@ -712,8 +714,14 @@ const SKILL_STATE_LABELS: Record<SkillState, string> = {
 const POPUP_TAB_LABELS: Record<SkillsPopupTab, string> = { skills: 'Skills', agents: 'Agents' };
 const POPUP_TABS: readonly SkillsPopupTab[] = ['skills', 'agents'];
 
-function skillsTabLines(t: Theme, inner: number, skills: readonly LocalSkill[]): string[] {
+const NOT_CLAUDE_MESSAGE = 'Skills and subagents are a Claude Code concept — press F3 and switch the Session Deck Agent to Claude to see them.';
+
+function skillsTabLines(t: Theme, inner: number, skills: readonly LocalSkill[], agentId: string): string[] {
   const content: string[] = [];
+  if (agentId !== 'claude') {
+    content.push(`${t.fg('textDim')}${fit(NOT_CLAUDE_MESSAGE, inner)}`);
+    return content;
+  }
   if (skills.length === 0) {
     content.push(`${t.fg('textDim')}${fit('No local skills found under ~/.claude/skills.', inner)}`);
   }
@@ -733,8 +741,12 @@ function skillsTabLines(t: Theme, inner: number, skills: readonly LocalSkill[]):
   return content;
 }
 
-function agentsTabLines(t: Theme, inner: number, agents: readonly LocalAgent[]): string[] {
+function agentsTabLines(t: Theme, inner: number, agents: readonly LocalAgent[], agentId: string): string[] {
   const content: string[] = [];
+  if (agentId !== 'claude') {
+    content.push(`${t.fg('textDim')}${fit(NOT_CLAUDE_MESSAGE, inner)}`);
+    return content;
+  }
   if (agents.length === 0) {
     content.push(`${t.fg('textDim')}${fit('No local agents found under ~/.claude/agents.', inner)}`);
   }
@@ -759,7 +771,9 @@ function popupTabsRow(t: Theme, active: SkillsPopupTab, width: number): string {
  * The skills/agents popup (`w`): local skills from `discoverLocalSkills`, grouped by their effective
  * `skillOverrides` state (a skill with no override shows as `on`), or local subagents from
  * `discoverLocalAgents` sorted alphabetically — subagents have no `skillOverrides`-style visibility
- * state, so there's nothing to group by there. `← →` switches tabs; scrolls like the help overlay.
+ * state, so there's nothing to group by there. Both are a Claude Code concept: with any other Session
+ * Deck Agent selected (see `openAgentPicker`/`F3`), both tabs explain there's nothing to show instead.
+ * `← →` switches tabs; scrolls like the help overlay.
  */
 export function skillsOverlay(
   t: Theme,
@@ -768,11 +782,12 @@ export function skillsOverlay(
   tab: SkillsPopupTab,
   skills: readonly LocalSkill[],
   agents: readonly LocalAgent[],
-  scroll: number
+  scroll: number,
+  agentId: string
 ): { x: number; y: number; lines: string[]; maxScroll: number } {
   const width = Math.min(88, cols - 4);
   const inner = width - 6;
-  const content = tab === 'skills' ? skillsTabLines(t, inner, skills) : agentsTabLines(t, inner, agents);
+  const content = tab === 'skills' ? skillsTabLines(t, inner, skills, agentId) : agentsTabLines(t, inner, agents, agentId);
   content.push(blank(inner));
   content.push(`${t.fg('textDim')}${fit('← → switch tabs · Esc or w to close', inner)}`);
 
@@ -782,7 +797,7 @@ export function skillsOverlay(
   const visible = content.slice(offset, offset + maxBody);
   const s = t.bg('surface');
   const border = `${s}${t.fg('purple')}`;
-  const title = ' SKILLS & AGENTS ';
+  const title = ` SKILLS & AGENTS · ${agentDisplayName(agentId).toUpperCase()} `;
   const left = Math.floor((width - 2 - title.length) / 2);
   const lines = [
     `${border}╭${'─'.repeat(left)}${BOLD}${title}${RESET}${border}${'─'.repeat(width - 2 - left - title.length)}╮${RESET}`,

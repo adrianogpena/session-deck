@@ -1,4 +1,4 @@
-import { DeckConfig, SessionStatus } from '@session-deck/core';
+import { allAgentIds, DeckConfig, SessionStatus } from '@session-deck/core';
 
 /** `toggle` applies immediately on Enter; the others open a text prompt first, pre-filled with `editValue`. */
 export type ConfigFieldKind = 'toggle' | 'number' | 'text' | 'args' | 'statusList';
@@ -21,8 +21,8 @@ const splitArgs = (input: string): string[] => input.trim().split(/\s+/).filter(
 
 const VALID_STATUSES: readonly SessionStatus[] = ['running', 'waiting', 'done', 'error'];
 
-/** One agent's `enabled`/`command`/`args` fields — `tools.claude.*` and `tools.copilot.*` are identical apart from which key they touch. */
-function toolFields(agent: 'claude' | 'copilot'): ConfigField[] {
+/** One agent's `enabled`/`command`/`args` fields — `tools.<agent>.*` for every agent in `allAgentIds()` is identical apart from which key it touches. */
+function toolFields(agent: string): ConfigField[] {
   return [
     {
       label: `tools.${agent}.enabled`,
@@ -131,8 +131,7 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     editValue: (c) => (c.ui.use24HourClock ? 'on' : 'off'),
     apply: (c) => ({ ...c, ui: { ...c.ui, use24HourClock: !c.ui.use24HourClock } }),
   },
-  ...toolFields('claude'),
-  ...toolFields('copilot'),
+  ...allAgentIds().flatMap(toolFields),
   {
     label: 'trash.retentionDays',
     kind: 'number',

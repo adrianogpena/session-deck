@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getDeckHomeDir } from './deckStore';
 import { SessionStatus } from '../status/sessionStatus';
+import { allAgentIds } from '../agentCatalog';
 
 /** Overrides for one agent's launch command, see {@link DeckConfig.tools}. */
 export interface ToolConfig {
@@ -57,10 +58,8 @@ export interface DeckConfig {
     /** The 5h usage row's reset time shows as `20:30` when `true`, `8:30 PM` when `false`. Default: false. */
     use24HourClock: boolean;
   };
-  tools: {
-    claude: ToolConfig;
-    copilot: ToolConfig;
-  };
+  /** Keyed by every id `allAgentIds()` lists — the two rich-adapter agents plus every basic-tier catalog agent. */
+  tools: Record<string, ToolConfig>;
   trash: {
     /** Deleted sessions older than this are purged from `~/.session-deck/trash/` at startup. Default: 30. */
     retentionDays: number;
@@ -86,7 +85,7 @@ function defaultDeckConfig(): DeckConfig {
       showUsage: true,
       use24HourClock: false,
     },
-    tools: { claude: {}, copilot: {} },
+    tools: Object.fromEntries(allAgentIds().map((id) => [id, {}])),
     trash: { retentionDays: DEFAULT_TRASH_RETENTION_DAYS },
   };
 }
@@ -172,9 +171,12 @@ export function parseDeckConfig(raw: string): DeckConfig {
     }
   }
   if (typeof tools === 'object' && tools !== null) {
-    const { claude, copilot } = tools as Record<string, unknown>;
-    config.tools.claude = parseToolConfig(claude);
-    config.tools.copilot = parseToolConfig(copilot);
+    const rawTools = tools as Record<string, unknown>;
+    // The known ids (so an agent missing from the file still gets its `{}` default) plus any id already
+    // in the file (so settings for an agent dropped from, or not yet added to, the catalog survive).
+    for (const id of new Set([...Object.keys(config.tools), ...Object.keys(rawTools)])) {
+      config.tools[id] = parseToolConfig(rawTools[id]);
+    }
   }
   if (typeof trash === 'object' && trash !== null) {
     const { retentionDays } = trash as Record<string, unknown>;

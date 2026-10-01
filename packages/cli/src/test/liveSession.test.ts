@@ -36,3 +36,8 @@ test('resolveNpmGlobalExecutable returns undefined when there is no package.json
   const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdeck-npm-'));
   assert.equal(resolveNpmGlobalExecutable('claude', shimDir), undefined);
 });
+
+test('resolveNpmGlobalExecutable returns undefined for a basic-tier catalog agent (no known npm package)', () => {
+  const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdeck-npm-'));
+  assert.equal(resolveNpmGlobalExecutable('codex', shimDir), undefined);
+});

@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as pty from 'node-pty';
 import { Terminal } from '@xterm/headless';
 import { SerializeAddon } from '@xterm/addon-serialize';
-import { readDeckConfig } from '@session-deck/core';
+import { allAgentIds, isBuiltinAgent, readDeckConfig } from '@session-deck/core';
 import { detectScreenError, screenLines } from './screenStatus';
 
 /** A running agent: its PTY plus a headless terminal mirroring its screen, so it can be drawn (preview) or repainted (attach) at any time. */
@@ -28,13 +28,40 @@ export interface LiveSessionHandlers {
   onExit(exitCode: number): void;
 }
 
-export type AgentType = 'claude' | 'copilot';
+/** A built-in (`claude`/`copilot`) or basic-tier catalog agent id — see `@session-deck/core`'s `agentCatalog.ts`. */
+export type AgentType = string;
 
-const executables = new Map<AgentType, string>();
+/** What `spawnAgent` actually launches: `file`, then `prefixArgs` (if any) followed by the agent's own args. */
+interface Launch {
+  file: string;
+  /**
+   * Non-empty only when `file` is the command interpreter wrapping a `.cmd`/`.bat` npm shim — ConPTY's
+   * `CreateProcess` can launch a real `.exe` directly but not a batch script, the same reason Node's own
+   * `child_process.spawn` special-cases `.bat`/`.cmd` on Windows.
+   */
+  prefixArgs: string[];
+}
+
+const launches = new Map<AgentType, Launch>();
+/** Whether `resolveExecutable` found a real match for the agent, rather than falling all the way back to its unresolved `${agent}.exe` guess — see `isAgentAvailable`. */
+const resolved = new Map<AgentType, boolean>();
 
 /** Forgets the resolved `tools.*.command` executables, so the next spawn re-reads the config file (used after editing it from the config popup). */
 export function clearExecutableCache(): void {
-  executables.clear();
+  launches.clear();
+  resolved.clear();
+}
+
+/**
+ * Whether `agent` actually resolves to something runnable — a configured override, a bare `.exe`/`.cmd`
+ * on PATH, or an npm-global install's own binary — rather than `resolveExecutable`'s last-resort,
+ * unverified guess. Used to filter a basic-tier catalog agent (see `agentCatalog.ts`) out of the `F3`/`N`
+ * picker, so picking one doesn't just trade a crash (now caught, see `app.ts`'s `start()`) for a
+ * guaranteed "not found" flash. Always `true` off Windows, where there's no equally cheap check.
+ */
+export function isAgentAvailable(agent: AgentType): boolean {
+  resolveExecutable(agent); // populates `resolved` as a side effect, cached like the executable itself
+  return resolved.get(agent) ?? true;
 }
 
 /**
@@ -44,13 +71,13 @@ export function clearExecutableCache(): void {
  * screen clears for the mirrored PTY snapshot, turning into a visible stall/flash.
  */
 export function warmExecutables(): void {
-  for (const agent of Object.keys(NPM_PACKAGES) as AgentType[]) {
+  for (const agent of allAgentIds()) {
     resolveExecutable(agent);
   }
 }
 
-/** The npm package that installs each agent's CLI, used to find its real binary when it was only installed via `npm install -g` (no system installer put a `.exe` on PATH). */
-const NPM_PACKAGES: Record<AgentType, string> = {
+/** The npm package that installs each agent's CLI, used to find its real binary when it was only installed via `npm install -g` (no system installer put a `.exe` on PATH). A basic-tier catalog agent has no entry — its npm-shim fallback is simply skipped. */
+const NPM_PACKAGES: Partial<Record<AgentType, string>> = {
   claude: '@anthropic-ai/claude-code',
   copilot: '@github/copilot',
 };
@@ -64,7 +91,11 @@ const NPM_PACKAGES: Record<AgentType, string> = {
  * entry point instead (e.g. Copilot's loader script), which has no equivalent shortcut.
  */
 export function resolveNpmGlobalExecutable(agent: AgentType, shimDir: string): string | undefined {
-  const pkgDir = path.join(shimDir, 'node_modules', NPM_PACKAGES[agent]);
+  const pkgName = NPM_PACKAGES[agent];
+  if (!pkgName) {
+    return undefined; // a basic-tier catalog agent: no known npm package to fall back to
+  }
+  const pkgDir = path.join(shimDir, 'node_modules', pkgName);
   let pkg: { bin?: Record<string, string> | string };
   try {
     pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8')) as { bin?: Record<string, string> | string };
@@ -84,40 +115,61 @@ export function resolveNpmGlobalExecutable(agent: AgentType, shimDir: string): s
  * if set (used as-is, whether a bare name or a full path), otherwise `where.exe` on Windows (so ConPTY
  * runs the .exe rather than an npm .cmd shim) — falling back, when no bare `.exe` is on PATH (an
  * npm-only install, with no system installer's own `.exe`), to whatever real binary the npm-global
- * install's own package ships, so the agent starts the same way regardless of how it was installed —
- * otherwise the bare agent name.
+ * install's own package ships (known only for Claude/Copilot, see `NPM_PACKAGES`), so the agent starts
+ * the same way regardless of how it was installed. A catalog agent installed as a pure npm package (e.g.
+ * `npm install -g` for one with no native binary of its own, like Gemini CLI) has no such shortcut: its
+ * global shim is a `.cmd`/`.bat` script, which is launched through the command interpreter instead —
+ * otherwise, nothing at all was found, and `${agent}.exe` is an unverified last-resort guess.
  */
-function resolveExecutable(agent: AgentType): string {
-  let exe = executables.get(agent);
-  if (!exe) {
+function resolveExecutable(agent: AgentType): Launch {
+  let launch = launches.get(agent);
+  if (!launch) {
     const configured = readDeckConfig().tools[agent].command;
     if (configured) {
-      exe = configured;
+      launch = { file: configured, prefixArgs: [] };
+      resolved.set(agent, true); // trust an explicit override; a bad one still flashes clearly at spawn time
     } else if (process.platform === 'win32') {
       try {
-        exe = execFileSync('where.exe', [`${agent}.exe`], { encoding: 'utf8' }).split(/\r?\n/)[0].trim();
+        const exe = execFileSync('where.exe', [`${agent}.exe`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).split(/\r?\n/)[0].trim();
+        launch = { file: exe, prefixArgs: [] };
+        resolved.set(agent, true);
       } catch {
-        let shimDir: string | undefined;
+        let cmdPath: string | undefined;
         try {
-          shimDir = path.dirname(execFileSync('where.exe', [`${agent}.cmd`], { encoding: 'utf8' }).split(/\r?\n/)[0].trim());
+          cmdPath = execFileSync('where.exe', [`${agent}.cmd`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).split(/\r?\n/)[0].trim();
         } catch {
-          shimDir = undefined;
+          cmdPath = undefined;
         }
-        exe = (shimDir && resolveNpmGlobalExecutable(agent, shimDir)) || `${agent}.exe`;
+        const npmExe = cmdPath && resolveNpmGlobalExecutable(agent, path.dirname(cmdPath));
+        if (npmExe) {
+          launch = { file: npmExe, prefixArgs: [] };
+        } else if (cmdPath) {
+          launch = { file: process.env.ComSpec || 'cmd.exe', prefixArgs: ['/d', '/s', '/c', cmdPath] };
+        } else {
+          launch = { file: `${agent}.exe`, prefixArgs: [] };
+        }
+        resolved.set(agent, !!(npmExe || cmdPath));
       }
     } else {
-      exe = agent;
+      launch = { file: agent, prefixArgs: [] };
+      resolved.set(agent, true); // no equally cheap check off Windows; assume present
     }
-    executables.set(agent, exe);
+    launches.set(agent, launch);
   }
-  return exe;
+  return launch;
 }
 
 /**
  * Command-line arguments to resume `sessionId`, or to start a new session (Copilot takes a pre-assigned
- * id, Claude assigns its own), followed by any extra `tools.<agent>.args` from the config file.
+ * id, Claude assigns its own), followed by any extra `tools.<agent>.args` from the config file. A
+ * basic-tier catalog agent has no resume/new-session flag of its own (no agent-specific knowledge at
+ * all) — just the configured extra args.
  */
 function agentArgs(agent: AgentType, sessionId: string | null, isNew: boolean): string[] {
+  const extra = readDeckConfig().tools[agent]?.args ?? [];
+  if (!isBuiltinAgent(agent)) {
+    return [...extra];
+  }
   const base =
     agent === 'copilot'
       ? sessionId
@@ -126,7 +178,7 @@ function agentArgs(agent: AgentType, sessionId: string | null, isNew: boolean): 
       : sessionId && !isNew
         ? ['--resume', sessionId]
         : [];
-  return [...base, ...(readDeckConfig().tools[agent].args ?? [])];
+  return [...base, ...extra];
 }
 
 /** Vars a parent Claude Code process sets for its children — inherited, they make the agent think it's a sub-session (e.g. transcript saving off) when sdeck is run from inside Claude Code. */
@@ -167,7 +219,8 @@ export function spawnAgent(
   rows: number,
   handlers: LiveSessionHandlers
 ): LiveSession {
-  const proc = pty.spawn(resolveExecutable(agent), agentArgs(agent, sessionId, isNew), {
+  const { file, prefixArgs } = resolveExecutable(agent);
+  const proc = pty.spawn(file, [...prefixArgs, ...agentArgs(agent, sessionId, isNew)], {
     name: 'xterm-256color',
     cols,
     rows,
