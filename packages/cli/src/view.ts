@@ -516,6 +516,7 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
       ['`', 'Back to the previously selected session'],
       ['[ ]', 'Previous / next started session (running, waiting or idle), wrapping around'],
       ['/', "Search every session's prompts and replies"],
+      [':', 'Command palette: run any action by typed name'],
     ],
   },
   {
@@ -996,6 +997,46 @@ export function searchOverlay(
     `${border}│${s}${blank(inner)}${border}│${RESET}`,
     ...body.map((l) => `${border}│${l}${border}│${RESET}`),
     `${border}│${s}${t.fg('textDim')}${fit(' ↑↓ select · Enter jump · !@#&~ status filter · Esc cancel', inner)}${border}│${RESET}`,
+    `${border}╰${'─'.repeat(width - 2)}╯${RESET}`,
+  ];
+  return { x: Math.max(0, Math.floor((cols - width) / 2)), y: Math.max(0, Math.floor((rows - lines.length) / 2)), lines };
+}
+
+/** The command palette (`:`): every app-level action (`commands.ts`'s `PALETTE_COMMANDS`), fuzzy-filtered as `query` changes. `labels` is already the filtered, match-ordered list. */
+export function commandPaletteOverlay(
+  t: Theme,
+  cols: number,
+  rows: number,
+  query: string,
+  labels: readonly string[],
+  index: number
+): { x: number; y: number; lines: string[] } {
+  const width = Math.min(72, cols - 4);
+  const inner = width - 4;
+  const s = t.bg('surface');
+  const border = `${s}${t.fg('purple')}`;
+  const title = ' COMMANDS ';
+  const left = Math.floor((width - 2 - title.length) / 2);
+
+  const maxItems = Math.max(1, rows - 7);
+  const first = Math.max(0, Math.min(index - Math.floor(maxItems / 2), labels.length - maxItems));
+  const body: string[] =
+    query.trim() === ''
+      ? [`${s}${t.fg('textDim')}${fit(' Type to filter commands.', inner)}`]
+      : labels.length === 0
+        ? [`${s}${t.fg('textDim')}${fit(' No matching command.', inner)}`]
+        : labels.slice(first, first + maxItems).map((label, i) => {
+            const selected = first + i === index;
+            const style = selected ? `${t.bg('accent')}${t.fg('bg')}${BOLD}` : `${s}${t.fg('text')}`;
+            return `${s}${style}${fit(` ${label}`, inner)}${RESET}${s}`;
+          });
+
+  const lines = [
+    `${border}╭${'─'.repeat(left)}${BOLD}${title}${RESET}${border}${'─'.repeat(width - 2 - left - title.length)}╮${RESET}`,
+    `${border}│${s}${BOLD}${t.fg('accent')}${fit(` :${query}█`, inner)}${RESET}${border}│${RESET}`,
+    `${border}│${s}${blank(inner)}${border}│${RESET}`,
+    ...body.map((l) => `${border}│${l}${border}│${RESET}`),
+    `${border}│${s}${t.fg('textDim')}${fit(' ↑↓ select · Enter run · Esc cancel', inner)}${border}│${RESET}`,
     `${border}╰${'─'.repeat(width - 2)}╯${RESET}`,
   ];
   return { x: Math.max(0, Math.floor((cols - width) / 2)), y: Math.max(0, Math.floor((rows - lines.length) / 2)), lines };

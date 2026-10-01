@@ -64,6 +64,7 @@ import {
 } from '@session-deck/core';
 import { ESC, fitAnsi, oneLine } from './ansi';
 import { CONFIG_FIELDS } from './configFields';
+import { PALETTE_COMMANDS, paletteMatches } from './commands';
 import { matchesStatusFilter, nextTimeFilter, STATUS_CATEGORIES, StatusCategory, TimeFilter, withinTimeFilter } from './filters';
 import { GitStatusTracker } from './gitStatusTracker';
 import {
@@ -91,6 +92,7 @@ import {
   GroupPreview,
   helpOverlay,
   ListRow,
+  commandPaletteOverlay,
   pickerOverlay,
   quitConfirmOverlay,
   renderConfirmBar,
@@ -158,6 +160,12 @@ interface Search {
   /** `undefined` until first needed; keyed by session id. */
   textBySessionId?: Map<string, string>;
   loading: boolean;
+}
+
+/** The command palette (`:`) while open: every `PALETTE_COMMANDS` entry, fuzzy-filtered by `query` (see `paletteMatches`). */
+interface CommandPalette {
+  query: string;
+  index: number;
 }
 
 const PIN_CYCLE: readonly (SessionPin | undefined)[] = [undefined, 'top', 'bottom'];
@@ -230,6 +238,7 @@ export class App {
    */
   private focused = true;
   private search: Search | null = null;
+  private commandPalette: CommandPalette | null = null;
   private statusFilter = new Set<StatusCategory>();
   private timeFilter: TimeFilter = 'all';
   /** Set from a tag row at the bottom of the list (Enter): narrows the tree to sessions carrying that tag. */
@@ -352,6 +361,11 @@ export class App {
   // -------------------------------------------------------------------------------------------
   // Sessions
   // -------------------------------------------------------------------------------------------
+
+  /** The Session Deck Agent `n` starts (see `activeAgent` above). Exposed read-only for `PALETTE_COMMANDS` (`commands.ts`). */
+  get activeAgentId(): AgentType {
+    return this.activeAgent;
+  }
 
   private get selectedRow(): TreeRow | undefined {
     return this.rows[this.selected];
@@ -1249,6 +1263,12 @@ export class App {
       const overlay = searchOverlay(t, cols, height, this.search.query, this.search.loading, rows, this.search.index);
       overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
     }
+    if (this.commandPalette) {
+      const matches = this.commandPaletteMatches(this.commandPalette);
+      const labels = matches.map((i) => PALETTE_COMMANDS[i].label);
+      const overlay = commandPaletteOverlay(t, cols, height, this.commandPalette.query, labels, this.commandPalette.index);
+      overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
+    }
     if (this.quitConfirm) {
       const overlay = quitConfirmOverlay(t, cols, height, this.quitConfirm.activeCount, this.quitConfirm.selected);
       overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
@@ -1574,6 +1594,54 @@ export class App {
     this.search = { query: '', results: [], index: 0, loading: false };
   }
 
+  /** `C`: the config popup. Not `private`: also one of `PALETTE_COMMANDS` (`commands.ts`). */
+  openConfig(): void {
+    this.configSelected = 0;
+  }
+
+  /** `:`: the generic command palette — see `PALETTE_COMMANDS` (`commands.ts`). Guarded the same way `/` is (see `onKey`): unreachable while attached or interacting. */
+  private openCommandPalette(): void {
+    this.commandPalette = { query: '', index: 0 };
+  }
+
+  /** Empty while `query` is blank — nothing is listed yet (see `commandPaletteOverlay`), so nothing should run on Enter either. */
+  private commandPaletteMatches(palette: CommandPalette): number[] {
+    return palette.query.trim() === '' ? [] : paletteMatches(palette.query, PALETTE_COMMANDS.map((c) => c.label));
+  }
+
+  private onCommandPaletteKey(data: string): void {
+    const palette = this.commandPalette;
+    if (!palette) {
+      return;
+    }
+    if (data === '\x1b' || data === '\x03') {
+      this.commandPalette = null;
+      out.write(`${ESC}2J`);
+    } else if (data === '\r') {
+      const matches = this.commandPaletteMatches(palette);
+      const command = PALETTE_COMMANDS[matches[palette.index]];
+      this.commandPalette = null;
+      out.write(`${ESC}2J`);
+      command?.run(this);
+    } else if (data === '\x1b[A') {
+      palette.index = Math.max(0, palette.index - 1);
+    } else if (data === '\x1b[B') {
+      const matches = this.commandPaletteMatches(palette);
+      palette.index = Math.min(Math.max(0, matches.length - 1), palette.index + 1);
+    } else if (data === '\x7f' || data === '\b') {
+      palette.query = Array.from(palette.query).slice(0, -1).join('');
+      palette.index = 0;
+    } else if (data === '\x15') {
+      palette.query = ''; // Ctrl+U
+      palette.index = 0;
+    } else if (!data.startsWith('\x1b')) {
+      // eslint-disable-next-line no-control-regex -- strips control characters from typed/pasted text
+      palette.query += data.replace(/[\x00-\x1f\x7f]/g, '');
+      palette.index = 0;
+    }
+    this.render();
+  }
+
   /** Every prompt/reply of every session with a real id, keyed by session id — read once per search, lazily. */
   private async loadSearchText(): Promise<Map<string, string>> {
     const searchable = this.unhiddenSessions.filter((s) => s.id);
@@ -1677,8 +1745,12 @@ export class App {
     this.resizeAllToPane();
   }
 
-  /** `b` from the list, or `Ctrl+K B` while typing in place: hides/shows the sessions panel, giving the preview the whole width. Not offered while attached — there's no panel to show there (see `attach()`). */
-  private toggleSidebar(): void {
+  /**
+   * `b` from the list, or `Ctrl+K B` while typing in place: hides/shows the sessions panel, giving the
+   * preview the whole width. Not offered while attached — there's no panel to show there (see `attach()`).
+   * Not `private`: also one of `PALETTE_COMMANDS` (`commands.ts`).
+   */
+  toggleSidebar(): void {
     this.sidebarVisible = !this.sidebarVisible;
     out.write(`${ESC}2J`);
     this.resizeAllToPane();
@@ -1726,6 +1798,10 @@ export class App {
     }
     if (this.search) {
       this.onSearchKey(data);
+      return;
+    }
+    if (this.commandPalette) {
+      this.onCommandPaletteKey(data);
       return;
     }
     if (this.picker) {
@@ -2023,7 +2099,7 @@ export class App {
         this.helpScroll = 0;
         break;
       case 'C':
-        this.configSelected = 0;
+        this.openConfig();
         break;
       case 'w':
         // Skills and subagents are a Claude Code concept — shown only when that's the Session Deck
@@ -2042,6 +2118,9 @@ export class App {
         break;
       case '/':
         this.openSearch();
+        break;
+      case ':':
+        this.openCommandPalette();
         break;
       case 'r':
         clearSessionMetaCache();
@@ -2153,7 +2232,8 @@ export class App {
     }
   }
 
-  private newSession(agent: AgentType): void {
+  /** Not `private`: also one of `PALETTE_COMMANDS` (`commands.ts`), via `activeAgentId`. */
+  newSession(agent: AgentType): void {
     if (this.config.tools[agent]?.enabled === false) {
       this.flash(`${agentDisplayName(agent)} is disabled (tools.${agent}.enabled: false in the config).`);
       this.render();
@@ -2176,8 +2256,9 @@ export class App {
    * Copilot, listed unconditionally, same as always) and basic-tier catalog agents (see `allAgentIds()`),
    * but only ones `isAgentAvailable` actually finds on this machine — no point offering e.g. Codex if
    * it isn't installed, when picking it could only ever end in a "not found" flash.
+   * Not `private`: also one of `PALETTE_COMMANDS` (`commands.ts`), as the `N` one-off picker.
    */
-  private openAgentPicker({ setActive }: { setActive: boolean }): void {
+  openAgentPicker({ setActive }: { setActive: boolean }): void {
     const candidates = allAgentIds().filter(
       (id) => this.config.tools[id]?.enabled !== false && (isBuiltinAgent(id) || isAgentAvailable(id))
     );
@@ -2462,8 +2543,8 @@ export class App {
     }
   }
 
-  /** `Z`: the trash, newest first; Enter restores. Items older than 30 days are removed on startup. */
-  private openTrashPicker(): void {
+  /** `Z`: the trash, newest first; Enter restores. Items older than 30 days are removed on startup. Not `private`: also one of `PALETTE_COMMANDS` (`commands.ts`). */
+  openTrashPicker(): void {
     const entries = listTrash();
     if (entries.length === 0) {
       this.flash('The trash is empty.');
@@ -2477,7 +2558,8 @@ export class App {
     };
   }
 
-  private rename(): void {
+  /** `e`/`F2`: rename the selected session or folder. Not `private`: also one of `PALETTE_COMMANDS` (`commands.ts`). */
+  rename(): void {
     const row = this.selectedRow;
     const s = this.current;
     if (s) {
@@ -2561,7 +2643,8 @@ export class App {
     );
   }
 
-  private openMovePicker(): void {
+  /** `M`: move the selected project to a folder. Not `private`: also one of `PALETTE_COMMANDS` (`commands.ts`). */
+  openMovePicker(): void {
     if (this.multiSelected.size) {
       this.openBulkMovePicker(this.multiSelection);
       return;
