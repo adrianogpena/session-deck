@@ -177,7 +177,7 @@ function renderGroupRow(t: Theme, width: number, row: Extract<ListRow, { kind: '
     return `${sel}${lead}${BOLD}${label}${RESET}${sel}${suffix}${pad}${RESET}`;
   }
   const nameRole: Role = row.kind === 'folder' ? 'purple' : 'cyan';
-  const running = row.running ? ` ${t.fg('green')}●${row.running}` : '';
+  const running = row.running ? ` ${t.fg('red')}●${row.running}` : '';
   const waiting = row.waiting ? ` ${t.fg('yellow')}◐${row.waiting}` : '';
   const git = gitText ? ` ${t.fg('yellow')}${gitText}` : '';
   return (
