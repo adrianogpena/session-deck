@@ -1,6 +1,6 @@
 import type { Terminal } from '@xterm/headless';
-import type { DailySpend, DeckConfig, GitStatus, TailedTurn, UsageMetric } from '@session-deck/core';
-import { renderUsageBar, usageSeverity, USAGE_METRIC_LABELS } from '@session-deck/core';
+import type { AlertEntry, DailySpend, DeckConfig, GitStatus, TailedTurn, TraceStep, UsageMetric } from '@session-deck/core';
+import { humanizeSince, renderUsageBar, usageSeverity, USAGE_METRIC_LABELS } from '@session-deck/core';
 import { fit, fitAnsi, fitTail, renderTerm, textWidth, wrap } from './ansi';
 import { CONFIG_FIELDS } from './configFields';
 import { STATUS_CATEGORIES, StatusCategory, TimeFilter } from './filters';
@@ -527,6 +527,7 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
       ['p', 'Add a project: new session in any folder'],
       ['o', 'Send a one-line prompt without attaching'],
       ['c', 'Copy the last response'],
+      ['v', 'Trajectory: structured trace of messages and tool calls (Claude sessions only)'],
       ['e  F2', "Rename (same as Claude's /rename)"],
       ['Ctrl+L', "Clear context (same as Claude's /clear), without attaching — idle, done, or error only"],
       ['x', 'Stop the selected session'],
@@ -591,6 +592,7 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
       ['?', 'This help'],
       ['C', 'Show the config file in use'],
       ['w', 'Show local skills / agents (← → switches tabs)'],
+      ['a', 'Alert history: every status change sdeck has noticed'],
       ['q  Ctrl+C', 'Quit (stops background sessions)'],
     ],
   },
@@ -793,6 +795,79 @@ export function skillsOverlay(
   return { x: Math.max(0, Math.floor((cols - width) / 2)), y: Math.max(0, Math.floor((rows - lines.length) / 2)), lines, maxScroll };
 }
 
+const TRACE_KIND_ROLE: Record<TraceStep['kind'], Role> = { user: 'cyan', assistant: 'orange', tool: 'purple' };
+const TRACE_KIND_PREFIX: Record<TraceStep['kind'], string> = { user: 'You', assistant: 'Claude', tool: 'Tool' };
+
+/**
+ * The trajectory popup (`v`): a two-column trace of one Claude session's prompts, replies and tool
+ * calls (see `readSessionTrace`/`buildTraceFromLines`) — left = step list, right = the selected step's
+ * full detail, like pitago's `/trajectory`. `selected` picks the step (↑↓); `detailScroll` scrolls the
+ * right column independently, since a tool's input/result commonly runs longer than the box is tall.
+ */
+export function traceOverlay(
+  t: Theme,
+  cols: number,
+  rows: number,
+  steps: readonly TraceStep[],
+  selected: number,
+  detailScroll: number
+): { x: number; y: number; lines: string[]; maxDetailScroll: number } {
+  const width = Math.min(110, cols - 4);
+  const inner = width - 6;
+  const leftW = Math.max(16, Math.min(36, Math.floor(inner * 0.34)));
+  const rightW = Math.max(10, inner - leftW - 1);
+  const bodyHeight = Math.max(3, rows - 7);
+
+  const leftLines: string[] = [];
+  if (steps.length === 0) {
+    leftLines.push(`${t.fg('textDim')}${fit('No messages or tool calls yet.', leftW)}`);
+  }
+  const start = Math.max(0, Math.min(selected - Math.floor(bodyHeight / 2), Math.max(0, steps.length - bodyHeight)));
+  for (let i = 0; i < bodyHeight; i++) {
+    const step = steps[start + i];
+    if (!step) {
+      leftLines.push(blank(leftW));
+      continue;
+    }
+    const text = `${TRACE_KIND_PREFIX[step.kind]}: ${step.isError ? '✕ ' : ''}${step.label}`;
+    leftLines.push(
+      start + i === selected
+        ? `${t.bg('accent')}${t.fg('bg')}${BOLD}${fit(` ${text}`, leftW)}`
+        : `${t.fg(step.isError ? 'red' : TRACE_KIND_ROLE[step.kind])}${fit(` ${text}`, leftW)}`
+    );
+  }
+
+  const selectedStep = steps[selected];
+  const detailWrapped = selectedStep ? wrap(selectedStep.detail, Math.max(10, rightW - 1)) : [];
+  const maxDetailScroll = Math.max(0, detailWrapped.length - bodyHeight);
+  const detailOffset = Math.min(detailScroll, maxDetailScroll);
+  const detailVisible = detailWrapped.slice(detailOffset, detailOffset + bodyHeight);
+
+  const s = t.bg('surface');
+  const bodyRows: string[] = [];
+  for (let i = 0; i < bodyHeight; i++) {
+    const left = leftLines[i] ?? blank(leftW);
+    const right = `${t.fg('text')}${fit(detailVisible[i] ?? '', rightW)}`;
+    bodyRows.push(`${left}${RESET}${s}${t.fg('border')}│${right}`);
+  }
+  const scrollNote = maxDetailScroll > 0 ? (detailOffset < maxDetailScroll ? ' ▼ more below' : detailOffset > 0 ? ' ▲ more above' : '') : '';
+  bodyRows.push(`${t.fg('textDim')}${fit(`↑↓ select step · PgUp/PgDn scroll detail${scrollNote} · Esc or v to close`, inner)}`);
+
+  const maxBody = Math.max(4, rows - 6);
+  const offset = Math.max(0, bodyRows.length - maxBody);
+  const visible = bodyRows.slice(offset, offset + maxBody);
+  const border = `${s}${t.fg('purple')}`;
+  const title = ' TRAJECTORY ';
+  const left0 = Math.floor((width - 2 - title.length) / 2);
+  const lines = [
+    `${border}╭${'─'.repeat(left0)}${BOLD}${title}${RESET}${border}${'─'.repeat(width - 2 - left0 - title.length)}╮${RESET}`,
+    `${border}│${s}${blank(width - 2)}${border}│${RESET}`,
+    ...visible.map((l) => `${border}│${s}  ${l}${RESET}${s}  ${border}│${RESET}`),
+    `${border}╰${'─'.repeat(width - 2)}╯${RESET}`,
+  ];
+  return { x: Math.max(0, Math.floor((cols - width) / 2)), y: Math.max(0, Math.floor((rows - lines.length) / 2)), lines, maxDetailScroll };
+}
+
 export function themeLabel(preference: string, resolved: ThemeName): string {
   return preference === 'system' ? `system (${resolved})` : resolved;
 }
@@ -909,4 +984,54 @@ export function searchOverlay(
     `${border}╰${'─'.repeat(width - 2)}╯${RESET}`,
   ];
   return { x: Math.max(0, Math.floor((cols - width) / 2)), y: Math.max(0, Math.floor((rows - lines.length) / 2)), lines };
+}
+
+const ALERT_VERB: Record<AlertEntry['status'], string> = { running: 'Running', waiting: 'Waiting', done: 'Done', error: 'Error' };
+
+function alertLines(t: Theme, inner: number, alerts: readonly AlertEntry[]): string[] {
+  if (alerts.length === 0) {
+    return [`${t.fg('textDim')}${fit('Nothing yet — status changes show up here as they happen.', inner)}`];
+  }
+  return alerts.map((a) => {
+    const time = humanizeSince(a.at);
+    const text = `${ALERT_VERB[a.status]}: ${a.label}${a.project ? ` · ${a.project}` : ''}`;
+    const availWidth = Math.max(1, inner - 3 - textWidth(time));
+    return `${glyph(t, a.status)} ${t.fg('text')}${fit(text, availWidth)} ${t.fg('textDim')}${time}${RESET}`;
+  });
+}
+
+/**
+ * The alert history popup (`a`): every status change sdeck has noticed (see `appendAlert`/`readAlerts`
+ * in core), newest first — logged whether or not it also fired a desktop toast (see `WaitingNotifier`).
+ * Scrolls like the skills/help overlays; read-only, no per-row action.
+ */
+export function alertsOverlay(
+  t: Theme,
+  cols: number,
+  rows: number,
+  alerts: readonly AlertEntry[],
+  scroll: number
+): { x: number; y: number; lines: string[]; maxScroll: number } {
+  const width = Math.min(88, cols - 4);
+  const inner = width - 6;
+  const content = alertLines(t, inner, alerts);
+  content.push(blank(inner));
+  content.push(`${t.fg('textDim')}${fit('Esc or a to close', inner)}`);
+
+  const maxBody = Math.max(3, rows - 6);
+  const maxScroll = Math.max(0, content.length - maxBody);
+  const offset = Math.min(scroll, maxScroll);
+  const visible = content.slice(offset, offset + maxBody);
+  const s = t.bg('surface');
+  const border = `${s}${t.fg('purple')}`;
+  const title = ' ALERTS ';
+  const left = Math.floor((width - 2 - title.length) / 2);
+  const lines = [
+    `${border}╭${'─'.repeat(left)}${BOLD}${title}${RESET}${border}${'─'.repeat(width - 2 - left - title.length)}╮${RESET}`,
+    `${border}│${s}${blank(width - 2)}${border}│${RESET}`,
+    ...visible.map((l) => `${border}│${s}  ${l}${RESET}${s}  ${border}│${RESET}`),
+    `${border}│${s}${t.fg('yellow')}${fit(offset < maxScroll ? '  ▼ more below' : offset > 0 ? '  ▲ more above' : '', width - 2)}${border}│${RESET}`,
+    `${border}╰${'─'.repeat(width - 2)}╯${RESET}`,
+  ];
+  return { x: Math.max(0, Math.floor((cols - width) / 2)), y: Math.max(0, Math.floor((rows - lines.length) / 2)), lines, maxScroll };
 }

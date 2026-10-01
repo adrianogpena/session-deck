@@ -1,4 +1,5 @@
 import notifier from 'node-notifier';
+import { appendAlert } from './alertLog';
 import { claimNotification, readEffectiveSessionStatus, SessionStatus } from './sessionStatus';
 
 export interface WatchedSession {
@@ -15,6 +16,12 @@ export interface WaitingNotifierOptions {
   statuses?: readonly SessionStatus[];
   /** Skip a session the user is already looking at. */
   skip?(sessionId: string): boolean;
+  /**
+   * Desktop toasts are suppressed while this returns true — the transition is still logged to the
+   * alert history either way (see `appendAlert`). Matches z4-oriel's alert center, which never toasts
+   * while it's the focused window: the point of a toast is to reach you when you're not already looking.
+   */
+  isFocused?(): boolean;
 }
 
 const DEFAULT_STATUSES: readonly SessionStatus[] = ['waiting', 'error'];
@@ -57,10 +64,14 @@ export class WaitingNotifier {
       const current = record?.status;
       this.lastStatus.set(sessionId, current);
 
-      if (isFirstSight || current === previous || !record || !current || !statuses.includes(current)) {
+      if (isFirstSight || current === previous || !record || !current) {
         continue;
       }
-      if (this.options.skip?.(sessionId) || !claimNotification(sessionId, record.updatedAt)) {
+      // Logged regardless of whether this status is toast-eligible, or the toast below ends up
+      // suppressed — a history of what happened, not just of what you were interrupted for.
+      appendAlert({ sessionId, status: current, label, project, at: record.updatedAt });
+
+      if (!statuses.includes(current) || this.options.skip?.(sessionId) || this.options.isFocused?.() || !claimNotification(sessionId, record.updatedAt)) {
         continue;
       }
 

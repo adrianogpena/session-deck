@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   acknowledgeSessionStatus,
+  AlertEntry,
   appendClaudeRenameRecords,
   clearSessionStatus,
   copilotSessionSearchText,
@@ -36,9 +37,11 @@ import {
   normalizeFsPath,
   prependSession,
   projectNodeKey,
+  readAlerts,
   readDeckConfig,
   readLastAssistantResponse,
   readLatestRateLimitUsage,
+  readSessionTrace,
   readSessionUsage,
   readSevenDayDailySpend,
   renameFolder,
@@ -50,6 +53,7 @@ import {
   SIDEBAR_PCT_MIN,
   TailedTurn,
   ThemePreference,
+  TraceStep,
   TreePrefs,
   WaitingNotifier,
   writeDeckConfig,
@@ -60,7 +64,9 @@ import { matchesStatusFilter, nextTimeFilter, STATUS_CATEGORIES, StatusCategory,
 import { GitStatusTracker } from './gitStatusTracker';
 import {
   DISABLE_MOUSE,
+  ENABLE_FOCUS_REPORTING,
   ENABLE_MOUSE,
+  extractFocusEvents,
   findChordKey,
   findDetachKey,
   findPlainKey,
@@ -76,6 +82,7 @@ import { discoverLocalSkills, LocalSkill } from './skills';
 import { buildTree, isStarted, projectLabels, TreeOptions, TreeRow, UsageSectionInput } from './tree';
 import { extractBackgroundReply, OSC11_QUERY, readOsTheme, Theme, ThemeName } from './theme';
 import {
+  alertsOverlay,
   configOverlay,
   GroupPreview,
   helpOverlay,
@@ -97,6 +104,7 @@ import {
   skillsOverlay,
   SkillsPopupTab,
   themeLabel,
+  traceOverlay,
 } from './view';
 
 const out = process.stdout;
@@ -200,6 +208,23 @@ export class App {
   private skillsPopupTab: SkillsPopupTab = 'skills';
   private skills: LocalSkill[] = [];
   private agents: LocalAgent[] = [];
+  /**
+   * `v`: the selected Claude session's structured trace (prompts, replies, tool calls — see
+   * `readSessionTrace`), read fresh from its transcript each time the popup opens. `null` closes it;
+   * `traceSteps` is `[]` while still loading or when the session really has none yet.
+   */
+  private traceSteps: TraceStep[] | null = null;
+  private traceSelected = 0;
+  private traceDetailScroll = 0;
+  /** `a`: the shared alert history (every status change sdeck has noticed — see `readAlerts`), read fresh each time the popup opens. `null` closes it. */
+  private alertScroll: number | null = null;
+  private alerts: AlertEntry[] = [];
+  /**
+   * Whether the real terminal window is in front, per {@link ENABLE_FOCUS_REPORTING}'s `ESC[I`/`ESC[O`
+   * reports (see `consumeFocusEvents`). Assumed focused until told otherwise — a terminal that doesn't
+   * support the mode simply never sends an event, which should never cost a toast.
+   */
+  private focused = true;
   private search: Search | null = null;
   private statusFilter = new Set<StatusCategory>();
   private timeFilter: TimeFilter = 'all';
@@ -235,6 +260,7 @@ export class App {
   private readonly notifier = new WaitingNotifier({
     iconPath: path.join(__dirname, '..', 'resources', 'icon.png'),
     skip: (id) => this.attached?.id === id || this.interacting?.id === id,
+    isFocused: () => this.focused,
   });
   /** Last terminal title written, so it's only rewritten when the waiting count changes. */
   private lastTitle = '';
@@ -262,7 +288,7 @@ export class App {
     void this.pollGitStatus();
     setInterval(() => void this.pollGitStatus(), GIT_STATUS_POLL_MS);
 
-    out.write(`${ESC}?1049h${ESC}?25l${ESC}2J`);
+    out.write(`${ESC}?1049h${ESC}?25l${ESC}2J${ENABLE_FOCUS_REPORTING}`);
     process.stdin.setRawMode(true);
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', (data: string) => this.onInput(data));
@@ -794,9 +820,10 @@ export class App {
   /** Leaves full-screen attached mode: real terminal modes reset, its own title dropped, `attached` cleared. Shared by `detach()` and `switchToInteracting()` so the two can't drift apart. */
   private teardownAttached(): void {
     this.attached = null;
-    // RESET_AGENT_MODES already turns mouse reporting back off (among other things the agent may have
-    // changed) — restore it to whatever `mouseTracking` was before attaching, if it was on.
-    out.write(`${RESET_AGENT_MODES}${ESC}?25l${this.mouseTracking ? ENABLE_MOUSE : ''}`);
+    // RESET_AGENT_MODES already turns mouse reporting (and focus reporting) back off, among other
+    // things the agent may have changed — restore mouse to whatever `mouseTracking` was before
+    // attaching, and focus reporting unconditionally (sdeck always wants it outside an attached agent).
+    out.write(`${RESET_AGENT_MODES}${ESC}?25l${ENABLE_FOCUS_REPORTING}${this.mouseTracking ? ENABLE_MOUSE : ''}`);
     this.lastTitle = ''; // the agent set its own title while attached
   }
 
@@ -1171,6 +1198,16 @@ export class App {
       this.skillsScroll = Math.min(this.skillsScroll, overlay.maxScroll);
       overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
     }
+    if (this.traceSteps !== null) {
+      const overlay = traceOverlay(t, cols, height, this.traceSteps, this.traceSelected, this.traceDetailScroll);
+      this.traceDetailScroll = Math.min(this.traceDetailScroll, overlay.maxDetailScroll);
+      overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
+    }
+    if (this.alertScroll !== null) {
+      const overlay = alertsOverlay(t, cols, height, this.alerts, this.alertScroll);
+      this.alertScroll = Math.min(this.alertScroll, overlay.maxScroll);
+      overlay.lines.forEach((line, i) => (frame += `${ESC}${overlay.y + i + 1};${overlay.x + 1}H${line}`));
+    }
     if (this.search) {
       const labels = projectLabels(unhidden.map((s) => s.projectRoot));
       const rows: SearchResultRow[] = this.search.results.map((s) => ({ view: this.viewOf(s), projectLabel: labels.get(s.projectRoot) ?? s.projectRoot }));
@@ -1218,11 +1255,39 @@ export class App {
     return s.lastResponse;
   }
 
+  /** `v`: opens the trajectory popup for the selected session and loads its trace, read fresh from the transcript file every time. */
+  private openTrace(): void {
+    const s = this.current;
+    if (!s?.file || s.agent !== 'claude') {
+      this.flash('Trajectory is only available for Claude sessions.');
+      return;
+    }
+    const file = s.file;
+    this.traceSteps = [];
+    this.traceSelected = 0;
+    this.traceDetailScroll = 0;
+    void readSessionTrace(file).then((steps) => {
+      if (this.current?.file !== file || this.traceSteps === null) {
+        return; // closed, or selection moved on, while this was loading
+      }
+      this.traceSteps = steps;
+      this.traceSelected = Math.min(this.traceSelected, Math.max(0, steps.length - 1));
+      this.render();
+    });
+  }
+
   // -------------------------------------------------------------------------------------------
   // Input
   // -------------------------------------------------------------------------------------------
 
-  private onInput(data: string): void {
+  private onInput(rawData: string): void {
+    // Stripped ahead of everything else, so a focus report (see ENABLE_FOCUS_REPORTING) is never
+    // mistaken for a keypress — by us, or, while attached, by the agent it would otherwise be
+    // forwarded to — regardless of what else is going on (attached, interacting, a popup open).
+    const { focused, rest: data } = extractFocusEvents(rawData);
+    if (focused !== undefined) {
+      this.focused = focused;
+    }
     if (this.attached) {
       this.onKey(data);
       return;
@@ -1413,6 +1478,37 @@ export class App {
     this.render();
   }
 
+  private onTraceKey(data: string): void {
+    const steps = this.traceSteps ?? [];
+    if (data === '\x1b' || data === 'v' || data === 'q') {
+      this.traceSteps = null;
+      out.write(`${ESC}2J`);
+    } else if (data === '\x1b[A' || data === 'k') {
+      this.traceSelected = Math.max(0, this.traceSelected - 1);
+      this.traceDetailScroll = 0;
+    } else if (data === '\x1b[B' || data === 'j') {
+      this.traceSelected = Math.min(Math.max(0, steps.length - 1), this.traceSelected + 1);
+      this.traceDetailScroll = 0;
+    } else if (data === '\x1b[5~') {
+      this.traceDetailScroll += 5;
+    } else if (data === '\x1b[6~') {
+      this.traceDetailScroll = Math.max(0, this.traceDetailScroll - 5);
+    }
+    this.render();
+  }
+
+  private onAlertsKey(data: string): void {
+    if (data === '\x1b' || data === 'a' || data === 'q') {
+      this.alertScroll = null;
+      out.write(`${ESC}2J`);
+    } else if (data === '\x1b[A' || data === 'k') {
+      this.alertScroll = Math.max(0, (this.alertScroll ?? 0) - 1);
+    } else if (data === '\x1b[B' || data === 'j') {
+      this.alertScroll = (this.alertScroll ?? 0) + 1;
+    }
+    this.render();
+  }
+
   /** `toggle` fields flip themselves right away; the rest open a prompt pre-filled with their current value. */
   private editConfigField(index: number): void {
     const field = CONFIG_FIELDS[index];
@@ -1583,6 +1679,14 @@ export class App {
     }
     if (this.skillsScroll !== null) {
       this.onSkillsKey(data);
+      return;
+    }
+    if (this.traceSteps !== null) {
+      this.onTraceKey(data);
+      return;
+    }
+    if (this.alertScroll !== null) {
+      this.onAlertsKey(data);
       return;
     }
     if (this.search) {
@@ -1887,6 +1991,13 @@ export class App {
         this.agents = discoverLocalAgents();
         this.skillsPopupTab = 'skills';
         this.skillsScroll = 0;
+        break;
+      case 'v':
+        this.openTrace();
+        break;
+      case 'a':
+        this.alerts = readAlerts();
+        this.alertScroll = 0;
         break;
       case '/':
         this.openSearch();

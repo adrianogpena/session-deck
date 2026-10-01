@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { findChordKey, findDetachKey, findPlainKey, parseMouseSequence, splitKeys } from '../keys';
+import { extractFocusEvents, findChordKey, findDetachKey, findPlainKey, parseMouseSequence, splitKeys } from '../keys';
 
 test('splitKeys separates typed characters and keeps escape sequences whole', () => {
   assert.deepEqual(splitKeys('>>>'), ['>', '>', '>']);
@@ -57,4 +57,11 @@ test('parseMouseSequence recognizes a wheel notch, direction, and a plain click,
   assert.deepEqual(parseMouseSequence('\x1b[<0;10;5m'), {}); // left-click release
   assert.equal(parseMouseSequence('\x1b[A'), undefined);
   assert.equal(parseMouseSequence('n'), undefined);
+});
+
+test('extractFocusEvents strips focus-in/out and reports the last one in the chunk, leaving unrelated input untouched', () => {
+  assert.deepEqual(extractFocusEvents('\x1b[I'), { focused: true, rest: '' });
+  assert.deepEqual(extractFocusEvents('\x1b[O'), { focused: false, rest: '' });
+  assert.deepEqual(extractFocusEvents('n'), { focused: undefined, rest: 'n' });
+  assert.deepEqual(extractFocusEvents('a\x1b[Ob\x1b[Ic'), { focused: true, rest: 'abc' });
 });

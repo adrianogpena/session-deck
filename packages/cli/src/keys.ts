@@ -71,6 +71,31 @@ export const RESET_AGENT_MODES = '\x1b[?9001l\x1b[?2004l\x1b[?1004l\x1b[?1000l\x
 export const ENABLE_MOUSE = '\x1b[?1000h\x1b[?1006h';
 export const DISABLE_MOUSE = '\x1b[?1000l\x1b[?1006l';
 
+/**
+ * Lets the real terminal report window focus changes (mode 1004): `ESC[I` on focus-in, `ESC[O` on
+ * focus-out (see `App.consumeFocusEvents`), so a desktop toast isn't fired while sdeck is the window
+ * actually in front. On throughout, not just while attached — unlike `ENABLE_MOUSE`, there's no
+ * ambiguity with ordinary key presses to worry about. Harmless where the terminal doesn't support it:
+ * it just never sends the events, and sdeck stays at its assumed-focused default. `RESET_AGENT_MODES`
+ * already disables it (mode 1004l), both at quit and whenever an attached agent's own terminal-mode
+ * changes are reset on detach — `teardownAttached` turns it back on there, the same as it does `ENABLE_MOUSE`.
+ */
+export const ENABLE_FOCUS_REPORTING = '\x1b[?1004h';
+
+/**
+ * Strips `ESC[I`/`ESC[O` (focus-in/out, from {@link ENABLE_FOCUS_REPORTING}) out of raw input.
+ * `focused` is left `undefined` when `data` has neither — several in one chunk: the last one wins.
+ */
+export function extractFocusEvents(data: string): { focused?: boolean; rest: string } {
+  let focused: boolean | undefined;
+  // eslint-disable-next-line no-control-regex -- matching terminal control sequences is the point
+  const rest = data.replace(/\x1b\[[IO]/g, (m) => {
+    focused = m === '\x1b[I';
+    return '';
+  });
+  return { focused, rest };
+}
+
 /** A wheel notch or click, reported because {@link ENABLE_MOUSE} is on: `ESC [ < Cb ; Cx ; Cy (M|m)`. */
 // eslint-disable-next-line no-control-regex -- matching terminal control sequences is the point
 const MOUSE_SEQUENCE = /^\x1b\[<(\d+);(\d+);(\d+)[Mm]$/;

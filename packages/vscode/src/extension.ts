@@ -75,7 +75,12 @@ export async function activate(context: vscode.ExtensionContext) {
   const treeProvider = new SessionTreeProvider(state, context.extensionUri, closeTerminals, closeTerminals, usageView);
   const activeSessionProvider = new ActiveSessionProvider(treeProvider, terminalService, context.extensionUri);
   // resources/icon.png (not the tree's claude-mark.svg): most OS notifiers expect a raster icon.
-  const waitingNotifier = new WaitingNotifier(path.join(context.extensionPath, 'resources', 'icon.png'));
+  // isFocused: no toast while this window is the one in front — it's already logged either way (see
+  // WaitingNotifier), and the terminal UI's own toasts cover the case where this window isn't it.
+  const waitingNotifier = new WaitingNotifier({
+    iconPath: path.join(context.extensionPath, 'resources', 'icon.png'),
+    isFocused: () => vscode.window.state.focused,
+  });
   const claudeProcessWatcher = new ClaudeProcessWatcher((message) => outputChannel.appendLine(message));
 
   const treeView = vscode.window.createTreeView('sessionDeck.sessions', {
