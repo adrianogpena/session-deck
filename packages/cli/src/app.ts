@@ -23,6 +23,7 @@ import {
   deleteFolder,
   expandHome,
   folderNodeKey,
+  formatResetTime,
   freezeSessionOrder,
   humanizeSince,
   markSessionUnseen,
@@ -36,6 +37,9 @@ import {
   projectNodeKey,
   readDeckConfig,
   readLastAssistantResponse,
+  readLatestRateLimitUsage,
+  readSessionUsage,
+  readSevenDayDailySpend,
   renameFolder,
   renameSessionId,
   resolveProjectRoot,
@@ -67,7 +71,7 @@ import { computeLayout, Layout, ptySizeFor, Rect } from './layout';
 import { AgentType, clearExecutableCache, disposeLive, LiveSession, resizeLive, spawnAgent, typeLine, warmExecutables } from './liveSession';
 import { DeckSession, StatusTracker, discoverSessions, displayTitle, refreshLiveTitle } from './sessions';
 import { discoverLocalSkills, LocalSkill } from './skills';
-import { buildTree, isStarted, projectLabels, TreeOptions, TreeRow } from './tree';
+import { buildTree, isStarted, projectLabels, TreeOptions, TreeRow, UsageSectionInput } from './tree';
 import { extractBackgroundReply, OSC11_QUERY, readOsTheme, Theme, ThemeName } from './theme';
 import {
   configOverlay,
@@ -454,6 +458,29 @@ export class App {
       recentProjectsFirst: this.config.ui.recentProjectsFirst,
       recentSessionsFirst: this.config.ui.recentSessionsFirst,
       tagsOf: (s) => this.tagsOf(s),
+      usage: this.config.ui.showUsage ? this.usageSectionInput() : undefined,
+    };
+  }
+
+  /**
+   * The bottom usage section's data. Context tracks whichever session row is currently selected
+   * (`this.current`) — the closest thing this single-pane UI has to VS Code's "active terminal"; a
+   * Copilot session (no statusLine hook) just reads as no data. 5h/7d are account-wide, so they come
+   * from whichever session's statusLine reported most recently, regardless of what's selected.
+   */
+  private usageSectionInput(): UsageSectionInput {
+    const current = this.current;
+    const sessionUsage = current?.id ? readSessionUsage(current.id) : undefined;
+    const rateLimit = readLatestRateLimitUsage();
+    return {
+      contextPercent: sessionUsage?.contextPercent,
+      contextUpdatedAt: sessionUsage?.updatedAt,
+      rateLimit,
+      fiveHourResetLabel: rateLimit?.fiveHourResetsAt ? formatResetTime(rateLimit.fiveHourResetsAt, this.config.ui.use24HourClock) : undefined,
+      sevenDayResetLabel: rateLimit?.sevenDayResetsAt
+        ? formatResetTime(rateLimit.sevenDayResetsAt, this.config.ui.use24HourClock, true)
+        : undefined,
+      sevenDayDailySpend: readSevenDayDailySpend(),
     };
   }
 
@@ -1193,7 +1220,7 @@ export class App {
     let i = this.selected;
     do {
       i += delta;
-    } while (this.rows[i] && this.rows[i].kind === 'divider');
+    } while (this.rows[i] && isUnselectableRow(this.rows[i]));
     if (this.rows[i]) {
       this.selected = i;
     }
@@ -1885,7 +1912,7 @@ export class App {
     }
     if (row.collapsed) {
       this.toggleCollapsed(row);
-    } else if (this.rows[this.selected + 1] && this.rows[this.selected + 1].kind !== 'divider') {
+    } else if (this.rows[this.selected + 1] && !isUnselectableRow(this.rows[this.selected + 1])) {
       this.selected++;
     }
   }
@@ -2538,6 +2565,11 @@ function placeLines(rect: Rect, lines: string[]): string {
     .slice(0, rect.height)
     .map((line, i) => `${ESC}${rect.y + i + 1};${rect.x + 1}H${line}`)
     .join('');
+}
+
+/** Informational rows the cursor skips over — like a divider, there's nothing to do with one selected. */
+function isUnselectableRow(row: TreeRow): boolean {
+  return row.kind === 'divider' || row.kind === 'usage' || row.kind === 'usageBudget';
 }
 
 /** Same logical row across rebuilds (rows are recreated each time). */

@@ -14,6 +14,8 @@ import { resolveProjectRoot } from '@session-deck/core';
 import { normalizeFsPath, isInside } from '@session-deck/core';
 import { mapWithConcurrency } from '@session-deck/core';
 import { ensureSessionStatusDir, getSessionStatusDir, readEffectiveSessionStatus, SessionStatusRecord } from '@session-deck/core';
+import { readDeckConfig, readLatestRateLimitUsage, readSessionUsage, readSevenDayDailySpend } from '@session-deck/core';
+import { DailySpend, formatResetTime, renderUsageBar, UsageMetric, usageSeverity, USAGE_METRIC_LABELS, UsageSeverity } from '@session-deck/core';
 import { sessionStatusUri } from '../status/sessionStatusDecorationProvider';
 import { DeckState } from '../config/state';
 import { readWorkspaceProjectEntries } from '../config/workspaceConfig';
@@ -120,7 +122,42 @@ export class ArchiveFolderNode {
   ) {}
 }
 
-export type ClaudeDeckNode = AgentFolderNode | FolderNode | ProjectGroupNode | SessionNode | ArchiveFolderNode;
+/** One toggleable usage row (Context / 5h / 7d), pinned to the bottom of the tree — see `UsageViewController`. */
+export class UsageNode {
+  readonly kind = 'usage' as const;
+  constructor(
+    public readonly metric: UsageMetric,
+    public readonly percent: number | undefined,
+    public readonly updatedAt: number | undefined,
+    /** `fiveHour` only. */
+    public readonly resetsAt: number | undefined,
+    public readonly hasFocusedSession: boolean
+  ) {}
+}
+
+/** The "Rest of week" row below 7d — this week's day-by-day spend against the 7d quota, not a usage reading of its own. */
+export class UsageBudgetNode {
+  readonly kind = 'usageBudget' as const;
+  constructor(
+    /** Monday through today, weekends included; empty when nothing's been recorded yet. */
+    public readonly days: DailySpend[]
+  ) {}
+}
+
+/** Who's "focused" (for the Context % row) and whether the usage row should show at all — supplied by `extension.ts`, which owns both the active terminal and the show/hide toggle. */
+export interface UsageViewController {
+  isVisible(): boolean;
+  getFocusedSessionId(): string | undefined;
+}
+
+export type ClaudeDeckNode =
+  | AgentFolderNode
+  | FolderNode
+  | ProjectGroupNode
+  | SessionNode
+  | ArchiveFolderNode
+  | UsageNode
+  | UsageBudgetNode;
 
 /** The project's key in the shared tree prefs, same as the terminal UI's (`normalizeFsPath` of the root). */
 export function projectKeyOf(node: ProjectGroupNode): string {
@@ -151,7 +188,9 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
     /** Called with the ids of any sessions `enforceArchiveCap` just auto-archived, so their terminals (if open) can be closed. */
     private readonly onSessionsArchived?: (sessionIds: string[]) => void,
     /** Called with the ids of any sessions `enforceIdleStop` just found idle past their project's threshold, so their terminals can be closed. Independent of archiving/pinning. */
-    private readonly onSessionsIdleStopped?: (sessionIds: string[]) => void
+    private readonly onSessionsIdleStopped?: (sessionIds: string[]) => void,
+    /** Supplies the bottom usage row's visibility and focused-session id. Omitted entirely in tests that don't care about it. */
+    private readonly usageView?: UsageViewController
   ) {}
 
   refresh(): void {
@@ -243,6 +282,14 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
       return item;
     }
 
+    if (element.kind === 'usage') {
+      return this.usageTreeItem(element);
+    }
+
+    if (element.kind === 'usageBudget') {
+      return this.usageBudgetTreeItem(element);
+    }
+
     const archived = this.state.isSessionArchived(element.sessionId);
     const pin = archived ? undefined : this.state.getSessionPin(element.sessionId);
     const item = new vscode.TreeItem(pin ? `📌 ${element.displayName}` : element.displayName, vscode.TreeItemCollapsibleState.None);
@@ -301,13 +348,81 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<ClaudeDeckNo
     return [];
   }
 
-  /** An `AgentFolderNode` per agent that has any sessions at all, or straight to the flat project list when only one agent qualifies. */
+  /** An `AgentFolderNode` per agent that has any sessions at all, or straight to the flat project list when only one agent qualifies — plus the usage row, pinned last, when toggled on. */
   private async getRootNodes(): Promise<ClaudeDeckNode[]> {
     const agentsInUse = this.detectAgentsInUse();
-    if (agentsInUse.length <= 1) {
-      return this.getTopLevel(agentsInUse[0] ?? 'claude');
+    const nodes: ClaudeDeckNode[] =
+      agentsInUse.length <= 1
+        ? await this.getTopLevel(agentsInUse[0] ?? 'claude')
+        : AGENTS.filter((a) => agentsInUse.includes(a)).map((a) => new AgentFolderNode(a));
+    if (this.usageView?.isVisible()) {
+      const focusedSessionId = this.usageView.getFocusedSessionId();
+      const hasFocusedSession = focusedSessionId !== undefined;
+      // Context is specific to the focused session's own transcript; 5h/7d are account-wide, so they're
+      // read from whichever session's statusLine reported most recently, not tied to what's focused.
+      const sessionUsage = focusedSessionId ? readSessionUsage(focusedSessionId) : undefined;
+      const rateLimit = readLatestRateLimitUsage();
+      nodes.push(new UsageNode('context', sessionUsage?.contextPercent, sessionUsage?.updatedAt, undefined, hasFocusedSession));
+      nodes.push(new UsageNode('fiveHour', rateLimit?.fiveHourPercent, rateLimit?.updatedAt, rateLimit?.fiveHourResetsAt, hasFocusedSession));
+      nodes.push(new UsageNode('sevenDay', rateLimit?.sevenDayPercent, rateLimit?.updatedAt, rateLimit?.sevenDayResetsAt, hasFocusedSession));
+      nodes.push(new UsageBudgetNode(readSevenDayDailySpend()));
     }
-    return AGENTS.filter((a) => agentsInUse.includes(a)).map((a) => new AgentFolderNode(a));
+    return nodes;
+  }
+
+  /** `—` for a field with no data yet (never resumed since `statusline-command.sh` started recording it, or no session focused). */
+  private usageTreeItem(element: UsageNode): vscode.TreeItem {
+    const item = new vscode.TreeItem(USAGE_METRIC_LABELS[element.metric], vscode.TreeItemCollapsibleState.None);
+    item.contextValue = 'sessionDeckUsage';
+
+    // `ui.use24HourClock` is shared with the terminal UI's config popup (`C`), there's no VS Code setting of its own.
+    // sevenDay's reset can be days out, so its label is prefixed with the weekday — fiveHour's never needs it.
+    const resetLabel = element.resetsAt
+      ? formatResetTime(element.resetsAt, readDeckConfig().ui.use24HourClock, element.metric === 'sevenDay')
+      : undefined;
+
+    if (element.percent === undefined) {
+      item.description = '—';
+      item.iconPath = new vscode.ThemeIcon('dash');
+    } else {
+      item.description = `${renderUsageBar(element.percent)} ${element.percent}%${resetLabel ? ` (${resetLabel})` : ''}`;
+      item.iconPath = new vscode.ThemeIcon('circle-large-filled', usageColor(element.metric, element.percent));
+    }
+
+    const tooltipLines = [
+      element.metric === 'context' && !element.hasFocusedSession
+        ? 'No session focused — open a Claude session and select its terminal to see its usage.'
+        : undefined,
+      resetLabel ? `Resets ${resetLabel}` : undefined,
+      element.updatedAt
+        ? `Updated ${timeAgo(new Date(element.updatedAt))}`
+        : element.metric === 'context'
+          ? element.hasFocusedSession
+            ? 'No usage data recorded yet for this session.'
+            : undefined
+          // 5h/7d are account-wide — no session needs to be focused for these to have data.
+          : 'No usage data recorded yet — open any Claude session.',
+    ];
+    item.tooltip = tooltipLines.filter((line): line is string => Boolean(line)).join('\n');
+    return item;
+  }
+
+  /** This week's (Monday through today, weekends included) day-by-day spend against the 7d quota — not a budget, a record, so you can do the "how much is left" math yourself. */
+  private usageBudgetTreeItem(element: UsageBudgetNode): vscode.TreeItem {
+    const item = new vscode.TreeItem('This week', vscode.TreeItemCollapsibleState.None);
+    item.contextValue = 'sessionDeckUsage';
+    item.iconPath = new vscode.ThemeIcon('calendar');
+
+    item.description =
+      element.days.length === 0 ? '—' : element.days.map((d) => `${d.label} ${Math.round(d.percent)}%`).join(' · ');
+
+    const tooltipLines = [
+      element.days.length === 0 ? 'No usage data recorded yet — open any Claude session.' : undefined,
+      ...element.days.map((d) => `${d.label}: ${Math.round(d.percent)}% of the 7d quota`),
+      'A day with no reading (Session Deck wasn’t running) is folded into the next recorded day.',
+    ];
+    item.tooltip = tooltipLines.filter((line): line is string => Boolean(line)).join('\n');
+    return item;
   }
 
   /**
@@ -579,6 +694,13 @@ interface SessionCandidate {
 
 function agentLabel(agent: AgentType): string {
   return agent === 'claude' ? 'Claude' : 'Copilot';
+}
+
+/** Thresholds and bar rendering live in `@session-deck/core` (`usageDisplay.ts`) so the terminal UI matches exactly. */
+const USAGE_SEVERITY_COLOR: Record<UsageSeverity, string> = { ok: 'charts.green', warning: 'charts.yellow', critical: 'charts.red' };
+
+function usageColor(metric: UsageMetric, percent: number): vscode.ThemeColor {
+  return new vscode.ThemeColor(USAGE_SEVERITY_COLOR[usageSeverity(metric, percent)]);
 }
 
 /** The cwd a ~/.claude/projects/<dirName> folder was created for, read from its first session. */

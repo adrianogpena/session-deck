@@ -49,6 +49,13 @@ export interface DeckConfig {
      * jumps between sessions already shown, same as `j`/`k`, when `false`. Default: true.
      */
     expandCollapsedOnActiveJump: boolean;
+    /**
+     * A Context / 5h / 7d usage section (plus a "days left this week" budget line) pinned to the
+     * bottom of the session list, for the currently selected Claude session. Default: true.
+     */
+    showUsage: boolean;
+    /** The 5h usage row's reset time shows as `20:30` when `true`, `8:30 PM` when `false`. Default: false. */
+    use24HourClock: boolean;
   };
   tools: {
     claude: ToolConfig;
@@ -76,6 +83,8 @@ function defaultDeckConfig(): DeckConfig {
       newSessionFullScreen: true,
       gitStatus: true,
       expandCollapsedOnActiveJump: true,
+      showUsage: true,
+      use24HourClock: false,
     },
     tools: { claude: {}, copilot: {} },
     trash: { retentionDays: DEFAULT_TRASH_RETENTION_DAYS },
@@ -119,8 +128,18 @@ export function parseDeckConfig(raw: string): DeckConfig {
   }
   const { ui, tools, trash } = parsed as Record<string, unknown>;
   if (typeof ui === 'object' && ui !== null) {
-    const { maxSessionsListed, notifications, notifyStatuses, recentProjectsFirst, recentSessionsFirst, newSessionFullScreen, gitStatus, expandCollapsedOnActiveJump } =
-      ui as Record<string, unknown>;
+    const {
+      maxSessionsListed,
+      notifications,
+      notifyStatuses,
+      recentProjectsFirst,
+      recentSessionsFirst,
+      newSessionFullScreen,
+      gitStatus,
+      expandCollapsedOnActiveJump,
+      showUsage,
+      use24HourClock,
+    } = ui as Record<string, unknown>;
     if (typeof maxSessionsListed === 'number' && Number.isInteger(maxSessionsListed) && maxSessionsListed > 0) {
       config.ui.maxSessionsListed = maxSessionsListed;
     }
@@ -144,6 +163,12 @@ export function parseDeckConfig(raw: string): DeckConfig {
     }
     if (typeof expandCollapsedOnActiveJump === 'boolean') {
       config.ui.expandCollapsedOnActiveJump = expandCollapsedOnActiveJump;
+    }
+    if (typeof showUsage === 'boolean') {
+      config.ui.showUsage = showUsage;
+    }
+    if (typeof use24HourClock === 'boolean') {
+      config.ui.use24HourClock = use24HourClock;
     }
   }
   if (typeof tools === 'object' && tools !== null) {

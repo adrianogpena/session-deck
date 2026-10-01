@@ -14,6 +14,8 @@ export * from './fuzzyMatch';
 export * from './status/claudeProcessWatcher';
 export * from './status/copilotStatusWatcher';
 export * from './status/sessionStatus';
+export * from './status/sessionUsage';
+export * from './status/usageDisplay';
 export * from './status/waitingNotifier';
 export * from './stopIdlePolicy';
 export * from './store/deckConfig';

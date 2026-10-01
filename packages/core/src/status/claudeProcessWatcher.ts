@@ -25,6 +25,7 @@ interface ClaudeProcessFile {
   pid: number;
   sessionId: string;
   status: string;
+  cwd?: string;
 }
 
 function parseClaudeProcessFile(raw: string): ClaudeProcessFile | undefined {
@@ -37,11 +38,11 @@ function parseClaudeProcessFile(raw: string): ClaudeProcessFile | undefined {
   if (typeof parsed !== 'object' || parsed === null) {
     return undefined;
   }
-  const { pid, sessionId, status } = parsed as Record<string, unknown>;
+  const { pid, sessionId, status, cwd } = parsed as Record<string, unknown>;
   if (typeof pid !== 'number' || typeof sessionId !== 'string' || typeof status !== 'string') {
     return undefined;
   }
-  return { pid, sessionId, status };
+  return { pid, sessionId, status, cwd: typeof cwd === 'string' ? cwd : undefined };
 }
 
 /** Whether `pid` still refers to a live process — `process.kill(pid, 0)` probes without sending a real signal. A `<pid>.json` file isn't guaranteed to be cleaned up on exit, so a stale file should read as "gone". */
@@ -50,6 +51,8 @@ export interface LiveClaudeProcess {
   sessionId: string;
   /** Claude's own value: `busy`, `waiting`, `idle`, `shell`... */
   status: string;
+  /** The cwd Claude started in — undefined only if a hand-crafted or corrupted pid file lacks it. */
+  cwd?: string;
 }
 
 /** Every `claude` process running right now, on any terminal (from its pid file, checked for liveness). */

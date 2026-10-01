@@ -1,5 +1,6 @@
 import type { Terminal } from '@xterm/headless';
-import type { DeckConfig, GitStatus } from '@session-deck/core';
+import type { DailySpend, DeckConfig, GitStatus, UsageMetric } from '@session-deck/core';
+import { renderUsageBar, usageSeverity, USAGE_METRIC_LABELS } from '@session-deck/core';
 import { fit, fitAnsi, fitTail, renderTerm, textWidth, wrap } from './ansi';
 import { CONFIG_FIELDS } from './configFields';
 import { STATUS_CATEGORIES, StatusCategory, TimeFilter } from './filters';
@@ -63,7 +64,9 @@ export type ListRow =
   | ({ kind: 'project'; label: string; collapsed: boolean; depth: number; hotkey?: number; git?: GitStatus } & GroupCounts)
   | { kind: 'session'; view: SessionView; isLast: boolean; depth: number; pin?: 'top' | 'bottom'; checked?: boolean }
   | { kind: 'divider'; label: string }
-  | { kind: 'tag'; name: string; count: number; active: boolean };
+  | { kind: 'tag'; name: string; count: number; active: boolean }
+  | { kind: 'usage'; metric: UsageMetric; percent?: number; updatedAt?: number; resetLabel?: string }
+  | { kind: 'usageBudget'; days: DailySpend[] };
 
 function glyph(t: Theme, status: SessionStatus): string {
   const g = GLYPHS[status];
@@ -235,6 +238,40 @@ function renderTagRow(t: Theme, width: number, row: Extract<ListRow, { kind: 'ta
   return `${t.fg('textDim')}${lead}${style}${text}${RESET}${t.fg('textDim')}${suffix}${RESET}${pad}`;
 }
 
+/** Fixed-width so Context/5h/7d bars line up with each other and with the "Week" budget row below them. */
+const USAGE_LABEL_WIDTH = 7;
+
+const USAGE_SEVERITY_ROLE: Record<ReturnType<typeof usageSeverity>, Role> = { ok: 'green', warning: 'yellow', critical: 'red' };
+
+/** `5h  ███████░░░ 73% (8:30 PM)`, or `7d  ███████░░░ 73% (Mon 8:30 PM)`, or `—` when this session has no usage data recorded yet. */
+function renderUsageRow(t: Theme, width: number, row: Extract<ListRow, { kind: 'usage' }>): string {
+  const lead = '  ';
+  const label = fit(USAGE_METRIC_LABELS[row.metric], USAGE_LABEL_WIDTH);
+  const resetSuffix = row.resetLabel ? ` (${row.resetLabel})` : '';
+  const text = row.percent === undefined ? `${label} —` : `${label} ${renderUsageBar(row.percent)} ${row.percent}%${resetSuffix}`;
+  const fitted = fit(text, Math.max(1, width - textWidth(lead)));
+  const pad = blank(width - textWidth(lead) - textWidth(fitted));
+  if (row.percent === undefined) {
+    return `${t.fg('textDim')}${lead}${fitted}${RESET}${pad}`;
+  }
+  const role = USAGE_SEVERITY_ROLE[usageSeverity(row.metric, row.percent)];
+  return (
+    `${t.fg('textDim')}${lead}${t.fg('text')}${label} ${t.fg(role)}${renderUsageBar(row.percent)}${RESET} ${t.fg('text')}${row.percent}%` +
+    `${t.fg('textDim')}${resetSuffix}${RESET}${pad}`
+  );
+}
+
+/** This week's day-by-day spend against the 7d quota (Monday through today, weekends included), below the 7d row. */
+function renderUsageBudgetRow(t: Theme, width: number, row: Extract<ListRow, { kind: 'usageBudget' }>): string {
+  const lead = '  ';
+  const label = fit('Week', USAGE_LABEL_WIDTH);
+  const text =
+    row.days.length === 0 ? `${label} —` : `${label} ${row.days.map((d) => `${d.label}${Math.round(d.percent)}%`).join(' ')}`;
+  const fitted = fit(text, Math.max(1, width - textWidth(lead)));
+  const pad = blank(width - textWidth(lead) - textWidth(fitted));
+  return `${t.fg('textDim')}${lead}${t.fg('text')}${fitted}${RESET}${pad}`;
+}
+
 /** Lines for the sessions panel, exactly `rect.width` columns each, `rect.height` lines. */
 export function renderListPanel(t: Theme, rect: Rect, rows: ListRow[], selected: number, note: string, emptyMessage: string): string[] {
   const lines = panelHeader(t, rect.width, 'SESSIONS', note);
@@ -257,6 +294,10 @@ export function renderListPanel(t: Theme, rect: Rect, rows: ListRow[], selected:
       lines.push(renderDividerRow(t, rect.width, row.label));
     } else if (row.kind === 'tag') {
       lines.push(renderTagRow(t, rect.width, row, isSelected));
+    } else if (row.kind === 'usage') {
+      lines.push(renderUsageRow(t, rect.width, row));
+    } else if (row.kind === 'usageBudget') {
+      lines.push(renderUsageBudgetRow(t, rect.width, row));
     } else {
       lines.push(renderGroupRow(t, rect.width, row, isSelected));
     }

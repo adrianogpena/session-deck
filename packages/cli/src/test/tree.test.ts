@@ -152,6 +152,62 @@ test('buildTree omits the TAGS section entirely when nothing is tagged', () => {
   assert.equal(rows.some((r) => r.kind === 'tag' || (r.kind === 'divider' && r.label === 'TAGS')), false);
 });
 
+test('buildTree omits the usage section when opts.usage is undefined', () => {
+  const rows = buildTree(sessions, defaultTreePrefs(), opts()).rows;
+  assert.equal(rows.some((r) => r.kind === 'usage' || r.kind === 'usageBudget'), false);
+});
+
+test('buildTree appends a USAGE divider and the four usage rows, carrying context and rate-limit data separately and passing the week day-by-day spend through', () => {
+  const rateLimit = { fiveHourPercent: 30, sevenDayPercent: 75, updatedAt: 456 };
+  const sevenDayDailySpend = [{ label: 'Mo', percent: 75 }];
+  const rows = buildTree(
+    sessions,
+    defaultTreePrefs(),
+    opts({
+      usage: { contextPercent: 42, contextUpdatedAt: 789, rateLimit, fiveHourResetLabel: '8:30 PM', sevenDayResetLabel: 'Sun 4:21 PM', sevenDayDailySpend },
+    })
+  ).rows;
+  assert.deepEqual(rows.slice(-5), [
+    { kind: 'divider', label: 'USAGE' },
+    { kind: 'usage', metric: 'context', percent: 42, updatedAt: 789 },
+    { kind: 'usage', metric: 'fiveHour', percent: 30, updatedAt: 456, resetLabel: '8:30 PM' },
+    { kind: 'usage', metric: 'sevenDay', percent: 75, updatedAt: 456, resetLabel: 'Sun 4:21 PM' },
+    { kind: 'usageBudget', days: sevenDayDailySpend },
+  ]);
+});
+
+test('buildTree keeps 5h/7d (account-wide) even when nothing is selected to read context from', () => {
+  const rateLimit = { fiveHourPercent: 60, sevenDayPercent: 70, updatedAt: 999 };
+  const sevenDayDailySpend = [{ label: 'Mo', percent: 70 }];
+  const rows = buildTree(
+    sessions,
+    defaultTreePrefs(),
+    opts({ usage: { contextPercent: undefined, contextUpdatedAt: undefined, rateLimit, sevenDayDailySpend } })
+  ).rows;
+  const usageRows = rows.slice(-4) as Extract<TreeRow, { kind: 'usage' | 'usageBudget' }>[];
+  assert.equal((usageRows[0] as Extract<TreeRow, { kind: 'usage' }>).percent, undefined); // context: nothing focused
+  assert.equal((usageRows[1] as Extract<TreeRow, { kind: 'usage' }>).percent, 60); // fiveHour: still populated
+  assert.equal((usageRows[2] as Extract<TreeRow, { kind: 'usage' }>).percent, 70); // sevenDay: still populated
+  assert.deepEqual((usageRows[3] as Extract<TreeRow, { kind: 'usageBudget' }>).days, sevenDayDailySpend);
+});
+
+test('buildTree shows every usage field as undefined when nothing has ever recorded usage data, but still renders the section', () => {
+  const rows = buildTree(
+    sessions,
+    defaultTreePrefs(),
+    opts({ usage: { contextPercent: undefined, contextUpdatedAt: undefined, rateLimit: undefined, sevenDayDailySpend: [] } })
+  ).rows;
+  const usageRows = rows.slice(-5) as TreeRow[];
+  assert.deepEqual(
+    usageRows.map((r) => r.kind),
+    ['divider', 'usage', 'usage', 'usage', 'usageBudget']
+  );
+  for (const r of usageRows.filter((r): r is Extract<TreeRow, { kind: 'usage' }> => r.kind === 'usage')) {
+    assert.equal(r.percent, undefined);
+  }
+  assert.deepEqual((usageRows[4] as Extract<TreeRow, { kind: 'usageBudget' }>).days, []);
+});
+
 test('projectLabels adds the parent folder only when two projects share a name', () => {
   const labels = projectLabels(['C:\\repos\\api', 'X:\\demo\\shop', 'C:\\work\\shop']);
   assert.equal(labels.get('C:\\repos\\api'), 'api');

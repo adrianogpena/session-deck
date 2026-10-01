@@ -1,5 +1,18 @@
 import * as path from 'path';
-import { arrangeByManualOrder, arrangeProjects, folderNodeKey, GitStatus, projectNodeKey, SessionCategory, SessionPin, sortSessions, TreePrefs } from '@session-deck/core';
+import {
+  arrangeByManualOrder,
+  arrangeProjects,
+  DailySpend,
+  folderNodeKey,
+  GitStatus,
+  projectNodeKey,
+  SessionCategory,
+  SessionPin,
+  SessionUsageRecord,
+  sortSessions,
+  TreePrefs,
+  UsageMetric,
+} from '@session-deck/core';
 import type { DeckSession } from './sessions';
 
 export type TreeRow =
@@ -21,7 +34,28 @@ export type TreeRow =
     }
   | { kind: 'session'; session: DeckSession; isLast: boolean; depth: number; pin?: SessionPin }
   | { kind: 'divider'; label: string }
-  | { kind: 'tag'; name: string; count: number };
+  | { kind: 'tag'; name: string; count: number }
+  /** `resetLabel` (fiveHour/sevenDay) is pre-formatted per `DeckConfig.ui.use24HourClock` — see `UsageSectionInput`. */
+  | { kind: 'usage'; metric: UsageMetric; percent?: number; updatedAt?: number; resetLabel?: string }
+  | { kind: 'usageBudget'; days: DailySpend[] };
+
+/**
+ * Input for the bottom usage section — see `TreeOptions.usage`. `undefined` (the whole section, not
+ * this field) hides it entirely. Context is specific to the currently selected Claude session's own
+ * transcript; `rateLimit` (5h/7d) is account-wide, so it's whatever `readLatestRateLimitUsage` last saw
+ * across every session, independent of which one (if any) is selected right now.
+ */
+export interface UsageSectionInput {
+  contextPercent?: number;
+  contextUpdatedAt?: number;
+  rateLimit: Pick<SessionUsageRecord, 'fiveHourPercent' | 'sevenDayPercent' | 'updatedAt'> | undefined;
+  /** The 5h reset time, already formatted (`formatResetTime`) per the clock preference — `undefined` when there's no reset time recorded. */
+  fiveHourResetLabel?: string;
+  /** The 7d reset time, already formatted (`formatResetTime`, with its weekday) — `undefined` when there's no reset time recorded. */
+  sevenDayResetLabel?: string;
+  /** This week's day-by-day spend against the 7d quota — see `readSevenDayDailySpend`. */
+  sevenDayDailySpend: DailySpend[];
+}
 
 export interface TreeOptions {
   include(s: DeckSession): boolean;
@@ -43,6 +77,8 @@ export interface TreeOptions {
   recentSessionsFirst: boolean;
   /** A session's own tags, for the tag summary section at the bottom of the tree. */
   tagsOf(s: DeckSession): string[];
+  /** The Context/5h/7d usage section at the very bottom of the tree — omitted (not just empty) hides it entirely. See `DeckConfig.ui.showUsage`. */
+  usage?: UsageSectionInput;
 }
 
 export interface BuiltTree {
@@ -236,6 +272,27 @@ export function buildTree(sessions: DeckSession[], tree: TreePrefs, opts: TreeOp
     for (const [name, count] of [...tagCounts.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
       rows.push({ kind: 'tag', name, count });
     }
+  }
+
+  if (opts.usage) {
+    const { contextPercent, contextUpdatedAt, rateLimit, fiveHourResetLabel, sevenDayResetLabel, sevenDayDailySpend } = opts.usage;
+    rows.push({ kind: 'divider', label: 'USAGE' });
+    rows.push({ kind: 'usage', metric: 'context', percent: contextPercent, updatedAt: contextUpdatedAt });
+    rows.push({
+      kind: 'usage',
+      metric: 'fiveHour',
+      percent: rateLimit?.fiveHourPercent,
+      updatedAt: rateLimit?.updatedAt,
+      resetLabel: fiveHourResetLabel,
+    });
+    rows.push({
+      kind: 'usage',
+      metric: 'sevenDay',
+      percent: rateLimit?.sevenDayPercent,
+      updatedAt: rateLimit?.updatedAt,
+      resetLabel: sevenDayResetLabel,
+    });
+    rows.push({ kind: 'usageBudget', days: sevenDayDailySpend });
   }
 
   return { rows, containers, sessionContainers };

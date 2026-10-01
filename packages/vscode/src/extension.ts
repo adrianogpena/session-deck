@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { mapWithConcurrency } from '@session-deck/core';
 import { fuzzyMatch } from '@session-deck/core';
-import { AgentType, ClaudeDeckNode, FolderNode, projectKeyOf, SessionTreeProvider, ProjectGroupNode, SessionNode, SessionWithProject } from './tree/sessionProvider';
+import { AgentType, ClaudeDeckNode, FolderNode, projectKeyOf, SessionTreeProvider, ProjectGroupNode, SessionNode, SessionWithProject, UsageViewController } from './tree/sessionProvider';
 import {
   createFolder,
   deleteFolder,
@@ -64,8 +64,15 @@ export async function activate(context: vscode.ExtensionContext) {
       terminalService.closeSessionTerminal(sessionId);
     }
   };
+  // The bottom "Usage" row's on/off state — a simple per-machine preference, not shared with the terminal UI.
+  const SHOW_USAGE_VIEW_KEY = 'sessionDeck.showUsageView';
+  let showUsageView = context.globalState.get<boolean>(SHOW_USAGE_VIEW_KEY, true);
+  const usageView: UsageViewController = {
+    isVisible: () => showUsageView,
+    getFocusedSessionId: () => terminalService.focusedSessionId(),
+  };
   // Opt-in per project: free the PTY/memory of a session that's sat idle past its threshold.
-  const treeProvider = new SessionTreeProvider(state, context.extensionUri, closeTerminals, closeTerminals);
+  const treeProvider = new SessionTreeProvider(state, context.extensionUri, closeTerminals, closeTerminals, usageView);
   const activeSessionProvider = new ActiveSessionProvider(treeProvider, terminalService, context.extensionUri);
   // resources/icon.png (not the tree's claude-mark.svg): most OS notifiers expect a raster icon.
   const waitingNotifier = new WaitingNotifier(path.join(context.extensionPath, 'resources', 'icon.png'));
@@ -172,6 +179,17 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('sessionDeck.forkSessionDangerously', (session: SessionNode) =>
       forkSessionDangerously(session, terminalService)
     ),
+    vscode.commands.registerCommand('sessionDeck.toggleUsageView', async () => {
+      showUsageView = !showUsageView;
+      await context.globalState.update(SHOW_USAGE_VIEW_KEY, showUsageView);
+      treeProvider.refresh();
+    }),
+    // The Context % cell tracks whichever terminal is focused, not just whichever's open.
+    vscode.window.onDidChangeActiveTerminal(() => {
+      if (showUsageView) {
+        treeProvider.refresh();
+      }
+    }),
     { dispose: () => claudeProcessWatcher.dispose() }
   );
 

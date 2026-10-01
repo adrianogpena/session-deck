@@ -117,6 +117,20 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     editValue: (c) => (c.ui.expandCollapsedOnActiveJump ? 'on' : 'off'),
     apply: (c) => ({ ...c, ui: { ...c.ui, expandCollapsedOnActiveJump: !c.ui.expandCollapsedOnActiveJump } }),
   },
+  {
+    label: 'ui.showUsage',
+    kind: 'toggle',
+    display: (c) => (c.ui.showUsage ? 'on' : 'off'),
+    editValue: (c) => (c.ui.showUsage ? 'on' : 'off'),
+    apply: (c) => ({ ...c, ui: { ...c.ui, showUsage: !c.ui.showUsage } }),
+  },
+  {
+    label: 'ui.use24HourClock',
+    kind: 'toggle',
+    display: (c) => (c.ui.use24HourClock ? '24-hour' : '12-hour'),
+    editValue: (c) => (c.ui.use24HourClock ? 'on' : 'off'),
+    apply: (c) => ({ ...c, ui: { ...c.ui, use24HourClock: !c.ui.use24HourClock } }),
+  },
   ...toolFields('claude'),
   ...toolFields('copilot'),
   {

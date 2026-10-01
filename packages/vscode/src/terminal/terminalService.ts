@@ -9,6 +9,7 @@ import { AgentType, SessionNode } from '../tree/sessionProvider';
 import { agentIconPath } from '../tree/agentIcons';
 import { clearSessionStatus, markSessionError } from '@session-deck/core';
 import { CopilotStatusWatcher } from '@session-deck/core';
+import { listLiveClaudeProcesses, normalizeFsPath } from '@session-deck/core';
 import { buildClaudeForkCommand, buildClaudeNewSessionCommand, buildClaudeResumeCommand } from '@session-deck/core';
 import { buildCopilotNewSessionCommand, buildCopilotResumeCommand } from '@session-deck/core';
 
@@ -109,6 +110,46 @@ export class AgentTerminalService implements vscode.Disposable {
       sessionId,
       label: this.sessionLabels.get(sessionId) ?? sessionId,
     }));
+  }
+
+  /**
+   * The session backing `vscode.window.activeTerminal` right now — what the usage row's Context %
+   * reports on. Checks our own tracked terminals first (exact); for a session resumed outside Session
+   * Deck (a plain `claude --resume` typed by hand, or a terminal from before this window reloaded),
+   * falls back to `focusedSessionIdByLiveProcess`.
+   */
+  public focusedSessionId(): string | undefined {
+    const active = vscode.window.activeTerminal;
+    if (!active) {
+      return undefined;
+    }
+    for (const [sessionId, terminal] of this.sessionTerminals) {
+      if (terminal === active) {
+        return sessionId;
+      }
+    }
+    return this.focusedSessionIdByLiveProcess(active);
+  }
+
+  /**
+   * Matches the active terminal's live shell cwd against Claude's own per-process state files
+   * (`~/.claude/sessions/<pid>.json`, via `listLiveClaudeProcesses`) — undefined if shell integration
+   * hasn't reported a cwd yet, or if more than one Claude session shares it (ambiguous). With no cwd
+   * to go on, falls back to the only Claude process running, if there's exactly one.
+   */
+  private focusedSessionIdByLiveProcess(active: vscode.Terminal): string | undefined {
+    const live = listLiveClaudeProcesses();
+    if (live.length === 0) {
+      return undefined;
+    }
+    const activeCwd = active.shellIntegration?.cwd?.fsPath;
+    if (activeCwd) {
+      const matches = live.filter((p) => p.cwd && normalizeFsPath(p.cwd) === normalizeFsPath(activeCwd));
+      if (matches.length >= 1) {
+        return matches.length === 1 ? matches[0].sessionId : undefined;
+      }
+    }
+    return live.length === 1 ? live[0].sessionId : undefined;
   }
 
   /** Brings this session's terminal to the front within the window — the click-through target for `WaitingNotifier`. A no-op if it's not (or no longer) tracked. */

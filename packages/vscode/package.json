@@ -225,6 +225,11 @@
         "command": "sessionDeck.markUnread",
         "title": "Session Deck: Mark as Unread",
         "icon": "$(circle-filled)"
+      },
+      {
+        "command": "sessionDeck.toggleUsageView",
+        "title": "Session Deck: Toggle Usage View",
+        "icon": "$(pulse)"
       }
     ],
     "menus": {
@@ -328,6 +333,11 @@
         },
         {
           "command": "sessionDeck.refresh",
+          "when": "view == sessionDeck.sessions",
+          "group": "navigation"
+        },
+        {
+          "command": "sessionDeck.toggleUsageView",
           "when": "view == sessionDeck.sessions",
           "group": "navigation"
         },

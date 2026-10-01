@@ -95,17 +95,13 @@ export async function discoverSessions(current: DeckSession[]): Promise<DeckSess
   }
   files.sort((a, b) => b.mtime - a.mtime);
 
-  const found: DeckSession[] = [];
-  for (const f of files) {
-    if (found.length >= maxSessions) {
-      break;
-    }
+  const toSession = async (f: (typeof files)[number]): Promise<DeckSession | undefined> => {
     const meta = await readSessionMeta(f.full);
     if (!meta.firstPrompt) {
-      continue; // empty/aborted sessions
+      return undefined; // empty/aborted sessions
     }
     const cwd = meta.cwd || decodeProjectPath(f.dir);
-    found.push({
+    return {
       agent: 'claude',
       onDisk: true,
       id: f.id,
@@ -115,8 +111,50 @@ export async function discoverSessions(current: DeckSession[]): Promise<DeckSess
       projectKey: normalizeFsPath(cwd),
       title: oneLine(meta.title || meta.firstPrompt),
       mtime: f.mtime,
-    });
+    };
+  };
+
+  const found: DeckSession[] = [];
+  const dirsSeen = new Set<string>();
+  for (const f of files) {
+    if (found.length >= maxSessions) {
+      break;
+    }
+    const session = await toSession(f);
+    if (!session) {
+      continue;
+    }
+    found.push(session);
+    dirsSeen.add(f.dir);
   }
+
+  // A project whose every session falls outside the cap above would otherwise vanish from the tree
+  // entirely, with no way to start a new session in it — so its single most recent session is kept
+  // regardless of maxSessionsListed.
+  const unseenByDir = new Map<string, (typeof files)[number][]>();
+  for (const f of files) {
+    if (dirsSeen.has(f.dir)) {
+      continue;
+    }
+    const bucket = unseenByDir.get(f.dir);
+    if (bucket) {
+      bucket.push(f);
+    } else {
+      unseenByDir.set(f.dir, [f]);
+    }
+  }
+  for (const [dir, dirFiles] of unseenByDir) {
+    for (const f of dirFiles) {
+      // dirFiles is already in global mtime-desc order, so the first valid one is the most recent.
+      const session = await toSession(f);
+      if (session) {
+        found.push(session);
+        dirsSeen.add(dir);
+        break;
+      }
+    }
+  }
+
   if (config.tools.copilot.enabled !== false) {
     found.push(...discoverCopilotSessions(maxSessions));
   }
