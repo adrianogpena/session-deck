@@ -664,6 +664,10 @@ const CONFIG_FIELD_LABELS: ReadonlyMap<string, string> = new Map(
 // Wide enough for the longest prettified field name (e.g. `Expand collapsed on active jump`) plus a gap.
 const CONFIG_LABEL_COLUMN = Math.max(...CONFIG_FIELDS.map((f) => CONFIG_FIELD_LABELS.get(f.label)!.length)) + 2;
 
+// A `command` override can be a long absolute path (e.g. a resolved global install's .exe). Past this
+// width it's truncated (keeping the filename, the meaningful end) rather than widening every row to fit it.
+const CONFIG_VALUE_COLUMN_MAX = 40;
+
 /**
  * The settings popup (`C`): every value from `~/.session-deck/config.json` Session Deck is actually
  * using, editable in place. `selected` indexes into `CONFIG_FIELDS` and is drawn like a picker's
@@ -679,8 +683,10 @@ export function configOverlay(
 ): { x: number; y: number; lines: string[] } {
   const footerText = '↑↓ select · Enter toggle/edit · Esc or C to close';
   // Only the label/value columns and the footer hint drive the width — the config path is left to
-  // truncate, since a long filesystem path shouldn't blow the popup out to fill a wide terminal.
-  const maxValueWidth = Math.max(...CONFIG_FIELDS.map((f) => textWidth(f.display(config))));
+  // truncate, since a long filesystem path shouldn't blow the popup out to fill a wide terminal. A
+  // `command` override can itself be a long absolute path (e.g. a resolved .exe); capped the same way,
+  // rather than stretching the whole popup to fit it — see the `fitTail` truncation below.
+  const maxValueWidth = Math.min(CONFIG_VALUE_COLUMN_MAX, Math.max(...CONFIG_FIELDS.map((f) => textWidth(f.display(config)))));
   const neededInner = Math.max(CONFIG_LABEL_COLUMN + maxValueWidth, textWidth(footerText));
   const width = Math.min(cols - 4, neededInner + 6);
   const inner = width - 6; // borders + two spaces of padding on each side
@@ -689,10 +695,20 @@ export function configOverlay(
     const field = CONFIG_FIELDS[index];
     const label = CONFIG_FIELD_LABELS.get(field.label)!;
     const value = field.display(config);
-    if (index === selected) {
-      return `${t.bg('accent')}${t.fg('bg')}${BOLD}${fit(label, CONFIG_LABEL_COLUMN)}${fit(value, inner - CONFIG_LABEL_COLUMN)}`;
+    const valueWidth = inner - CONFIG_LABEL_COLUMN;
+    // A path's meaningful part (the filename) is at the end, so keep that end visible instead of the
+    // start — unlike `fit`, `fitTail` doesn't pad, so pad it out ourselves to keep the border aligned.
+    let fittedValue: string;
+    if (field.kind === 'text') {
+      const truncated = fitTail(value, valueWidth);
+      fittedValue = truncated + blank(valueWidth - textWidth(truncated));
+    } else {
+      fittedValue = fit(value, valueWidth);
     }
-    return `${BOLD}${t.fg('purple')}${fit(label, CONFIG_LABEL_COLUMN)}${RESET}${s}${t.fg('text')}${fit(value, inner - CONFIG_LABEL_COLUMN)}`;
+    if (index === selected) {
+      return `${t.bg('accent')}${t.fg('bg')}${BOLD}${fit(label, CONFIG_LABEL_COLUMN)}${fittedValue}`;
+    }
+    return `${BOLD}${t.fg('purple')}${fit(label, CONFIG_LABEL_COLUMN)}${RESET}${s}${t.fg('text')}${fittedValue}`;
   };
   const content: string[] = [`${t.fg('textDim')}${fit(configPath, inner)}`, blank(inner)];
   let selectedLine = 2;
