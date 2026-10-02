@@ -15,6 +15,8 @@ export interface ConfigField {
    * `undefined` means invalid input, so the caller keeps the config unchanged.
    */
   apply(config: DeckConfig, input: string): DeckConfig | undefined;
+  /** One-line plain-English explanation shown under the popup when this row is selected, for a field whose label/value alone wouldn't tell a first-time user what it does. */
+  hint?: string;
 }
 
 const splitArgs = (input: string): string[] => input.trim().split(/\s+/).filter(Boolean);
@@ -61,6 +63,7 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
       const n = Number(input);
       return Number.isInteger(n) && n > 0 ? { ...c, ui: { ...c.ui, maxSessionsListed: n } } : undefined;
     },
+    hint: 'How many of the most recent sessions load into the list from disk.',
   },
   {
     label: 'ui.notifications',
@@ -68,6 +71,7 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     display: (c) => (c.ui.notifications ? 'on' : 'off'),
     editValue: (c) => (c.ui.notifications ? 'on' : 'off'),
     apply: (c) => ({ ...c, ui: { ...c.ui, notifications: !c.ui.notifications } }),
+    hint: 'Desktop notifications for sessions that need you — see notifyStatuses below for which ones.',
   },
   {
     label: 'ui.notifyStatuses',
@@ -81,6 +85,7 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
       }
       return { ...c, ui: { ...c.ui, notifyStatuses: values as SessionStatus[] } };
     },
+    hint: 'Which session statuses trigger a desktop notification (space-separated: running waiting done error).',
   },
   {
     label: 'ui.recentProjectsFirst',
@@ -88,6 +93,7 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     display: (c) => (c.ui.recentProjectsFirst ? 'on' : 'off'),
     editValue: (c) => (c.ui.recentProjectsFirst ? 'on' : 'off'),
     apply: (c) => ({ ...c, ui: { ...c.ui, recentProjectsFirst: !c.ui.recentProjectsFirst } }),
+    hint: 'On: top-level projects reorder by most-recent activity. Off: a fixed, alphabetical order until you move one with K/J.',
   },
   {
     label: 'ui.recentSessionsFirst',
@@ -95,13 +101,15 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     display: (c) => (c.ui.recentSessionsFirst ? 'on' : 'off'),
     editValue: (c) => (c.ui.recentSessionsFirst ? 'on' : 'off'),
     apply: (c) => ({ ...c, ui: { ...c.ui, recentSessionsFirst: !c.ui.recentSessionsFirst } }),
+    hint: 'On: sessions in a project reorder by most-recent activity. Off: a fixed order until you move one with K/J.',
   },
   {
     label: 'ui.newSessionFullScreen',
     kind: 'toggle',
-    display: (c) => (c.ui.newSessionFullScreen ? 'full screen' : 'preview pane'),
+    display: (c) => (c.ui.newSessionFullScreen ? 'Attached' : 'Interacting'),
     editValue: (c) => (c.ui.newSessionFullScreen ? 'on' : 'off'),
     apply: (c) => ({ ...c, ui: { ...c.ui, newSessionFullScreen: !c.ui.newSessionFullScreen } }),
+    hint: 'Which mode n/N opens a new session in: Attached — full-screen, same as pressing Enter — or Interacting — typed into in place, list and preview still showing, same as pressing i.',
   },
   {
     label: 'ui.gitStatus',
@@ -109,6 +117,7 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     display: (c) => (c.ui.gitStatus ? 'on' : 'off'),
     editValue: (c) => (c.ui.gitStatus ? 'on' : 'off'),
     apply: (c) => ({ ...c, ui: { ...c.ui, gitStatus: !c.ui.gitStatus } }),
+    hint: 'Shows ⇡/⇣/✱ git badges on rows and the branch name in the preview panel.',
   },
   {
     label: 'ui.expandCollapsedOnActiveJump',
@@ -116,6 +125,7 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     display: (c) => (c.ui.expandCollapsedOnActiveJump ? 'on' : 'off'),
     editValue: (c) => (c.ui.expandCollapsedOnActiveJump ? 'on' : 'off'),
     apply: (c) => ({ ...c, ui: { ...c.ui, expandCollapsedOnActiveJump: !c.ui.expandCollapsedOnActiveJump } }),
+    hint: 'On: [ and ] can expand a collapsed folder/project to reach a session inside. Off: they only jump between sessions already shown.',
   },
   {
     label: 'ui.showUsage',
@@ -123,6 +133,7 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     display: (c) => (c.ui.showUsage ? 'on' : 'off'),
     editValue: (c) => (c.ui.showUsage ? 'on' : 'off'),
     apply: (c) => ({ ...c, ui: { ...c.ui, showUsage: !c.ui.showUsage } }),
+    hint: 'Shows a Context/5h/7d usage section at the bottom of the list for the selected Claude session.',
   },
   {
     label: 'ui.use24HourClock',
@@ -130,6 +141,7 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     display: (c) => (c.ui.use24HourClock ? '24-hour' : '12-hour'),
     editValue: (c) => (c.ui.use24HourClock ? 'on' : 'off'),
     apply: (c) => ({ ...c, ui: { ...c.ui, use24HourClock: !c.ui.use24HourClock } }),
+    hint: "The 5h usage row's reset time shows as 20:30 instead of 8:30 PM.",
   },
   ...allAgentIds().flatMap(toolFields),
   {
@@ -141,5 +153,6 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
       const n = Number(input);
       return Number.isInteger(n) && n > 0 ? { ...c, trash: { ...c.trash, retentionDays: n } } : undefined;
     },
+    hint: "Deleted sessions older than this are purged from ~/.session-deck/trash/ at startup.",
   },
 ];

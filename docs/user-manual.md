@@ -118,12 +118,12 @@ a colored status dot on each session.
   in the same project (the same folder, if the attached session is in a subfolder of it) — without
   going back to the list first.
   - Any other key after `Ctrl+K` is sent through to the agent as an ordinary `Ctrl+K` keystroke.
-- **Type into it `i`**: like attaching, but the sessions panel and preview keep showing — everything
+- **Interact `i`**: like attaching, but the sessions panel and preview keep showing — everything
   you type goes straight to the selected session, live, without leaving the list. Useful for sending
   a longer or multi-step reply while still keeping an eye on your other sessions.
   - A stopped session is started first.
-  - `Ctrl+Q` stops it, the same key that detaches from a full attach; `Ctrl+K` then `q` also stops
-    the session's agent.
+  - `Ctrl+Q` stops interacting, the same key that detaches from a full attach; `Ctrl+K` then `q` also
+    stops the session's agent.
   - Marks the session as seen, same as attaching.
 - **Start in background `s`**: starts a stopped session without attaching. Its screen shows in the
   preview.
@@ -291,9 +291,9 @@ different projects without moving anything.
 
 - **Narrow / widen the sessions panel `<` / `>`**: 5% per press, between 15% and 70% of the width.
   Remembered.
-- **Hide / show the sessions panel `b`** (or `Ctrl+K B` while typing into a session with `i`): gives
+- **Hide / show the sessions panel `b`** (or `Ctrl+K B` while Interacting): gives
   the preview the whole width.
-- **Mouse scrolling `m`** (or `Ctrl+K M` while typing into a session with `i`): toggles real mouse
+- **Mouse scrolling `m`** (or `Ctrl+K M` while Interacting): toggles real mouse
   reporting. Off by default (not remembered across restarts), so click-drag still does your terminal's
   own text selection, letting you copy from the preview. Turn it on to scroll the preview with the
   wheel or a click-drag; turn it back off to select and copy again. Always off while attached
@@ -519,9 +519,9 @@ it up next time it starts).
 - **`ui.recentSessionsFirst`**: sorts each project's sessions by most-recent-activity when `true`, so
   they shuffle as they become active — or keeps a fixed order when `false`, changing only when you move
   a session yourself (`K`/`J` on a session row). Default: on.
-- **`ui.newSessionFullScreen`**: a new session started with `n`/`N` attaches full-screen, as if you'd
-  pressed `Enter`, when `true` — or opens it in the preview pane, as if you'd pressed `i`, when
-  `false`. Default: on.
+- **`ui.newSessionFullScreen`**: a new session started with `n`/`N` opens **Attached** (full-screen, as
+  if you'd pressed `Enter`) when `true` — or **Interacting** (list and preview still showing, as if
+  you'd pressed `i`) when `false`. Default: on.
 - **`ui.gitStatus`**: `false` turns off the `⇡`/`⇣`/`✱` project badges and the preview panel's branch
   line entirely — no `git status` is run at all. Default: on.
 - **`ui.expandCollapsedOnActiveJump`**: `[`/`]` (jump to the previous/next started session — running,

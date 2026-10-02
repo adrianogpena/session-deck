@@ -1224,7 +1224,7 @@ export class App {
     } else if (this.message) {
       frame += renderMessageBar(t, cols, this.message);
     } else if (this.interacting) {
-      frame += renderMessageBar(t, cols, `Typing into session · Ctrl+Q to stop · Ctrl+K T to attach`);
+      frame += renderMessageBar(t, cols, `Interacting · Ctrl+Q to stop · Ctrl+K T to attach`);
     } else {
       frame += renderHelpBar(t, cols);
     }
@@ -1953,7 +1953,7 @@ export class App {
         if (s) {
           this.startInteracting(s);
         } else {
-          this.flash('Select a session to type into.');
+          this.flash('Select a session to interact with.');
         }
         break;
       case 'n':

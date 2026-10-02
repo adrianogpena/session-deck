@@ -35,8 +35,8 @@ export interface DeckConfig {
      */
     recentSessionsFirst: boolean;
     /**
-     * `n`/`N` (new session) attaches full-screen, as if you'd pressed Enter, when `true` — or opens it
-     * in the preview pane, as if you'd pressed `i`, when `false`. Default: true.
+     * `n`/`N` (new session) opens Attached — full-screen, as if you'd pressed Enter — when `true`, or
+     * Interacting — as if you'd pressed `i` — when `false`. Default: true.
      */
     newSessionFullScreen: boolean;
     /**

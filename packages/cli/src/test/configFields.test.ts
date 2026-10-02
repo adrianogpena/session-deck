@@ -67,9 +67,9 @@ test('ui.recentSessionsFirst toggles regardless of input, on by default', () => 
 
 test('ui.newSessionFullScreen toggles regardless of input, on by default', () => {
   const f = field('ui.newSessionFullScreen');
-  assert.equal(f.display(base()), 'full screen');
+  assert.equal(f.display(base()), 'Attached');
   assert.equal(f.apply(base(), '')?.ui.newSessionFullScreen, false);
-  assert.equal(f.display(f.apply(base(), '')!), 'preview pane');
+  assert.equal(f.display(f.apply(base(), '')!), 'Interacting');
   assert.equal(f.apply(f.apply(base(), '')!, '')?.ui.newSessionFullScreen, true);
 });
 

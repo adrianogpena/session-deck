@@ -501,8 +501,8 @@ const HELP_SECTIONS: { title: string; keys: Hint[] }[] = [
       ['Ctrl+Q', 'Detach back here; the session keeps running'],
       ['Ctrl+K q', 'Detach and stop the session, same as x'],
       ['Ctrl+K n', 'New session in the same project, without detaching first'],
-      ['i', 'Type into it right here, list and preview still showing'],
-      ['Ctrl+K T', 'Swap attached ⇄ typing here, without detaching to the list first'],
+      ['i', 'Interact — type into it right here, list and preview still showing'],
+      ['Ctrl+K T', 'Swap Attached ⇄ Interacting, without detaching to the list first'],
     ],
   },
   {
@@ -635,8 +635,34 @@ export function helpOverlay(t: Theme, cols: number, rows: number, scroll: number
   return { x: Math.max(0, Math.floor((cols - width) / 2)), y: Math.max(0, Math.floor((rows - lines.length) / 2)), lines, maxScroll };
 }
 
-// Wide enough for the longest field label (`ui.expandCollapsedOnActiveJump`) plus a gap before the value.
-const CONFIG_LABEL_COLUMN = Math.max(...CONFIG_FIELDS.map((f) => f.label.length)) + 2;
+// A field's raw label is `<group>.<name>`, e.g. `tools.claude.command`. The popup shows the group
+// (`General`, `Trash`, or the agent's display name) as a header once, and just `<name>` — prettified
+// from camelCase into words — on each row below it, instead of repeating the full dotted path.
+const configGroupOf = (label: string): string => label.slice(0, label.lastIndexOf('.'));
+const configFieldNameOf = (label: string): string => label.slice(label.lastIndexOf('.') + 1);
+
+function prettifyConfigFieldName(name: string): string {
+  const spaced = name
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/([A-Za-z])(\d)/g, '$1 $2')
+    .replace(/(\d)([A-Z])/g, '$1 $2')
+    .toLowerCase();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+function configGroupTitle(group: string): string {
+  if (group === 'ui') return 'General';
+  if (group === 'trash') return 'Trash';
+  if (group.startsWith('tools.')) return agentDisplayName(group.slice('tools.'.length));
+  return group;
+}
+
+const CONFIG_FIELD_LABELS: ReadonlyMap<string, string> = new Map(
+  CONFIG_FIELDS.map((f) => [f.label, prettifyConfigFieldName(configFieldNameOf(f.label))])
+);
+
+// Wide enough for the longest prettified field name (e.g. `Expand collapsed on active jump`) plus a gap.
+const CONFIG_LABEL_COLUMN = Math.max(...CONFIG_FIELDS.map((f) => CONFIG_FIELD_LABELS.get(f.label)!.length)) + 2;
 
 /**
  * The settings popup (`C`): every value from `~/.session-deck/config.json` Session Deck is actually
@@ -661,26 +687,37 @@ export function configOverlay(
   const s = t.bg('surface');
   const fieldRow = (index: number): string => {
     const field = CONFIG_FIELDS[index];
+    const label = CONFIG_FIELD_LABELS.get(field.label)!;
     const value = field.display(config);
     if (index === selected) {
-      return `${t.bg('accent')}${t.fg('bg')}${BOLD}${fit(field.label, CONFIG_LABEL_COLUMN)}${fit(value, inner - CONFIG_LABEL_COLUMN)}`;
+      return `${t.bg('accent')}${t.fg('bg')}${BOLD}${fit(label, CONFIG_LABEL_COLUMN)}${fit(value, inner - CONFIG_LABEL_COLUMN)}`;
     }
-    return `${BOLD}${t.fg('purple')}${fit(field.label, CONFIG_LABEL_COLUMN)}${RESET}${s}${t.fg('text')}${fit(value, inner - CONFIG_LABEL_COLUMN)}`;
+    return `${BOLD}${t.fg('purple')}${fit(label, CONFIG_LABEL_COLUMN)}${RESET}${s}${t.fg('text')}${fit(value, inner - CONFIG_LABEL_COLUMN)}`;
   };
-  // A blank line before each new group of fields (their label shares everything up to the last '.').
-  const groupOf = (label: string) => label.slice(0, label.lastIndexOf('.'));
   const content: string[] = [`${t.fg('textDim')}${fit(configPath, inner)}`, blank(inner)];
   let selectedLine = 2;
   CONFIG_FIELDS.forEach((field, index) => {
-    if (index > 0 && groupOf(field.label) !== groupOf(CONFIG_FIELDS[index - 1].label)) {
-      content.push(blank(inner));
+    const group = configGroupOf(field.label);
+    if (index === 0 || group !== configGroupOf(CONFIG_FIELDS[index - 1].label)) {
+      if (index > 0) {
+        content.push(blank(inner));
+      }
+      content.push(`${BOLD}${t.fg('cyan')}${fit(configGroupTitle(group), inner)}${RESET}${s}`);
     }
     if (index === selected) {
       selectedLine = content.length;
     }
     content.push(fieldRow(index));
   });
-  content.push(blank(inner), `${t.fg('textDim')}${fit(footerText, inner)}`);
+  content.push(blank(inner));
+  const selectedHint = CONFIG_FIELDS[selected]?.hint;
+  if (selectedHint) {
+    for (const line of wrap(selectedHint, inner)) {
+      content.push(`${t.fg('textDim')}${fit(line, inner)}`);
+    }
+    content.push(blank(inner));
+  }
+  content.push(`${t.fg('textDim')}${fit(footerText, inner)}`);
 
   const maxBody = Math.max(3, rows - 6);
   const maxScroll = Math.max(0, content.length - maxBody);
