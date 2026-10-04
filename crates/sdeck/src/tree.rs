@@ -75,7 +75,10 @@ pub fn usage_rows(usage: &UsageSectionInput) -> Vec<TreeRow> {
             metric: UsageMetric::Context,
             percent: usage.context_percent,
             updated_at: usage.context_updated_at,
-            reset_label: None,
+            reset_label: usage
+                .context_percent
+                .zip(usage.context_startup_percent)
+                .and_then(|(now, startup)| (now > startup).then(|| format!("{}% startup", startup.round()))),
         },
         TreeRow::Usage {
             metric: UsageMetric::FiveHour,
@@ -121,6 +124,8 @@ pub fn node_id_of(s: &DeckSession, split: bool) -> String {
 pub struct UsageSectionInput {
     pub context_percent: Option<f64>,
     pub context_updated_at: Option<i64>,
+    /// The session's first context reading, shown beside the current one.
+    pub context_startup_percent: Option<f64>,
     pub rate_limit: Option<RateLimitUsage>,
     pub five_hour_reset_label: Option<String>,
     pub seven_day_reset_label: Option<String>,
@@ -1064,6 +1069,7 @@ mod tests {
             usage: Some(UsageSectionInput {
                 context_percent: Some(42.0),
                 context_updated_at: Some(789),
+                context_startup_percent: Some(6.4),
                 rate_limit: Some(RateLimitUsage {
                     five_hour_percent: Some(30.0),
                     five_hour_resets_at: None,
@@ -1088,7 +1094,7 @@ mod tests {
                     metric: UsageMetric::Context,
                     percent: Some(42.0),
                     updated_at: Some(789),
-                    reset_label: None
+                    reset_label: Some("6% startup".into())
                 },
                 TreeRow::Usage {
                     metric: UsageMetric::FiveHour,

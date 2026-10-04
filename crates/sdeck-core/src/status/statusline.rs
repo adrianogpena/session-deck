@@ -67,6 +67,11 @@ fn write_usage_record(payload: &Map<String, Value>, now: i64) -> io::Result<()> 
     };
     if let Some(context) = context_percent(payload) {
         record.insert("contextPercent".into(), json!(context));
+        // The first reading is mostly what every request starts with (system prompt, tools, skills,
+        // CLAUDE.md), so it stays as the session's baseline.
+        if context > 0.0 && !record.contains_key("startupContextPercent") {
+            record.insert("startupContextPercent".into(), json!(context));
+        }
     }
     for (key, percent_key, resets_key) in [
         ("five_hour", "fiveHourPercent", "fiveHourResetsAt"),
@@ -198,6 +203,18 @@ mod tests {
         assert_eq!(r["sevenDayPercent"], json!(24.0));
         assert_eq!(r["accountEmail"], json!("me@x.com"));
         assert!(r["updatedAt"].as_i64().unwrap() > 0);
+    }
+
+    #[test]
+    fn the_first_context_reading_stays_as_the_startup_baseline() {
+        let (_g, _tmp) = fixture();
+        run_statusline_hook(r#"{"session_id":"s1","context_window":{"used_percentage":0}}"#);
+        assert!(read_record("s1").get("startupContextPercent").is_none());
+        run_statusline_hook(r#"{"session_id":"s1","context_window":{"used_percentage":6.4}}"#);
+        run_statusline_hook(r#"{"session_id":"s1","context_window":{"used_percentage":30}}"#);
+        let r = read_record("s1");
+        assert_eq!(r["startupContextPercent"], json!(6.4));
+        assert_eq!(r["contextPercent"], json!(30.0));
     }
 
     #[test]

@@ -17,6 +17,8 @@ use crate::commands::session_id::is_safe_session_id;
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionUsageRecord {
     pub context_percent: Option<f64>,
+    /// The session's first context reading: what a request carries before any real conversation.
+    pub startup_context_percent: Option<f64>,
     pub five_hour_percent: Option<f64>,
     /// Epoch ms.
     pub five_hour_resets_at: Option<i64>,
@@ -79,6 +81,7 @@ fn parse_usage_record(raw: &str) -> Option<SessionUsageRecord> {
     let ms = |key: &str| num(record.get(key)).map(|n| n as i64);
     Some(SessionUsageRecord {
         context_percent: num(record.get("contextPercent")),
+        startup_context_percent: num(record.get("startupContextPercent")),
         five_hour_percent: num(record.get("fiveHourPercent")),
         five_hour_resets_at: ms("fiveHourResetsAt"),
         seven_day_percent: num(record.get("sevenDayPercent")),
@@ -389,6 +392,7 @@ mod tests {
             read_session_usage("s1"),
             Some(SessionUsageRecord {
                 context_percent: Some(42.0),
+                startup_context_percent: None,
                 five_hour_percent: None,
                 five_hour_resets_at: None,
                 seven_day_percent: None,

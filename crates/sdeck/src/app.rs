@@ -614,6 +614,7 @@ impl App {
         UsageSectionInput {
             context_percent: session_usage.as_ref().and_then(|u| u.context_percent),
             context_updated_at: session_usage.as_ref().map(|u| u.updated_at),
+            context_startup_percent: session_usage.as_ref().and_then(|u| u.startup_context_percent),
             five_hour_reset_label: rate_limit
                 .as_ref()
                 .and_then(|r| r.five_hour_resets_at)

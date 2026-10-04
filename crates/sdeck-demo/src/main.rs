@@ -437,6 +437,7 @@ fn write_usage(sb: &Sandbox, all: &[Session]) {
         let (_, email, five, seven) = accounts.iter().find(|a| a.0 == se.account).unwrap();
         let body = json!({
             "contextPercent": contexts[i % contexts.len()],
+            "startupContextPercent": 7,
             "fiveHourPercent": five,
             "fiveHourResetsAt": now + 2 * 3600 * 1000 + 10 * 60 * 1000,
             "sevenDayPercent": seven,
