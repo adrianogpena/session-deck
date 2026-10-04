@@ -47,7 +47,7 @@ use sdeck_core::status::claude_transcript_tailer::{ClaudeTranscriptTailer, Taile
 use sdeck_core::status::copilot_status_watcher::CopilotStatusWatcher;
 use sdeck_core::status::session_status::{ensure_session_status_dir, session_status_dir};
 use sdeck_core::status::session_usage::{
-    is_rate_limit_stale, prune_stale_usage_files, read_session_usage, read_seven_day_daily_spend,
+    is_rate_limit_stale, prune_stale_usage_files, read_recent_daily_spend, read_session_usage,
     RateLimitScanner,
 };
 use sdeck_core::status::usage_display::{format_reset_time, UsageMetric};
@@ -75,6 +75,7 @@ use crate::theme::{
 };
 use crate::tree::{build_tree, usage_rows, BuiltTree, TreeOptions, TreeRow, UsageSectionInput};
 use crate::view::list_panel::{render_list_panel, ListRow};
+use crate::view::overlays::AccountUsage;
 use crate::view::preview_panel::{group_preview_lines, render_preview_panel};
 use crate::view::{bars, overlay, GroupCounts, SessionView};
 use input::{Confirm, Picker, TextPrompt};
@@ -626,11 +627,47 @@ impl App {
                 .and_then(|r| r.seven_day_resets_at)
                 .map(|at| format_reset_time(at, use_24, true)),
             rate_limit,
-            seven_day_daily_spend: read_seven_day_daily_spend(
-                email.as_deref(),
-                chrono::Local::now().date_naive(),
-            ),
         }
+    }
+
+    /// One entry per account for the `w` popup's Usage tab.
+    fn account_usages(&self) -> Vec<AccountUsage> {
+        const USAGE_HISTORY_DAYS: u64 = 5;
+        let use_24 = self.config.ui.use_24_hour_clock;
+        let active = self.active_account().map(|a| a.config_dir.clone());
+        let today = chrono::Local::now().date_naive();
+        let now = now_ms();
+        self.accounts
+            .iter()
+            .map(|a| {
+                let latest = self.rate_limits.borrow_mut().latest(a.email.as_deref());
+                let stale = latest
+                    .as_ref()
+                    .is_some_and(|r| is_rate_limit_stale(r.updated_at, now));
+                let rate = latest.map(|r| r.without_expired(now));
+                AccountUsage {
+                    name: a.email.clone().unwrap_or_else(|| {
+                        a.config_dir
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default()
+                    }),
+                    active: active.as_ref() == Some(&a.config_dir),
+                    five_hour_percent: rate.as_ref().and_then(|r| r.five_hour_percent),
+                    five_hour_reset_label: rate
+                        .as_ref()
+                        .and_then(|r| r.five_hour_resets_at)
+                        .map(|at| format_reset_time(at, use_24, false)),
+                    seven_day_percent: rate.as_ref().and_then(|r| r.seven_day_percent),
+                    seven_day_reset_label: rate
+                        .as_ref()
+                        .and_then(|r| r.seven_day_resets_at)
+                        .map(|at| format_reset_time(at, use_24, true)),
+                    stale,
+                    days: read_recent_daily_spend(a.email.as_deref(), today, USAGE_HISTORY_DAYS),
+                }
+            })
+            .collect()
     }
 
     /// Builds the tree for the current state; `expanded` ignores collapse (for `[`/`]`'s lookup).
@@ -1137,7 +1174,6 @@ impl App {
                         stale: *metric != UsageMetric::Context
                             && updated_at.is_some_and(|at| is_rate_limit_stale(at, now_ms())),
                     },
-                    TreeRow::UsageBudget { days } => ListRow::UsageBudget { days: days.clone() },
                     TreeRow::UsageModel { label } => ListRow::UsageModel { label: label.clone() },
                 })
             })

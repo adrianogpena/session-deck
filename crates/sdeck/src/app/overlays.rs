@@ -21,6 +21,7 @@ use crate::commands::{palette_matches, CommandId, PALETTE_COMMANDS};
 use crate::config_fields::{ConfigFieldKind, CONFIG_FIELDS};
 use crate::skills::{claude_settings_path, discover_local_skills, skills_dir, LocalSkill};
 use crate::theme::Theme;
+use crate::view::overlays::AccountUsage;
 use crate::view::overlays::{
     render_alerts, render_config, render_help, render_palette, render_search, render_skills, render_trace,
     SearchResultRow, SkillsTab,
@@ -43,6 +44,7 @@ pub(super) enum Overlay {
         scroll: Cell<usize>,
         skills: Vec<LocalSkill>,
         agents: Vec<LocalAgent>,
+        usage: Vec<AccountUsage>,
     },
     Trace(TraceState),
     Alerts {
@@ -102,6 +104,7 @@ impl App {
             } else {
                 Vec::new()
             },
+            usage: if claude { self.account_usages() } else { Vec::new() },
         });
     }
 
@@ -160,8 +163,12 @@ impl App {
     fn on_skills_key(&mut self, key: &str) {
         match (&mut self.overlay, key) {
             (_, "\x1b" | "w" | "q") => self.overlay = None,
-            (Some(Overlay::Skills { tab, scroll, .. }), "\x1b[C" | "\x1b[D" | "\x1bOC" | "\x1bOD") => {
-                *tab = tab.other();
+            (Some(Overlay::Skills { tab, scroll, .. }), "\x1b[C" | "\x1bOC") => {
+                *tab = tab.next();
+                scroll.set(0);
+            }
+            (Some(Overlay::Skills { tab, scroll, .. }), "\x1b[D" | "\x1bOD") => {
+                *tab = tab.prev();
                 scroll.set(0);
             }
             (Some(Overlay::Skills { scroll, .. }), _) => Self::scroll_by_key(scroll, key),
@@ -307,7 +314,8 @@ impl App {
                 scroll,
                 skills,
                 agents,
-            }) => render_skills(frame, t, *tab, skills, agents, scroll, &self.active_agent),
+                usage,
+            }) => render_skills(frame, t, *tab, skills, agents, usage, scroll, &self.active_agent),
             Some(Overlay::Trace(trace)) => {
                 render_trace(frame, t, &trace.steps, trace.selected, &trace.detail_scroll)
             }
@@ -415,6 +423,11 @@ mod tests {
             panic!("skills is open")
         };
         assert_eq!(*tab, crate::view::overlays::SkillsTab::Agents);
+        f.key("\x1b[C");
+        let Some(Overlay::Skills { tab, .. }) = &f.app.overlay else {
+            panic!("skills is open")
+        };
+        assert_eq!(*tab, crate::view::overlays::SkillsTab::Usage);
         f.key("w");
         assert!(!open(&f));
     }

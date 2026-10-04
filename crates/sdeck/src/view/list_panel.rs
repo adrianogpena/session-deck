@@ -5,7 +5,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use sdeck_core::discovery::git_status::GitStatus;
 use sdeck_core::status::usage_display::{
-    render_usage_bar, usage_severity, DailySpend, UsageMetric, UsageSeverity, USAGE_BAR_WIDTH,
+    render_usage_bar, usage_severity, UsageMetric, UsageSeverity, USAGE_BAR_WIDTH,
 };
 use sdeck_core::store::tree_prefs::SessionPin;
 
@@ -52,9 +52,6 @@ pub enum ListRow {
         reset_label: Option<String>,
         /// The reading is old: drawn dimmed.
         stale: bool,
-    },
-    UsageBudget {
-        days: Vec<DailySpend>,
     },
     UsageModel {
         label: Option<String>,
@@ -311,7 +308,7 @@ fn tag_row(t: Theme, width: usize, name: &str, count: usize, active: bool, selec
     ])
 }
 
-/// Fixed-width so Context/5h/7d bars line up with each other and with the "Week" budget row.
+/// Fixed-width so Context/5h/7d bars line up with each other.
 const USAGE_LABEL_WIDTH: usize = 7;
 
 fn severity_role(severity: UsageSeverity) -> Role {
@@ -389,28 +386,6 @@ fn usage_model_row(t: Theme, width: usize, label: Option<&str>) -> Line<'static>
     ])
 }
 
-/// This week's day-by-day spend against the 7d quota, below the 7d row.
-fn usage_budget_row(t: Theme, width: usize, days: &[DailySpend]) -> Line<'static> {
-    let lead = "  ";
-    let label = fit("Week", USAGE_LABEL_WIDTH);
-    let text = if days.is_empty() {
-        format!("{label} —")
-    } else {
-        let spend: Vec<String> = days
-            .iter()
-            .map(|d| format!("{}{}%", d.label, d.percent.round()))
-            .collect();
-        format!("{label} {}", spend.join(" "))
-    };
-    let fitted = fit(&text, width.saturating_sub(text_width(lead)).max(1));
-    let pad = " ".repeat(width.saturating_sub(text_width(lead) + text_width(&fitted)));
-    Line::from(vec![
-        Span::styled(lead, t.fg(Role::TextDim)),
-        Span::styled(fitted, t.fg(Role::Text)),
-        Span::raw(pad),
-    ])
-}
-
 /// Lines for the sessions panel: `height` lines, `width` columns each.
 pub fn render_list_panel(
     t: Theme,
@@ -474,7 +449,6 @@ pub fn render_list_panel(
                 reset_label,
                 stale,
             }) => usage_row(t, width, *metric, *percent, reset_label.as_deref(), *stale),
-            Some(ListRow::UsageBudget { days }) => usage_budget_row(t, width, days),
             Some(ListRow::UsageModel { label }) => usage_model_row(t, width, label.as_deref()),
             Some(ListRow::Folder {
                 name,
@@ -637,18 +611,6 @@ mod tests {
                 reset_label: None,
                 stale: false,
             },
-            ListRow::UsageBudget {
-                days: vec![
-                    DailySpend {
-                        label: "Mo",
-                        percent: 12.4,
-                    },
-                    DailySpend {
-                        label: "Tu",
-                        percent: 30.0,
-                    },
-                ],
-            },
         ]
     }
 
@@ -673,7 +635,6 @@ mod tests {
             "  Context ████░░░░░░ 42%",
             "  5h      ███████░░░ 73% (8:30 PM)",
             "  7d      —",
-            "  Week    Mo12% Tu30%",
             "",
             "",
             "",

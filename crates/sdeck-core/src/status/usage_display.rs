@@ -79,28 +79,46 @@ fn weekday_label(d: NaiveDate) -> &'static str {
 pub struct DailySpend {
     /// Two-letter weekday abbreviation: Mo, Tu, We, Th, Fr, Sa, Su.
     pub label: &'static str,
-    /// Percent of the 7d quota spent that day.
-    pub percent: f64,
+    /// Percent of the 7d quota spent that day; `None` when no reading was recorded that day.
+    pub percent: Option<f64>,
 }
 
-/// This calendar week's (Monday through `today`, weekends included) day-by-day spend against the 7d
-/// quota, from a `date -> cumulative percent used` history. A day's spend is the jump from the
-/// previous recorded day's reading, clamped at 0 since the 7d window is rolling (usage can age out).
-/// Days with no recorded reading are left out, so gaps fold into the next recorded day's delta.
-pub fn seven_day_daily_spend(history: &HashMap<String, f64>, today: NaiveDate) -> Vec<DailySpend> {
-    let monday = today - Days::new(u64::from(today.weekday().num_days_from_monday()));
-    let mut days = Vec::new();
-    let mut prev_percent = 0.0;
-    for d in monday.iter_days().take_while(|d| *d <= today) {
-        if let Some(&value) = history.get(&local_date_key(d)) {
-            days.push(DailySpend {
-                label: weekday_label(d),
-                percent: (value - prev_percent).max(0.0),
-            });
-            prev_percent = value;
-        }
+/// The last `days` calendar days ending at `today`, most recent first, from a `date -> percent of
+/// the 7d quota spent that day` map. Days with nothing recorded stay in the list with no percent.
+pub fn recent_daily_spend(spent: &HashMap<String, f64>, today: NaiveDate, days: u64) -> Vec<DailySpend> {
+    (0..days)
+        .filter_map(|back| today.checked_sub_days(Days::new(back)))
+        .map(|d| DailySpend {
+            label: weekday_label(d),
+            percent: spent.get(&local_date_key(d)).copied(),
+        })
+        .collect()
+}
+
+/// What a 7d reading adds to the day it was taken on, given the previous reading: the increase, or
+/// the whole new reading when it went down (the quota reset, so usage restarted from 0). With no
+/// previous reading there is nothing to compare against, so nothing is attributed.
+pub fn spend_since(previous: Option<f64>, current: f64) -> f64 {
+    match previous {
+        None => 0.0,
+        Some(prev) if current >= prev => current - prev,
+        Some(_) => current,
     }
-    days
+}
+
+/// Day-by-day spend rebuilt from end-of-day cumulative readings (`date -> percent`), for history
+/// recorded before spend was tracked per sample. Also returns the latest reading.
+pub fn spend_from_cumulative(history: &HashMap<String, f64>) -> (HashMap<String, f64>, Option<f64>) {
+    let mut dates: Vec<&String> = history.keys().collect();
+    dates.sort();
+    let mut spent = HashMap::new();
+    let mut previous = None;
+    for date in dates {
+        let value = history[date];
+        spent.insert(date.clone(), spend_since(previous, value));
+        previous = Some(value);
+    }
+    (spent, previous)
 }
 
 /// `8:30 PM`, or `20:30` with `use_24_hour`. `with_weekday` prefixes `Mon ` (the 7d quota's reset
@@ -130,12 +148,6 @@ mod tests {
         entries.iter().map(|(k, v)| (k.to_string(), *v)).collect()
     }
 
-    fn spend(label: &'static str, percent: f64) -> DailySpend {
-        DailySpend { label, percent }
-    }
-
-    const WED: (i32, u32, u32) = (2026, 1, 7);
-
     #[test]
     fn local_date_key_is_zero_padded() {
         assert_eq!(local_date_key(day(2026, 1, 7)), "2026-01-07");
@@ -143,45 +155,41 @@ mod tests {
     }
 
     #[test]
-    fn cumulative_readings_become_per_day_deltas_with_monday_baselined_at_0() {
-        let h = history(&[("2026-01-05", 12.0), ("2026-01-06", 20.0), ("2026-01-07", 35.0)]);
-        assert_eq!(
-            seven_day_daily_spend(&h, day(WED.0, WED.1, WED.2)),
-            [spend("Mo", 12.0), spend("Tu", 8.0), spend("We", 15.0)]
-        );
-    }
-
-    #[test]
-    fn stops_at_today() {
-        let h = history(&[("2026-01-05", 12.0), ("2026-01-06", 20.0), ("2026-01-08", 50.0)]);
-        let labels: Vec<_> = seven_day_daily_spend(&h, day(2026, 1, 5))
-            .iter()
-            .map(|d| d.label)
+    fn lists_the_requested_days_newest_first_marking_unrecorded_ones() {
+        let h = history(&[("2026-01-06", 20.0), ("2026-01-04", 3.5)]);
+        let got: Vec<_> = recent_daily_spend(&h, day(2026, 1, 7), 5)
+            .into_iter()
+            .map(|d| (d.label, d.percent))
             .collect();
-        assert_eq!(labels, ["Mo"]);
-    }
-
-    #[test]
-    fn includes_weekends_and_skips_unrecorded_days() {
-        let h = history(&[("2026-01-05", 10.0), ("2026-01-10", 40.0), ("2026-01-11", 55.0)]);
         assert_eq!(
-            seven_day_daily_spend(&h, day(2026, 1, 11)),
-            [spend("Mo", 10.0), spend("Sa", 30.0), spend("Su", 15.0)]
+            got,
+            [
+                ("We", None),
+                ("Tu", Some(20.0)),
+                ("Mo", None),
+                ("Su", Some(3.5)),
+                ("Sa", None)
+            ]
         );
     }
 
     #[test]
-    fn clamps_a_drop_in_the_rolling_total_to_0() {
-        let h = history(&[("2026-01-05", 40.0), ("2026-01-06", 25.0)]);
-        assert_eq!(
-            seven_day_daily_spend(&h, day(2026, 1, 6)),
-            [spend("Mo", 40.0), spend("Tu", 0.0)]
-        );
+    fn an_increase_is_spend_and_a_drop_is_a_reset_counting_the_new_reading() {
+        assert_eq!(spend_since(Some(10.0), 22.0), 12.0);
+        assert_eq!(spend_since(Some(70.0), 5.0), 5.0);
+        assert_eq!(spend_since(Some(5.0), 5.0), 0.0);
+        assert_eq!(spend_since(None, 40.0), 0.0);
     }
 
     #[test]
-    fn empty_history_gives_no_days() {
-        assert!(seven_day_daily_spend(&HashMap::new(), day(WED.0, WED.1, WED.2)).is_empty());
+    fn cumulative_history_is_converted_to_per_day_spend() {
+        let h = history(&[("2026-01-05", 12.0), ("2026-01-06", 20.0), ("2026-01-07", 4.0)]);
+        let (spent, last) = spend_from_cumulative(&h);
+        assert_eq!(last, Some(4.0));
+        assert_eq!(spent["2026-01-05"], 0.0);
+        assert_eq!(spent["2026-01-06"], 8.0);
+        assert_eq!(spent["2026-01-07"], 4.0);
+        assert_eq!(spend_from_cumulative(&HashMap::new()), (HashMap::new(), None));
     }
 
     #[test]

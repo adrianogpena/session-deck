@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use indexmap::IndexMap;
 use sdeck_core::discovery::git_status::GitStatus;
 use sdeck_core::status::session_usage::RateLimitUsage;
-use sdeck_core::status::usage_display::{DailySpend, UsageMetric};
+use sdeck_core::status::usage_display::UsageMetric;
 use sdeck_core::store::tree_prefs::{
     arrange_by_manual_order, arrange_projects, folder_node_key, project_node_key, sort_sessions, GroupView,
     SessionCategory, SessionPin, TreePrefs,
@@ -62,9 +62,6 @@ pub enum TreeRow {
         updated_at: Option<i64>,
         reset_label: Option<String>,
     },
-    UsageBudget {
-        days: Vec<DailySpend>,
-    },
     /// The selected session's model and effort, e.g. `Opus 5.5 · high`.
     UsageModel {
         label: Option<String>,
@@ -101,9 +98,6 @@ pub fn usage_rows(usage: &UsageSectionInput) -> Vec<TreeRow> {
             updated_at: rate.map(|r| r.updated_at),
             reset_label: usage.seven_day_reset_label.clone(),
         },
-        TreeRow::UsageBudget {
-            days: usage.seven_day_daily_spend.clone(),
-        },
     ]
 }
 
@@ -112,7 +106,7 @@ impl TreeRow {
     pub fn is_unselectable(&self) -> bool {
         matches!(
             self,
-            Self::Divider { .. } | Self::Usage { .. } | Self::UsageBudget { .. } | Self::UsageModel { .. }
+            Self::Divider { .. } | Self::Usage { .. } | Self::UsageModel { .. }
         )
     }
 }
@@ -141,8 +135,6 @@ pub struct UsageSectionInput {
     pub rate_limit: Option<RateLimitUsage>,
     pub five_hour_reset_label: Option<String>,
     pub seven_day_reset_label: Option<String>,
-    /// This week's day-by-day spend against the 7d quota.
-    pub seven_day_daily_spend: Vec<DailySpend>,
 }
 
 /// A per-session predicate or lookup the tree is built from.
@@ -1065,19 +1057,14 @@ mod tests {
     fn the_usage_section_is_omitted_unless_asked_for() {
         let sessions = fixture();
         let rows = build_tree(&sessions, &default_tree_prefs(), &opts()).rows;
-        assert!(!rows.iter().any(|r| matches!(
-            r,
-            TreeRow::Usage { .. } | TreeRow::UsageBudget { .. } | TreeRow::UsageModel { .. }
-        )));
+        assert!(!rows
+            .iter()
+            .any(|r| matches!(r, TreeRow::Usage { .. } | TreeRow::UsageModel { .. })));
     }
 
     #[test]
     fn the_usage_section_carries_context_and_rate_limit_data_separately() {
         let sessions = fixture();
-        let spend = vec![DailySpend {
-            label: "Mo",
-            percent: 75.0,
-        }];
         let o = TreeOptions {
             usage: Some(UsageSectionInput {
                 context_percent: Some(42.0),
@@ -1094,13 +1081,12 @@ mod tests {
                 }),
                 five_hour_reset_label: Some("8:30 PM".into()),
                 seven_day_reset_label: Some("Sun 4:21 PM".into()),
-                seven_day_daily_spend: spend.clone(),
             }),
             ..opts()
         };
         let rows = build_tree(&sessions, &default_tree_prefs(), &o).rows;
         assert_eq!(
-            rows[rows.len() - 6..],
+            rows[rows.len() - 5..],
             [
                 TreeRow::Divider {
                     label: "USAGE".into()
@@ -1126,7 +1112,6 @@ mod tests {
                     updated_at: Some(456),
                     reset_label: Some("Sun 4:21 PM".into())
                 },
-                TreeRow::UsageBudget { days: spend },
             ]
         );
     }
@@ -1139,13 +1124,12 @@ mod tests {
             ..opts()
         };
         let rows = build_tree(&sessions, &default_tree_prefs(), &o).rows;
-        let tail = &rows[rows.len() - 6..];
+        let tail = &rows[rows.len() - 5..];
         assert!(matches!(tail[0], TreeRow::Divider { .. }));
         assert_eq!(tail[1], TreeRow::UsageModel { label: None });
         for r in &tail[2..5] {
             assert!(matches!(r, TreeRow::Usage { percent: None, .. }));
         }
-        assert_eq!(tail[5], TreeRow::UsageBudget { days: vec![] });
     }
 
     #[test]

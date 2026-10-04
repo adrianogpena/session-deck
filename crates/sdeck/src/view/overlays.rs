@@ -13,6 +13,9 @@ use sdeck_core::discovery::claude_trace::{TraceKind, TraceStep};
 use sdeck_core::format::humanize_since;
 use sdeck_core::status::alert_log::AlertEntry;
 use sdeck_core::status::session_status::SessionStatus as AlertStatus;
+use sdeck_core::status::usage_display::{
+    render_usage_bar, usage_severity, DailySpend, UsageMetric, UsageSeverity,
+};
 use sdeck_core::store::deck_config::DeckConfig;
 
 use super::list_panel::glyph;
@@ -134,7 +137,7 @@ const HELP_SECTIONS: &[(&str, &[Hint])] = &[
         &[
             ("?", "This help"),
             ("C", "Show the config file in use"),
-            ("w", "Show local skills / agents (← → switches tabs)"),
+            ("w", "Show local skills / agents / account usage (← → switches tabs)"),
             ("a", "Alert history: every status change sdeck has noticed"),
             ("q  Ctrl+C", "Quit (stops background sessions)"),
         ],
@@ -355,19 +358,137 @@ fn group_title(group: &str) -> String {
 pub enum SkillsTab {
     Skills,
     Agents,
+    Usage,
 }
 
 impl SkillsTab {
-    pub fn other(self) -> Self {
+    pub fn next(self) -> Self {
         match self {
             Self::Skills => Self::Agents,
+            Self::Agents => Self::Usage,
+            Self::Usage => Self::Skills,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Skills => Self::Usage,
             Self::Agents => Self::Skills,
+            Self::Usage => Self::Agents,
         }
     }
 }
 
+/// One account's rate-limit readings and this week's day-by-day spend, for the Usage tab.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccountUsage {
+    pub name: String,
+    pub active: bool,
+    pub five_hour_percent: Option<f64>,
+    pub five_hour_reset_label: Option<String>,
+    pub seven_day_percent: Option<f64>,
+    pub seven_day_reset_label: Option<String>,
+    /// The readings are old: the account's sessions have been idle.
+    pub stale: bool,
+    pub days: Vec<DailySpend>,
+}
+
+const USAGE_TAB_BAR_WIDTH: usize = 24;
+const USAGE_TAB_LABEL_WIDTH: usize = 6;
+
+fn usage_tab_row(
+    t: Theme,
+    inner: usize,
+    label: &str,
+    metric: UsageMetric,
+    percent: Option<f64>,
+    reset: Option<&str>,
+    stale: bool,
+) -> Line<'static> {
+    let body = if stale { Role::TextDim } else { Role::Text };
+    let head = format!("  {} ", fit(label, USAGE_TAB_LABEL_WIDTH));
+    let Some(percent) = percent else {
+        return Line::styled(fit(&format!("{head}—"), inner), text(t, Role::TextDim));
+    };
+    let bar_role = if stale {
+        Role::TextDim
+    } else {
+        match usage_severity(metric, percent) {
+            UsageSeverity::Ok => Role::Green,
+            UsageSeverity::Warning => Role::Yellow,
+            UsageSeverity::Critical => Role::Red,
+        }
+    };
+    let percent_text = format!(" {:>3}%", percent.round());
+    let reset = reset
+        .filter(|r| !r.is_empty())
+        .map(|r| format!("  resets {r}"))
+        .unwrap_or_default();
+    let used = text_width(&head) + USAGE_TAB_BAR_WIDTH + text_width(&percent_text) + text_width(&reset);
+    Line::from(vec![
+        Span::styled(head, text(t, body)),
+        Span::styled(render_usage_bar(percent, USAGE_TAB_BAR_WIDTH), text(t, bar_role)),
+        Span::styled(percent_text, text(t, body)),
+        Span::styled(reset, text(t, Role::TextDim)),
+        Span::styled(" ".repeat(inner.saturating_sub(used)), surface(t)),
+    ])
+}
+
+fn usage_lines(t: Theme, inner: usize, accounts: &[AccountUsage], agent_id: &str) -> Vec<Line<'static>> {
+    if agent_id != "claude" {
+        return vec![dim(t, NOT_CLAUDE, inner)];
+    }
+    if accounts.is_empty() {
+        return vec![dim(t, "No Claude accounts found.", inner)];
+    }
+    let mut content = Vec::new();
+    for a in accounts {
+        let suffix = if a.active { " (active)" } else { "" };
+        content.push(Line::styled(
+            fit(&format!("{}{suffix}", a.name), inner),
+            bold(text(t, Role::Cyan)),
+        ));
+        content.push(usage_tab_row(
+            t,
+            inner,
+            UsageMetric::FiveHour.label(),
+            UsageMetric::FiveHour,
+            a.five_hour_percent,
+            a.five_hour_reset_label.as_deref(),
+            a.stale,
+        ));
+        content.push(usage_tab_row(
+            t,
+            inner,
+            UsageMetric::SevenDay.label(),
+            UsageMetric::SevenDay,
+            a.seven_day_percent,
+            a.seven_day_reset_label.as_deref(),
+            a.stale,
+        ));
+        content.push(dim(
+            t,
+            "  Share of the 7d quota spent per day, latest first",
+            inner,
+        ));
+        for d in &a.days {
+            content.push(usage_tab_row(
+                t,
+                inner,
+                &format!("  {}", d.label),
+                UsageMetric::SevenDay,
+                d.percent,
+                None,
+                true,
+            ));
+        }
+        content.push(blank(t, inner));
+    }
+    content
+}
+
 const NOT_CLAUDE: &str =
-    "Skills and subagents are a Claude Code concept — press F3 and switch the Session Deck Agent to Claude to see them.";
+    "Skills, subagents and usage are a Claude Code concept — press F3 and switch the Session Deck Agent to Claude to see them.";
 
 fn name_row(t: Theme, inner: usize, name: &str, description: &str) -> Line<'static> {
     Line::from(vec![
@@ -417,9 +538,13 @@ fn agents_lines(t: Theme, inner: usize, agents: &[LocalAgent], agent_id: &str) -
 
 fn tabs_row(t: Theme, active: SkillsTab, inner: usize) -> Line<'static> {
     let mut spans = Vec::new();
-    for (i, (tab, label)) in [(SkillsTab::Skills, " Skills "), (SkillsTab::Agents, " Agents ")]
-        .into_iter()
-        .enumerate()
+    for (i, (tab, label)) in [
+        (SkillsTab::Skills, " Skills "),
+        (SkillsTab::Agents, " Agents "),
+        (SkillsTab::Usage, " Usage "),
+    ]
+    .into_iter()
+    .enumerate()
     {
         if i > 0 {
             spans.push(Span::styled("  ", surface(t)));
@@ -438,7 +563,7 @@ fn tabs_row(t: Theme, active: SkillsTab, inner: usize) -> Line<'static> {
     Line::from(spans)
 }
 
-/// `w`: local skills (grouped by state) or subagents. Both are a Claude Code concept: with another
+/// `w`: local skills (grouped by state), subagents, or per-account usage. All are a Claude Code concept: with another
 /// Session Deck Agent selected, the tabs say so instead.
 #[allow(clippy::too_many_arguments)]
 pub fn render_skills(
@@ -447,6 +572,7 @@ pub fn render_skills(
     tab: SkillsTab,
     skills: &[LocalSkill],
     agents: &[LocalAgent],
+    usage: &[AccountUsage],
     scroll: &Cell<usize>,
     agent_id: &str,
 ) {
@@ -456,6 +582,7 @@ pub fn render_skills(
     let mut content = match tab {
         SkillsTab::Skills => skills_lines(t, inner, skills, agent_id),
         SkillsTab::Agents => agents_lines(t, inner, agents, agent_id),
+        SkillsTab::Usage => usage_lines(t, inner, usage, agent_id),
     };
     content.push(blank(t, inner));
     content.push(dim(t, "← → switch tabs · Esc or w to close", inner));
@@ -869,12 +996,51 @@ mod tests {
     fn skills_explain_themselves_for_a_non_claude_agent() {
         let scroll = Cell::new(0);
         let screen = draw(120, 20, |f| {
-            render_skills(f, dark(), SkillsTab::Skills, &[], &[], &scroll, "copilot")
+            render_skills(f, dark(), SkillsTab::Skills, &[], &[], &[], &scroll, "copilot")
         });
         assert!(screen.iter().any(|l| l.contains("SKILLS & AGENTS · COPILOT")));
-        assert!(screen
-            .iter()
-            .any(|l| l.contains("Skills and subagents are a Claude Code concept")));
+        assert!(screen.iter().any(|l| l.contains("are a Claude Code concept")));
+    }
+
+    #[test]
+    fn usage_tab_shows_each_account_with_bars_and_daily_spend() {
+        let scroll = Cell::new(0);
+        let accounts = vec![AccountUsage {
+            name: "me@x.com".into(),
+            active: true,
+            five_hour_percent: Some(73.0),
+            five_hour_reset_label: Some("8:30 PM".into()),
+            seven_day_percent: None,
+            seven_day_reset_label: None,
+            stale: false,
+            days: vec![
+                DailySpend {
+                    label: "We",
+                    percent: None,
+                },
+                DailySpend {
+                    label: "Tu",
+                    percent: Some(12.0),
+                },
+            ],
+        }];
+        let screen = draw(120, 30, |f| {
+            render_skills(
+                f,
+                dark(),
+                SkillsTab::Usage,
+                &[],
+                &[],
+                &accounts,
+                &scroll,
+                "claude",
+            )
+        });
+        let all = screen.join("\n");
+        assert!(all.contains("me@x.com (active)"), "{all}");
+        assert!(all.contains("73% ") && all.contains("resets 8:30 PM"), "{all}");
+        assert!(all.contains("Tu") && all.contains("12%"), "{all}");
+        assert!(all.contains("We") && all.contains("—"), "{all}");
     }
 
     #[test]
@@ -893,7 +1059,7 @@ mod tests {
             },
         ];
         let screen = draw(120, 30, |f| {
-            render_skills(f, dark(), SkillsTab::Skills, &skills, &[], &scroll, "claude")
+            render_skills(f, dark(), SkillsTab::Skills, &skills, &[], &[], &scroll, "claude")
         });
         let all = screen.join("\n");
         assert!(all.contains("ON — visible + auto-triggerable (1)"), "{all}");
