@@ -3,6 +3,8 @@
 
 use std::time::Instant;
 
+use sdeck_core::store::tree_prefs::delete_folder;
+
 use super::App;
 
 /// What Enter does with the typed text.
@@ -11,6 +13,10 @@ pub(super) enum PromptAction {
     SendPrompt(u64),
     RenameSession(u64),
     RenameFolder(String),
+    /// Creates the folder, moving these projects into it when given.
+    NewFolder(Vec<String>),
+    SetTags(String),
+    AddTags(Vec<String>),
 }
 
 pub(super) struct TextPrompt {
@@ -25,11 +31,19 @@ pub(super) enum PickerAction {
     NewSession(Vec<String>),
     /// Session ids of the trash entries listed, in order.
     RestoreFromTrash(Vec<String>),
+    /// Entry 0 is the top level, then the folders (ids, in order), then "+ New folder…".
+    MoveToFolder {
+        project_keys: Vec<String>,
+        folder_ids: Vec<String>,
+        bulk: bool,
+    },
 }
 
 /// What `y` does.
 pub(super) enum ConfirmAction {
     RemoveProject(String),
+    DeleteFolder(String),
+    RemoveTag(String),
 }
 
 pub(super) struct Confirm {
@@ -79,6 +93,9 @@ impl App {
             PromptAction::SendPrompt(uid) => self.send_prompt(uid, &value, now),
             PromptAction::RenameSession(uid) => self.rename_session(uid, &value, now),
             PromptAction::RenameFolder(id) => self.rename_folder(&id, &value),
+            PromptAction::NewFolder(keys) => self.new_folder(&value, &keys, now),
+            PromptAction::SetTags(id) => self.set_session_tags(&id, &value, now),
+            PromptAction::AddTags(ids) => self.add_tags_to_sessions(&ids, &value, now),
         }
     }
 
@@ -105,6 +122,8 @@ impl App {
             if key == "y" || key == "Y" {
                 match action {
                     ConfirmAction::RemoveProject(key) => self.remove_project_now(&key, now),
+                    ConfirmAction::DeleteFolder(id) => self.change_tree(|t| delete_folder(&t, &id)),
+                    ConfirmAction::RemoveTag(name) => self.remove_tag_everywhere(&name, now),
                 }
             }
         }
@@ -116,6 +135,11 @@ impl App {
             PickerAction::SetActiveAgent(ids) => self.set_active_agent(&ids[picker.index], now),
             PickerAction::NewSession(ids) => self.new_session(&ids[picker.index], now),
             PickerAction::RestoreFromTrash(ids) => self.restore_from_trash(&ids[picker.index], now),
+            PickerAction::MoveToFolder {
+                project_keys,
+                folder_ids,
+                bulk,
+            } => self.move_to_folder(picker.index, project_keys, &folder_ids, bulk),
         }
     }
 }

@@ -8,7 +8,7 @@ use crate::tree::TreeRow;
 
 impl App {
     /// The checked sessions' uids, in list order.
-    fn multi_selection(&self) -> Vec<u64> {
+    pub(super) fn multi_selection(&self) -> Vec<u64> {
         self.sessions
             .iter()
             .map(|s| s.uid)

@@ -7,6 +7,7 @@ mod attach;
 mod bulk;
 mod chords;
 mod delete;
+mod folders;
 mod input;
 mod interact;
 mod lifecycle;
@@ -15,7 +16,9 @@ mod navigation;
 mod new_session;
 mod preview;
 mod prompt;
+mod reorder;
 mod session_text;
+mod tags;
 #[cfg(test)]
 mod test_fixture;
 
@@ -871,6 +874,11 @@ impl App {
             "u" => self.mark_unread(now),
             "U" => self.mark_read(now),
             "," => self.cycle_pin(now),
+            "g" => self.open_new_folder_prompt(),
+            "M" => self.open_move_picker(now),
+            "L" => self.open_tag_prompt(now),
+            "K" | "\x1b[1;2A" => self.reorder(-1, now),
+            "J" | "\x1b[1;2B" => self.reorder(1, now),
             "d" => self.delete_selected(now),
             "e" | "\x1bOQ" | "\x1b[12~" => self.rename(now),
             "\x0c" => self.clear_context(now),

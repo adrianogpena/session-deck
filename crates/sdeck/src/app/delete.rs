@@ -8,8 +8,7 @@ use sdeck_core::format::{humanize_since, now_ms};
 use sdeck_core::status::session_status::clear_session_status;
 use sdeck_core::store::trash::{list_trash, restore_session, trash_claude_session};
 
-use super::input::Picker;
-use super::input::PickerAction;
+use super::input::{Confirm, ConfirmAction, Picker, PickerAction};
 use super::App;
 use crate::sessions::display_title;
 use crate::tree::TreeRow;
@@ -31,6 +30,18 @@ impl App {
             }) => {
                 let (key, label) = (project_key.clone(), label.clone());
                 self.remove_project(key, &label);
+            }
+            Some(TreeRow::Folder { folder_id, name, .. }) => {
+                self.confirm = Some(Confirm {
+                    question: format!("Delete folder \"{name}\"? Its projects move back to the top level."),
+                    action: ConfirmAction::DeleteFolder(folder_id.clone()),
+                });
+            }
+            Some(TreeRow::Tag { name, .. }) => {
+                self.confirm = Some(Confirm {
+                    question: format!("Remove tag \"{name}\" from every project?"),
+                    action: ConfirmAction::RemoveTag(name.clone()),
+                });
             }
             _ => {}
         }

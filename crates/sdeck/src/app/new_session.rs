@@ -17,7 +17,7 @@ use crate::tree::TreeRow;
 impl App {
     /// The project the selection belongs to, as (key, root): the project row itself, or a
     /// session's project.
-    fn selected_project(&self) -> Option<(String, String)> {
+    pub(super) fn selected_project(&self) -> Option<(String, String)> {
         match self.selected_row()? {
             TreeRow::Project {
                 project_key, root, ..
