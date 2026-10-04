@@ -6,3 +6,10 @@ edition.workspace = true
 [dependencies]
 sdeck-core = { path = "../sdeck-core" }
 anyhow = "1"
+ratatui = "0.30.2"
+crossterm = "0.29.0"
+unicode-width = "0.2.2"
+regex = "1.13.1"
+
+[dev-dependencies]
+tempfile = "3.27.0"
