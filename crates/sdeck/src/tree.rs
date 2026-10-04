@@ -77,6 +77,15 @@ impl TreeRow {
     }
 }
 
+/// The tree node a session belongs to: its project, or its project's per-account node when projects
+/// are `split` per account.
+pub fn node_id_of(s: &DeckSession, split: bool) -> String {
+    match (&s.account, split) {
+        (Some(a), true) => format!("{}\u{0}{}", s.project_key, a.config_dir.to_string_lossy()),
+        _ => s.project_key.clone(),
+    }
+}
+
 /// Input for the bottom usage section; `TreeOptions::usage == None` hides the whole section.
 /// Context is specific to the selected Claude session's transcript; `rate_limit` (5h/7d) is
 /// account-wide.
@@ -397,10 +406,7 @@ pub fn build_tree(sessions: &[DeckSession], tree: &TreePrefs, opts: &TreeOptions
     let mut bucket_of: HashMap<String, usize> = HashMap::new();
     for &s in &shown {
         let split = !opts.share_projects;
-        let node_id = match (&s.account, split) {
-            (Some(a), true) => format!("{}\u{0}{}", s.project_key, a.config_dir.to_string_lossy()),
-            _ => s.project_key.clone(),
-        };
+        let node_id = node_id_of(s, split);
         let i = *bucket_of.entry(node_id.clone()).or_insert_with(|| {
             buckets.push(Bucket {
                 key: s.project_key.clone(),

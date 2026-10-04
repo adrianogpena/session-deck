@@ -21,6 +21,7 @@ use sdeck_core::store::deck_store::DeckStore;
 use sdeck_core::store::tree_prefs::SessionCategory;
 
 use crate::ansi::one_line;
+use crate::live_session::LiveSession;
 
 const GIT_RESOLVE_CONCURRENCY: usize = 8;
 
@@ -40,16 +41,6 @@ pub enum SessionStatus {
     Error,
     Exited,
     Stopped,
-}
-
-/// The part of a session's background PTY the status logic reads. 08 replaces this with the real
-/// `LiveSession` (same field names) once PTYs exist.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct LiveSession {
-    pub pid: u32,
-    pub exited: bool,
-    /// A problem only visible on the agent's screen, e.g. `sign-in failed · run /login`.
-    pub screen_error: Option<String>,
 }
 
 /// A transcript read for the preview: not asked yet is `None` on the session.
@@ -76,7 +67,7 @@ pub struct FoundSession {
 
 static NEXT_UID: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DeckSession {
     /// Identity across rebuilds and id changes (a brand-new session has no id yet).
     pub uid: u64,
@@ -546,7 +537,7 @@ mod tests {
         known.last_response = Some(LastResponse::Ready("cached".into()));
         let known_uid = known.uid;
         let mut live_new = DeckSession::new("claude", None, "C:\\new", "(new session)", 5);
-        live_new.live = Some(LiveSession::default());
+        live_new.live = Some(LiveSession::stub(1));
         let gone = DeckSession::new("claude", Some("gone"), "C:\\gone", "gone", 1);
         let merged = merge_found(
             vec![known, live_new, gone],
@@ -567,7 +558,7 @@ mod tests {
     #[test]
     fn merge_keeps_the_cached_response_of_a_live_session() {
         let mut live = DeckSession::new("claude", Some("a"), "C:\\repos\\api", "t", 1);
-        live.live = Some(LiveSession::default());
+        live.live = Some(LiveSession::stub(1));
         live.last_response = Some(LastResponse::Ready("cached".into()));
         let merged = merge_found(vec![live], vec![found_session("a", 99)]);
         assert_eq!(
@@ -650,36 +641,12 @@ mod tests {
     #[test]
     fn a_live_claude_session_reads_its_own_pid_record() {
         let t = tracker(vec![proc(7, "x", "busy")], &[], &[]);
-        let running = live(
-            claude("x"),
-            LiveSession {
-                pid: 7,
-                ..Default::default()
-            },
-        );
-        let starting = live(
-            claude("y"),
-            LiveSession {
-                pid: 8,
-                ..Default::default()
-            },
-        );
-        let exited = live(
-            claude("x"),
-            LiveSession {
-                pid: 7,
-                exited: true,
-                screen_error: None,
-            },
-        );
-        let errored = live(
-            claude("x"),
-            LiveSession {
-                pid: 7,
-                exited: false,
-                screen_error: Some("sign-in failed".into()),
-            },
-        );
+        let running = live(claude("x"), LiveSession::stub(7));
+        let starting = live(claude("y"), LiveSession::stub(8));
+        let mut exited = live(claude("x"), LiveSession::stub(7));
+        exited.live.as_mut().unwrap().exited = true;
+        let mut errored = live(claude("x"), LiveSession::stub(7));
+        errored.live.as_mut().unwrap().screen_error = Some("sign-in failed".into());
         assert_eq!(t.status_of(&running), SessionStatus::Running);
         assert_eq!(t.status_of(&starting), SessionStatus::Starting);
         assert_eq!(t.status_of(&exited), SessionStatus::Exited);
@@ -697,13 +664,7 @@ mod tests {
         let copilot = |id: &str, live_session: bool| {
             let s = DeckSession::new("copilot", Some(id), "C:\\r", "t", 1);
             if live_session {
-                live(
-                    s,
-                    LiveSession {
-                        pid: 9,
-                        ..Default::default()
-                    },
-                )
+                live(s, LiveSession::stub(9))
             } else {
                 s
             }
@@ -726,13 +687,7 @@ mod tests {
         );
         let category = |s: &DeckSession| t.category_of(s);
         assert_eq!(
-            category(&live(
-                claude("z"),
-                LiveSession {
-                    pid: 99,
-                    ..Default::default()
-                }
-            )),
+            category(&live(claude("z"), LiveSession::stub(99))),
             SessionCategory::Running
         );
         assert_eq!(category(&claude("d")), SessionCategory::Waiting);

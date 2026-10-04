@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use ratatui::crossterm::event::{self, Event};
 
+use sdeck_core::status::claude_transcript_tailer::TailedTurn;
+
 use crate::git_status_tracker::GitStatuses;
 use crate::keys::encode_event;
 use crate::sessions::FoundSession;
@@ -26,6 +28,16 @@ pub enum AppEvent {
     GitStatuses(GitStatuses),
     /// The shared state file changed (the other front end, or us): names and flags may differ.
     StoreChanged,
+    /// Output of a live session's PTY, by `LiveSession::id`.
+    PtyOutput(u64, Vec<u8>),
+    /// A live session's process ended with this exit code, by `LiveSession::id`.
+    PtyExited(u64, u32),
+    /// A stopped session's last reply, read off the main thread, by `DeckSession::uid`.
+    LastResponse(u64, String),
+    /// New turns of the session open elsewhere that the preview tails, by `DeckSession::uid`.
+    LiveTurns(u64, Vec<TailedTurn>),
+    /// A toast was clicked, by session id.
+    ToastClicked(String),
 }
 
 /// Reads the real terminal on its own thread. Events already queued are sent as one `Input`, like a

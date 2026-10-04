@@ -1,7 +1,9 @@
 //! App state and the main loop, port of the `App` class in `app.ts`. One thread owns this state;
 //! everything else reaches it as an [`AppEvent`].
 
+mod lifecycle;
 mod navigation;
+mod preview;
 
 use std::io::Write;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
@@ -16,10 +18,14 @@ use sdeck_core::discovery::claude_storage::clear_session_meta_cache;
 use sdeck_core::format::{humanize_since, now_ms};
 use sdeck_core::paths::user_home;
 use sdeck_core::status::account::Account;
+use sdeck_core::status::claude_process_watcher::ClaudeProcessWatcher;
+use sdeck_core::status::claude_transcript_tailer::{ClaudeTranscriptTailer, TailedTurn};
+use sdeck_core::status::copilot_status_watcher::CopilotStatusWatcher;
 use sdeck_core::status::session_usage::{
     read_latest_rate_limit_usage, read_session_usage, read_seven_day_daily_spend,
 };
 use sdeck_core::status::usage_display::format_reset_time;
+use sdeck_core::status::waiting_notifier::{ToastSender, WaitingNotifier};
 use sdeck_core::store::deck_config::DeckConfig;
 use sdeck_core::store::deck_store::{DeckStore, Patch, ThemePreference, UiPatch, WatchHandle};
 use sdeck_core::store::tree_prefs::{freeze_session_order, GroupView, SessionSort, TreePrefs};
@@ -31,7 +37,8 @@ use crate::filters::{
 };
 use crate::git_status_tracker::{read_all, GitStatusTracker};
 use crate::keys::{extract_focus_events, split_keys};
-use crate::layout::{compute_layout, DEFAULT_SIDEBAR_PCT};
+use crate::layout::{compute_layout, Layout, DEFAULT_SIDEBAR_PCT};
+use crate::live_session::Executables;
 use crate::sessions::{
     discover_found, display_title, merge_found, refresh_live_title, DeckSession, SessionStatus, StatusTracker,
 };
@@ -41,7 +48,8 @@ use crate::theme::{
 };
 use crate::tree::{build_tree, BuiltTree, TreeOptions, TreeRow, UsageSectionInput};
 use crate::view::list_panel::{render_list_panel, ListRow};
-use crate::view::{bars, panel_header, GroupCounts, SessionView};
+use crate::view::preview_panel::{group_preview_lines, render_preview_panel};
+use crate::view::{bars, GroupCounts, SessionView};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const THEME_POLL: Duration = Duration::from_millis(5000);
@@ -108,6 +116,26 @@ pub struct App {
     last_session: Option<u64>,
     previous_session: Option<u64>,
     _store_watch: Option<WatchHandle>,
+
+    /// The real terminal's size, from resize events.
+    term_size: (u16, u16),
+    executables: Executables,
+    /// Tails the events log of Copilot sessions running here, writing their status files.
+    copilot_watcher: CopilotStatusWatcher,
+    /// Turns Claude's process status into status files ("done" after a turn), like the extension.
+    _claude_watcher: Option<ClaudeProcessWatcher>,
+    /// Toasts for sessions that need you; `None` until enabled (tests inject a fake sender).
+    notifier: Option<WaitingNotifier<Box<dyn ToastSender>>>,
+    /// Last terminal title written, so it's only rewritten when it changes.
+    last_title: String,
+    /// Lines the preview is scrolled back from the live bottom, for `scrolled_session`; reset when
+    /// the selection moves.
+    preview_scroll: usize,
+    scrolled_session: Option<u64>,
+    /// Live, read-only preview of whichever elsewhere session is previewed (`live_preview_for`).
+    live_preview_tailer: ClaudeTranscriptTailer,
+    live_preview_turns: Vec<TailedTurn>,
+    live_preview_for: Option<u64>,
 }
 
 impl App {
@@ -154,15 +182,29 @@ impl App {
             last_session: None,
             previous_session: None,
             _store_watch: None,
+            term_size: (120, 30),
+            executables: Executables::default(),
+            copilot_watcher: CopilotStatusWatcher::new(|_| {}),
+            _claude_watcher: None,
+            notifier: None,
+            last_title: String::new(),
+            preview_scroll: 0,
+            scrolled_session: None,
+            live_preview_tailer: ClaudeTranscriptTailer::new(|_| {}),
+            live_preview_turns: Vec::new(),
+            live_preview_for: None,
         }
     }
 
     /// Turns on the real data sources: the first discovery now, then rediscovery whenever the shared
     /// state file changes, and pid/status/git polling on the loop's ticks.
     pub fn start_background(&mut self, accounts: Vec<Account>, config: DeckConfig) {
+        self._claude_watcher = Some(ClaudeProcessWatcher::start(accounts.clone(), |_| {}));
         self.accounts = accounts;
         self.config = config;
         self.sources_enabled = true;
+        // Pays the `where.exe` lookups now, not on whichever session starts first.
+        self.executables.warm(&self.config);
         let tx = self.tx.clone();
         self._store_watch = self
             .store
@@ -171,6 +213,26 @@ impl App {
             })
             .ok();
         self.spawn_discovery();
+    }
+
+    /// Desktop toasts for sessions that need you (`ui.notifications`).
+    pub fn enable_notifications(&mut self, sender: Box<dyn ToastSender>) {
+        self.notifier = Some(WaitingNotifier::new(sender));
+    }
+
+    pub fn set_size(&mut self, cols: u16, rows: u16) {
+        self.term_size = (cols, rows);
+        self.resize_all_to_pane();
+        self.dirty = true;
+    }
+
+    fn layout(&self) -> Layout {
+        compute_layout(
+            self.term_size.0,
+            self.term_size.1,
+            self.sidebar_pct,
+            self.sidebar_visible,
+        )
     }
 
     pub fn should_quit(&self) -> bool {
@@ -184,7 +246,7 @@ impl App {
     pub fn handle(&mut self, ev: AppEvent, now: Instant) {
         match ev {
             AppEvent::Input(data) => self.on_input(&data, now),
-            AppEvent::Resize(..) => self.dirty = true,
+            AppEvent::Resize(cols, rows) => self.set_size(cols, rows),
             AppEvent::Tick => self.on_tick(now),
             AppEvent::OsTheme(theme) => {
                 self.os_probe_running = false;
@@ -210,8 +272,14 @@ impl App {
                 self.dirty = true;
             }
             AppEvent::StoreChanged => self.spawn_discovery(),
+            AppEvent::PtyOutput(id, data) => self.on_pty_output(id, &data, now),
+            AppEvent::PtyExited(id, code) => self.on_pty_exit(id, code),
+            AppEvent::LastResponse(uid, text) => self.on_last_response(uid, text),
+            AppEvent::LiveTurns(uid, turns) => self.on_live_turns(uid, turns),
+            AppEvent::ToastClicked(id) => self.on_toast_clicked(&id, now),
         }
         self.track_selection();
+        self.sync_preview();
     }
 
     fn on_tick(&mut self, now: Instant) {
@@ -232,7 +300,7 @@ impl App {
                 .is_none_or(|last| now.duration_since(last) >= PROC_POLL)
             {
                 self.last_proc_poll = Some(now);
-                self.poll_procs();
+                self.poll_procs(now);
             }
             if self
                 .last_git_poll
@@ -242,6 +310,7 @@ impl App {
                 self.poll_git_status();
             }
         }
+        self.tick_live(now);
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -279,13 +348,17 @@ impl App {
         });
     }
 
-    /// Re-reads pid and status files, keeps live titles and "elsewhere" times current, then
-    /// re-applies the tree (statuses, and so filter matches, move on their own).
-    fn poll_procs(&mut self) {
+    /// Re-reads pid and status files, keeps live sessions' ids and titles and "elsewhere" times
+    /// current, types queued prompts, then re-applies the tree (statuses, and so filter matches, move
+    /// on their own) and notifies.
+    fn poll_procs(&mut self, now: Instant) {
         self.procs.poll(&self.store, &self.accounts);
+        self.adopt_live_ids();
+        let mut live = Vec::new();
         for s in &mut self.sessions {
             if s.is_live() {
                 refresh_live_title(s, &self.accounts);
+                live.push(s.uid);
             } else if s.file.is_some() && self.procs.is_elsewhere(s) {
                 // Another terminal keeps writing to it: keep its "5m ago" current.
                 if let Some(mtime) = s
@@ -299,7 +372,12 @@ impl App {
                 }
             }
         }
+        for uid in live {
+            self.send_pending_prompt(uid, now);
+        }
         self.rebuild_rows();
+        self.notify_changes();
+        self.update_title();
         self.dirty = true;
     }
 
@@ -638,9 +716,15 @@ impl App {
             self.select_hotkey(digit - b'0');
             return;
         }
+        if self.on_page_key(key) {
+            return;
+        }
         match key {
-            "\x1b[A" | "\x1bOA" | "k" => self.move_selection(-1),
-            "\x1b[B" | "\x1bOB" | "j" => self.move_selection(1),
+            // Arrows scroll a live preview that has scrollback; k/j always move.
+            "\x1b[A" | "\x1bOA" => self.on_arrow(-1),
+            "k" => self.move_selection(-1),
+            "\x1b[B" | "\x1bOB" => self.on_arrow(1),
+            "j" => self.move_selection(1),
             "\x1b[D" | "h" => self.collapse_or_parent(),
             "\x1b[C" | "l" => self.expand_or_child(),
             "\t" => self.toggle_selected_group(),
@@ -650,6 +734,9 @@ impl App {
             "[" => self.cycle_active_session(-1, now),
             "]" => self.cycle_active_session(1, now),
             "T" => self.cycle_theme(now),
+            "s" => self.start_selected(now),
+            "x" => self.stop_selected(now),
+            "R" => self.restart(now),
             "S" => {
                 self.change_tree(|t| TreePrefs {
                     sort: if t.sort == SessionSort::Recent {
@@ -871,11 +958,14 @@ impl App {
             place_lines(frame, list, lines);
         }
         if let Some(preview) = layout.preview {
-            place_lines(
-                frame,
-                preview,
-                panel_header(t, usize::from(preview.width), "PREVIEW", "").to_vec(),
-            );
+            match self.group_preview() {
+                Some(group) => place_lines(
+                    frame,
+                    preview,
+                    group_preview_lines(t, usize::from(preview.width), usize::from(preview.height), &group),
+                ),
+                None => render_preview_panel(t, preview, frame.buffer_mut(), self.preview_content().as_ref()),
+            }
         }
         if let (Some(x), Some(list)) = (layout.divider_x, layout.list) {
             for y in 0..list.height {
@@ -926,6 +1016,8 @@ where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
     app.refresh_system_theme(Instant::now());
+    let size = terminal.size()?;
+    app.set_size(size.width, size.height);
     loop {
         if !app.pending_output.is_empty() {
             out.write_all(std::mem::take(&mut app.pending_output).as_bytes())?;

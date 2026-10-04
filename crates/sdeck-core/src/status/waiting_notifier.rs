@@ -26,6 +26,12 @@ pub trait ToastSender {
     fn send(&self, toast: Toast, on_activated: Box<dyn Fn() + Send + Sync>);
 }
 
+impl<T: ToastSender + ?Sized> ToastSender for Box<T> {
+    fn send(&self, toast: Toast, on_activated: Box<dyn Fn() + Send + Sync>) {
+        (**self).send(toast, on_activated);
+    }
+}
+
 pub struct CheckOptions<'a> {
     /// Statuses worth a toast (`config.ui.notify_statuses`).
     pub statuses: &'a [SessionStatus],

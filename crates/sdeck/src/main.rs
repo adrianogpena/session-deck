@@ -61,6 +61,10 @@ fn main() -> anyhow::Result<()> {
     let (tx, rx) = mpsc::channel();
     let mut app = App::new(DeckStore::at_default_path(), tx.clone(), Some(read_os_theme));
     app.start_background(discover_accounts(), read_deck_config(&deck_config_path()));
+    #[cfg(windows)]
+    app.enable_notifications(Box::new(
+        sdeck_core::status::waiting_notifier::WindowsToastSender::new(),
+    ));
     let _guard = TerminalGuard::enter()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     spawn_input_thread(tx);

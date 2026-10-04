@@ -70,6 +70,13 @@ fn status_glyph(status: SessionStatus) -> (char, Role, bool) {
     }
 }
 
+/// A session's styled status dot.
+pub(crate) fn glyph(t: Theme, status: SessionStatus) -> Span<'static> {
+    let (glyph, role, is_bold) = status_glyph(status);
+    let style = t.fg(role);
+    Span::styled(glyph.to_string(), if is_bold { bold(style) } else { style })
+}
+
 fn bold(style: Style) -> Style {
     style.add_modifier(Modifier::BOLD)
 }
