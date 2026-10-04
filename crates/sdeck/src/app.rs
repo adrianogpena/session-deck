@@ -1,9 +1,15 @@
 //! App state and the main loop, port of the `App` class in `app.ts`. One thread owns this state;
 //! everything else reaches it as an [`AppEvent`].
 
+mod attach;
+mod chords;
+mod interact;
 mod lifecycle;
 mod navigation;
+mod new_session;
 mod preview;
+#[cfg(test)]
+mod test_fixture;
 
 use std::io::Write;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
@@ -79,10 +85,25 @@ pub struct App {
     message_until: Option<Instant>,
     /// Whether sdeck's window is in front (focus reports); assumed until told otherwise.
     focused: bool,
-    /// Sequences for the real terminal (e.g. the OSC 11 query), written by the loop before drawing.
-    pending_output: String,
+    /// Bytes for the real terminal (the OSC 11 query, an attached agent's output), written by the
+    /// loop before drawing.
+    pending_output: Vec<u8>,
     dirty: bool,
+    /// The real terminal was drawn over (attach, sidebar toggle): the loop repaints all of it.
+    clear_screen: bool,
+    /// sdeck's own mouse capture to switch on/off, applied by the loop through crossterm (it reads
+    /// console input records on Windows, so raw mode sequences wouldn't do).
+    mouse_capture_change: Option<bool>,
     quit: bool,
+
+    /// Full-screen attached session (by uid): sdeck doesn't draw, the agent owns the terminal.
+    attached: Option<u64>,
+    /// Session typed into while the list and preview keep rendering.
+    interacting: Option<u64>,
+    /// Ctrl+K arrived while attached/interacting; the next key decides if it's a chord.
+    chord_pending: bool,
+    /// `m`: sdeck's mouse scrolling. Off by default (and always while attached), not persisted.
+    mouse_tracking: bool,
 
     /// Settings from `~/.session-deck/config.json`.
     config: DeckConfig,
@@ -156,9 +177,15 @@ impl App {
             message: String::new(),
             message_until: None,
             focused: true,
-            pending_output: String::new(),
+            pending_output: Vec::new(),
             dirty: true,
+            clear_screen: false,
+            mouse_capture_change: None,
             quit: false,
+            attached: None,
+            interacting: None,
+            chord_pending: false,
+            mouse_tracking: false,
             config: DeckConfig::default(),
             accounts: Vec::new(),
             sources_enabled: false,
@@ -222,8 +249,18 @@ impl App {
 
     pub fn set_size(&mut self, cols: u16, rows: u16) {
         self.term_size = (cols, rows);
+        if let Some(uid) = self.attached {
+            if let Some(live) = self.session_mut(uid).and_then(|s| s.live.as_mut()) {
+                live.resize(cols, rows);
+            }
+        }
         self.resize_all_to_pane();
         self.dirty = true;
+    }
+
+    /// Queues `text` for the real terminal.
+    fn emit(&mut self, text: &str) {
+        self.pending_output.extend_from_slice(text.as_bytes());
     }
 
     fn layout(&self) -> Layout {
@@ -642,10 +679,11 @@ impl App {
     /// OS setting until the terminal has answered once.
     pub fn refresh_system_theme(&mut self, now: Instant) {
         self.last_theme_poll = Some(now);
-        if self.theme_preference != ThemePreference::System {
+        // Attached, the query would reach the terminal mid-agent-output and its reply the agent.
+        if self.theme_preference != ThemePreference::System || self.attached.is_some() {
             return;
         }
-        self.pending_output.push_str(OSC11_QUERY);
+        self.emit(OSC11_QUERY);
         if let Some(probe) = self
             .os_theme_probe
             .filter(|_| !self.terminal_reports_background && !self.os_probe_running)
@@ -691,14 +729,24 @@ impl App {
         if let Some(focused) = focused {
             self.focused = focused;
         }
+        if let Some(uid) = self.attached {
+            self.on_live_input(uid, &data, now);
+            return;
+        }
         // Answers to our background-color query arrive mixed into the input.
         let (theme, rest) = extract_background_reply(&data);
         if let Some(theme) = theme {
             self.terminal_reports_background = true;
             self.set_system_theme(theme);
         }
-        for key in split_keys(&rest) {
-            self.on_key(&key, now);
+        let keys = split_keys(&rest);
+        for (i, key) in keys.iter().enumerate() {
+            if let Some(uid) = self.attached {
+                // A key (Enter) just attached a session: the rest of the chunk is typed into it.
+                self.on_live_input(uid, &keys[i..].concat(), now);
+                return;
+            }
+            self.on_key(key, now);
             if self.quit {
                 return;
             }
@@ -707,6 +755,14 @@ impl App {
 
     fn on_key(&mut self, key: &str, now: Instant) {
         self.dirty = true;
+        if let Some(uid) = self.interacting {
+            // With mouse tracking on, a wheel notch scrolls the preview rather than reaching the
+            // agent as a plain ↑/↓ (which it would take as prompt-history recall).
+            if !self.on_mouse_sequence(key) {
+                self.on_live_input(uid, key, now);
+            }
+            return;
+        }
         if let Some(category) = filter_key_category(key) {
             toggle_status_filter(&mut self.status_filter, category);
             self.rebuild_rows();
@@ -716,7 +772,7 @@ impl App {
             self.select_hotkey(digit - b'0');
             return;
         }
-        if self.on_page_key(key) {
+        if self.on_mouse_sequence(key) || self.on_page_key(key) {
             return;
         }
         match key {
@@ -728,8 +784,15 @@ impl App {
             "\x1b[D" | "h" => self.collapse_or_parent(),
             "\x1b[C" | "l" => self.expand_or_child(),
             "\t" => self.toggle_selected_group(),
-            // Attaching to a session arrives in 09.
-            "\r" => self.enter_selected_row(),
+            "\r" => match self.selected_session().map(|s| s.uid) {
+                Some(uid) => self.attach(uid, now),
+                None => self.enter_selected_row(),
+            },
+            "i" => match self.selected_session().map(|s| s.uid) {
+                Some(uid) => self.start_interacting(uid, now),
+                None => self.flash("Select a session to interact with.".into(), now),
+            },
+            "m" => self.toggle_mouse_tracking(now),
             "`" => self.select_previous_session(now),
             "[" => self.cycle_active_session(-1, now),
             "]" => self.cycle_active_session(1, now),
@@ -977,10 +1040,13 @@ impl App {
         }
 
         let bottom = row(area.height.saturating_sub(1));
-        if self.message.is_empty() {
-            frame.render_widget(bars::help_bar(t, cols), bottom);
-        } else {
+        if !self.message.is_empty() {
             frame.render_widget(bars::message_bar(t, cols, &self.message), bottom);
+        } else if self.interacting.is_some() {
+            let text = "Interacting · Ctrl+Q to stop · Ctrl+K T to attach";
+            frame.render_widget(bars::message_bar(t, cols, text), bottom);
+        } else {
+            frame.render_widget(bars::help_bar(t, cols), bottom);
         }
     }
 }
@@ -1020,10 +1086,22 @@ where
     app.set_size(size.width, size.height);
     loop {
         if !app.pending_output.is_empty() {
-            out.write_all(std::mem::take(&mut app.pending_output).as_bytes())?;
+            out.write_all(&std::mem::take(&mut app.pending_output))?;
             out.flush()?;
         }
-        if std::mem::take(&mut app.dirty) {
+        if let Some(on) = app.mouse_capture_change.take() {
+            // Best effort: there's no console to set in tests.
+            let _ = if on {
+                ratatui::crossterm::execute!(out, ratatui::crossterm::event::EnableMouseCapture)
+            } else {
+                ratatui::crossterm::execute!(out, ratatui::crossterm::event::DisableMouseCapture)
+            };
+        }
+        // Attached, the agent owns the screen: nothing is drawn until detach.
+        if app.attached.is_none() && std::mem::take(&mut app.dirty) {
+            if std::mem::take(&mut app.clear_screen) {
+                terminal.clear()?;
+            }
             terminal.draw(|f| app.draw(f))?;
         }
         let first = match rx.recv_timeout(TICK) {
@@ -1149,7 +1227,7 @@ mod tests {
         app.handle(AppEvent::Tick, now + Duration::from_millis(100));
         assert!(app.pending_output.is_empty());
         app.handle(AppEvent::Tick, now + THEME_POLL);
-        assert_eq!(app.pending_output, OSC11_QUERY);
+        assert_eq!(app.pending_output, OSC11_QUERY.as_bytes());
         assert!(rx.try_recv().is_err());
     }
 }

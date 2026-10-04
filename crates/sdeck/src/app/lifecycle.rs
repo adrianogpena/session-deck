@@ -126,7 +126,6 @@ impl App {
 
     /// Refuses a session open elsewhere and starts a stopped one. `false` if it couldn't be readied
     /// (already flashed why); a brand-new session that never got to run is dropped from the list.
-    #[allow(dead_code)] // attach and interact (09)
     pub(super) fn ensure_live(&mut self, uid: u64, now: Instant) -> bool {
         let Some(s) = self.session_by_uid(uid) else {
             return false;
@@ -213,13 +212,18 @@ impl App {
 
     pub(super) fn on_pty_output(&mut self, live_id: u64, data: &[u8], now: Instant) {
         let selected = self.selected_session().map(|s| s.uid);
-        if let Some(s) = self.live_mut(live_id) {
-            if let Some(live) = s.live.as_mut() {
-                live.feed(data, false, now);
-            }
-            if Some(s.uid) == selected {
-                self.dirty = true;
-            }
+        let attached = self.attached;
+        let Some(s) = self.live_mut(live_id) else {
+            return;
+        };
+        let is_attached = attached == Some(s.uid);
+        if let Some(live) = s.live.as_mut() {
+            live.feed(data, is_attached, now);
+        }
+        if is_attached {
+            self.pending_output.extend_from_slice(data);
+        } else if Some(s.uid) == selected {
+            self.dirty = true;
         }
     }
 
@@ -230,6 +234,7 @@ impl App {
         if let Some(live) = s.live.as_mut() {
             live.on_exit(code);
         }
+        let uid = s.uid;
         let (agent, id) = (s.agent.clone(), s.id.clone());
         if let Some(id) = id {
             if agent == "copilot" {
@@ -237,6 +242,13 @@ impl App {
             } else if !is_builtin_agent(&agent) {
                 clear_session_status(&id);
             }
+        }
+        let note = format!("Session exited (code {code})");
+        if self.attached == Some(uid) {
+            self.detach(Some(note));
+        } else if self.interacting == Some(uid) {
+            self.interacting = None;
+            self.flash(note, Instant::now());
         }
         self.rebuild_rows();
         self.dirty = true;
@@ -253,12 +265,13 @@ impl App {
         }
     }
 
-    /// Fits every background agent to the preview's body.
+    /// Fits every background agent (all but the attached one) to the preview's body.
     pub(super) fn resize_all_to_pane(&mut self) {
         let Some((cols, rows)) = self.pty_size() else {
             return;
         };
-        for s in &mut self.sessions {
+        let attached = self.attached;
+        for s in self.sessions.iter_mut().filter(|s| Some(s.uid) != attached) {
             if let Some(live) = s.live.as_mut() {
                 live.resize(cols, rows);
             }
@@ -380,8 +393,14 @@ impl App {
         let on_activated: OnActivated = Arc::new(move |id: &str| {
             let _ = tx.send(AppEvent::ToastClicked(id.to_string()));
         });
-        // 09 skips the attached/interacting session here.
-        let skip = |_: &str| false;
+        // Not the one you're attached to or typing into.
+        let in_use: Vec<&str> = [self.attached, self.interacting]
+            .into_iter()
+            .flatten()
+            .filter_map(|uid| self.sessions.iter().find(|s| s.uid == uid))
+            .filter_map(|s| s.id.as_deref())
+            .collect();
+        let skip = |id: &str| in_use.contains(&id);
         let options = CheckOptions {
             statuses: &self.config.ui.notify_statuses,
             skip: &skip,
@@ -424,7 +443,7 @@ impl App {
             n => format!("Session Deck · ◐ {n} need you"),
         };
         if title != self.last_title {
-            self.pending_output.push_str(&format!("\x1b]0;{title}\x07"));
+            self.emit(&format!("\x1b]0;{title}\x07"));
             self.last_title = title;
         }
     }
@@ -433,97 +452,11 @@ impl App {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::sync::mpsc::{self, Receiver};
-    use std::sync::Mutex;
 
     use sdeck_core::status::session_status::session_status_dir;
-    use sdeck_core::status::waiting_notifier::{Toast, ToastSender, WaitingNotifier};
-    use sdeck_core::store::deck_config::DeckConfig;
-    use sdeck_core::store::deck_store::DeckStore;
 
     use super::*;
-    use crate::live_session::tests::fake_agent;
-    use crate::test_support::EnvGuard;
-
-    struct Fixture {
-        app: App,
-        rx: Receiver<AppEvent>,
-        toasts: Arc<Mutex<Vec<Toast>>>,
-        home: tempfile::TempDir,
-        _guard: EnvGuard,
-    }
-
-    struct FakeToasts(Arc<Mutex<Vec<Toast>>>);
-
-    impl ToastSender for FakeToasts {
-        fn send(&self, toast: Toast, _on_activated: Box<dyn Fn() + Send + Sync>) {
-            self.0.lock().unwrap().push(toast);
-        }
-    }
-
-    /// An app whose `claude` is `fake-agent`, over a temp home.
-    fn fixture() -> Fixture {
-        let guard = EnvGuard::new();
-        let home = tempfile::tempdir().unwrap();
-        std::env::set_var("SDECK_USER_HOME", home.path());
-        let (tx, rx) = mpsc::channel();
-        let mut app = App::new(DeckStore::new(home.path().join("state.json")), tx, None);
-        let mut config = DeckConfig::default();
-        config.tools.get_mut("claude").unwrap().command = Some(fake_agent().to_string_lossy().into_owned());
-        app.config = config;
-        let toasts = Arc::new(Mutex::new(Vec::new()));
-        app.notifier = Some(WaitingNotifier::new(Box::new(FakeToasts(Arc::clone(&toasts)))));
-        Fixture {
-            app,
-            rx,
-            toasts,
-            home,
-            _guard: guard,
-        }
-    }
-
-    impl Fixture {
-        fn add(&mut self, id: Option<&str>, on_disk: bool) -> u64 {
-            let cwd = self.home.path().to_string_lossy().into_owned();
-            let mut s = DeckSession::new("claude", id, &cwd, "a session", 1);
-            s.on_disk = on_disk;
-            let uid = s.uid;
-            self.app.sessions.push(s);
-            self.app.rebuild_rows();
-            self.app
-                .select_where(|r| matches!(r, TreeRow::Session { uid: u, .. } if *u == uid));
-            uid
-        }
-
-        fn key(&mut self, key: &str) {
-            self.app.handle(AppEvent::Input(key.into()), Instant::now());
-        }
-
-        fn session(&self, uid: u64) -> Option<&DeckSession> {
-            self.app.session_by_uid(uid)
-        }
-
-        /// Pumps PTY events into the app until the selected session's screen shows `text`.
-        fn wait_for_screen(&mut self, uid: u64, text: &str) {
-            let deadline = Instant::now() + Duration::from_secs(15);
-            loop {
-                let contents = self
-                    .session(uid)
-                    .and_then(|s| s.live.as_ref())
-                    .map(|l| l.screen().contents())
-                    .unwrap_or_default();
-                if contents.contains(text) {
-                    return;
-                }
-                let left = deadline.saturating_duration_since(Instant::now());
-                let ev = self
-                    .rx
-                    .recv_timeout(left)
-                    .unwrap_or_else(|_| panic!("timed out waiting for {text:?}; screen:\n{contents}"));
-                self.app.handle(ev, Instant::now());
-            }
-        }
-    }
+    use crate::app::test_fixture::fixture;
 
     #[test]
     fn s_starts_x_stops_and_capital_r_restarts() {
@@ -803,7 +736,7 @@ mod tests {
     fn the_window_title_counts_sessions_that_need_you() {
         let mut f = fixture();
         f.app.update_title();
-        assert_eq!(f.app.pending_output, "\x1b]0;Session Deck\x07");
+        assert_eq!(f.app.pending_output, b"\x1b]0;Session Deck\x07");
         f.app.pending_output.clear();
         f.app.update_title();
         assert!(f.app.pending_output.is_empty());

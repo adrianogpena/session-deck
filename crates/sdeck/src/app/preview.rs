@@ -157,7 +157,7 @@ impl App {
         Some(PreviewContent {
             view: self.view_of(s),
             screen: live.map(|l| l.screen_at(self.preview_scroll)),
-            interacting: false,
+            interacting: self.interacting == Some(s.uid),
             exit_code: s.live.as_ref().and_then(|l| l.exit_code),
             last_response: s.last_response.as_ref(),
             live_turns: self

@@ -1477,6 +1477,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "unicode-width",
+ "uuid",
  "vt100",
 ]
 

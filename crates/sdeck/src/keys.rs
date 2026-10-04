@@ -12,14 +12,20 @@ use regex::Regex;
 /// Ctrl+Q, in every encoding the real terminal may use while attached: plain (0x11), kitty CSI-u, and
 /// Windows Terminal's win32-input-mode (`ESC[Vk;Sc;Uc;Kd;Cs;Rc_`, Vk 81 = Q, key-down, a Ctrl bit set
 /// in Cs, no Alt). ConPTY itself asks for win32-input-mode (`ESC[?9001h`), and that request reaches
-/// the real terminal while attached, so after that plain 0x11 never arrives.
-static DETACH_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\x11|\x1b\[113;5u|\x1b\[81;\d*;\d*;1;(\d+);\d*_").unwrap());
-/// Same encodings as [`DETACH_PATTERN`], for Ctrl+K (0x0b, Vk 75 = K, kitty code point 107 = k).
-static CHORD_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\x0b|\x1b\[107;5u|\x1b\[75;\d*;\d*;1;(\d+);\d*_").unwrap());
+/// the real terminal while attached, so after that plain 0x11 never arrives. Also xterm's
+/// modifyOtherKeys (`ESC[27;<mod>;113~`), which WezTerm sends once an agent turns it on (not in TS).
+static DETACH_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\x11|\x1b\[113;5u|\x1b\[81;\d*;\d*;1;(\d+);\d*_|\x1b\[27;(\d+);113~").unwrap()
+});
+/// Same encodings as [`DETACH_PATTERN`], for Ctrl+K (0x0b, Vk 75 = K, code point 107 = k).
+static CHORD_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\x0b|\x1b\[107;5u|\x1b\[75;\d*;\d*;1;(\d+);\d*_|\x1b\[27;(\d+);107~").unwrap()
+});
 const CTRL_PRESSED: u32 = 0x04 | 0x08;
 const ALT_PRESSED: u32 = 0x01 | 0x02;
+/// Bits of an xterm modifier parameter minus 1 (see [`modifier_param`]).
+const XTERM_CTRL: u32 = 4;
+const XTERM_ALT: u32 = 2;
 
 /// Terminal modes an agent (or ConPTY) may switch on in the real terminal while attached.
 pub const RESET_AGENT_MODES: &str =
@@ -38,13 +44,19 @@ pub const ENABLE_FOCUS_REPORTING: &str = "\x1b[?1004h";
 fn match_ctrl_key(data: &str, pattern: &Regex) -> Option<(usize, usize)> {
     pattern.captures_iter(data).find_map(|c| {
         let m = c.get(0)?;
-        match c.get(1) {
-            None => Some((m.start(), m.end())),
-            Some(state) => {
-                let state: u32 = state.as_str().parse().unwrap_or(0);
-                (state & CTRL_PRESSED != 0 && state & ALT_PRESSED == 0).then_some((m.start(), m.end()))
+        let num = |g: regex::Match| g.as_str().parse::<u32>().unwrap_or(0);
+        let ctrl_only = match (c.get(1), c.get(2)) {
+            (Some(state), _) => {
+                let state = num(state);
+                state & CTRL_PRESSED != 0 && state & ALT_PRESSED == 0
             }
-        }
+            (None, Some(param)) => {
+                let bits = num(param).saturating_sub(1);
+                bits & XTERM_CTRL != 0 && bits & XTERM_ALT == 0
+            }
+            (None, None) => true,
+        };
+        ctrl_only.then_some((m.start(), m.end()))
     })
 }
 
@@ -272,6 +284,9 @@ mod tests {
         assert_eq!(find_detach_key("\x1b[81;16;113;1;0;1_"), None);
         assert_eq!(find_detach_key("\x1b[81;16;17;0;8;1_"), None);
         assert_eq!(find_detach_key("\x1b[81;16;0;1;10;1_"), None);
+        assert_eq!(find_detach_key("x\x1b[27;5;113~"), Some(1));
+        assert_eq!(find_detach_key("\x1b[27;7;113~"), None);
+        assert_eq!(find_detach_key("\x1b[27;2;113~"), None);
     }
 
     #[test]
@@ -282,6 +297,8 @@ mod tests {
         assert_eq!(find_chord_key("\x1b[75;16;107;1;0;1_"), None);
         assert_eq!(find_chord_key("\x1b[75;16;17;0;8;1_"), None);
         assert_eq!(find_chord_key("\x1b[75;16;0;1;10;1_"), None);
+        assert_eq!(find_chord_key("\x1b[27;5;107~"), Some((0, 11)));
+        assert_eq!(find_chord_key("\x1b[27;3;107~"), None);
     }
 
     #[test]

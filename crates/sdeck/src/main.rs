@@ -3,7 +3,7 @@ use std::sync::mpsc;
 
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::cursor::{Hide, Show};
-use ratatui::crossterm::event::{DisableFocusChange, EnableFocusChange};
+use ratatui::crossterm::event::{DisableFocusChange, DisableMouseCapture, EnableFocusChange};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -21,7 +21,13 @@ use sdeck_core::store::deck_store::DeckStore;
 fn restore_terminal() {
     let mut out = stdout();
     let _ = out.write_all(RESET_AGENT_MODES.as_bytes());
-    let _ = execute!(out, DisableFocusChange, Show, LeaveAlternateScreen);
+    let _ = execute!(
+        out,
+        DisableMouseCapture,
+        DisableFocusChange,
+        Show,
+        LeaveAlternateScreen
+    );
     let _ = disable_raw_mode();
 }
 

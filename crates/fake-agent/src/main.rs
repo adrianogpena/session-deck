@@ -3,7 +3,7 @@
 //!
 //! - `/exit [code]` exits (default code 0).
 //! - `/sign-in-error` prints the API error a failed sign-in shows.
-//! - Anything else is echoed back, followed by a `done` marker.
+//! - Anything else is echoed back (control characters escaped), followed by a `done` marker.
 
 use std::io::{BufRead, Write};
 
@@ -16,8 +16,8 @@ fn main() {
     let _ = write!(out, "> ");
     let _ = out.flush();
     for line in std::io::stdin().lock().lines() {
-        let Ok(line) = line else { break };
-        let line = line.trim();
+        let Ok(raw) = line else { break };
+        let line = raw.trim();
         if let Some(rest) = line.strip_prefix("/exit") {
             std::process::exit(rest.trim().parse().unwrap_or(0));
         }
@@ -27,7 +27,8 @@ fn main() {
                 r#"API Error: 401 {{"type":"error","error":{{"type":"authentication_error"}}}}"#
             );
         } else {
-            let _ = writeln!(out, "echo: {line}");
+            let typed = raw.trim_matches([' ', '\r']).escape_debug();
+            let _ = writeln!(out, "echo: {typed}");
             let _ = writeln!(out, "done");
         }
         let _ = write!(out, "> ");
