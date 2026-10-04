@@ -1,12 +1,13 @@
 //! `F4`: which logged-in Claude account new sessions launch as. New in the Rust version.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use sdeck_core::paths;
 use sdeck_core::status::account::{
     account_dir_for_name, create_account_dir, discover_accounts, Account, SHAREABLE,
 };
+use sdeck_core::status::statusline::{enable_statusline_for_all, statusline_command, StatusLineOutcome};
 use sdeck_core::store::deck_config::{deck_config_path, write_deck_config};
 
 use super::input::{Picker, PickerAction};
@@ -20,6 +21,26 @@ fn label(account: &Account) -> String {
 }
 
 impl App {
+    /// Adds the usage statusLine to each config dir without one, and says what happened in a short phrase.
+    pub(super) fn enable_usage_statusline(dirs: &[PathBuf]) -> String {
+        let Ok(exe) = std::env::current_exe() else {
+            return "statusLine not added (executable path unknown)".into();
+        };
+        let outcomes = enable_statusline_for_all(dirs, &statusline_command(&exe));
+        let count = |wanted| outcomes.iter().filter(|o| **o == wanted).count();
+        let mut parts = vec![format!("statusLine added to {}", count(StatusLineOutcome::Added))];
+        for (outcome, text) in [
+            (StatusLineOutcome::AlreadySet, "already set"),
+            (StatusLineOutcome::Unreadable, "settings.json unreadable"),
+            (StatusLineOutcome::Failed, "failed"),
+        ] {
+            if count(outcome) > 0 {
+                parts.push(format!("{} {text}", count(outcome)));
+            }
+        }
+        parts.join(", ")
+    }
+
     /// `F4`: the accounts (a `*` marks the one new sessions launch as) and "+ Add account…". Accounts
     /// are rediscovered first, so one logged in since startup is listed.
     pub(super) fn open_account_picker(&mut self) {
@@ -97,14 +118,18 @@ impl App {
             .map(|((entry, _, _), _)| *entry)
             .collect();
         match create_account_dir(dir, source, &entries) {
-            Ok(linked) => self.flash(
-                format!(
+            Ok(linked) => {
+                let mut message = format!(
                     "Created {} ({} linked). Run `claude` with CLAUDE_CONFIG_DIR set to it and /login; it then shows in F4",
                     dir.display(),
                     linked.len()
-                ),
-                now,
-            ),
+                );
+                if self.config.ui.show_usage {
+                    let usage = Self::enable_usage_statusline(&[dir.to_path_buf()]);
+                    message.push_str(&format!(" ({usage})"));
+                }
+                self.flash(message, now);
+            }
             Err(message) => self.flash(message, now),
         }
     }
@@ -142,6 +167,39 @@ mod tests {
         };
         f.app.accounts = vec![work.clone(), me.clone()];
         (work, me)
+    }
+
+    #[test]
+    fn turning_on_ui_show_usage_adds_the_status_line_to_every_account_without_one() {
+        let mut f = fixture();
+        let (work, me) = two_accounts(&mut f);
+        std::fs::create_dir_all(&me.config_dir).unwrap();
+        std::fs::create_dir_all(&work.config_dir).unwrap();
+        let own = r#"{"statusLine":{"type":"command","command":"mine.sh"}}"#;
+        std::fs::write(work.config_dir.join("settings.json"), own).unwrap();
+        let index = crate::config_fields::CONFIG_FIELDS
+            .iter()
+            .position(|c| c.label == "ui.showUsage")
+            .unwrap();
+        assert!(!f.app.config.ui.show_usage);
+
+        f.app.apply_config_field(index, "", Instant::now());
+
+        assert!(f.app.config.ui.show_usage);
+        let added = std::fs::read_to_string(me.config_dir.join("settings.json")).unwrap();
+        assert!(added.contains("statusline-hook"), "{added}");
+        assert_eq!(
+            std::fs::read_to_string(work.config_dir.join("settings.json")).unwrap(),
+            own
+        );
+        assert!(
+            f.app.message.contains("statusLine added to 1"),
+            "{}",
+            f.app.message
+        );
+
+        f.app.apply_config_field(index, "", Instant::now());
+        assert!(!f.app.message.contains("statusLine"), "{}", f.app.message);
     }
 
     #[test]

@@ -4,10 +4,12 @@
 //! Search (`/`) and the trajectory (`v`) have their own modules.
 
 use std::cell::Cell;
+use std::path::PathBuf;
 use std::time::Instant;
 
 use ratatui::Frame;
 use sdeck_core::format::now_ms;
+use sdeck_core::status::account::discover_accounts;
 use sdeck_core::status::alert_log::{read_alerts, AlertEntry, ALERT_LOG_CAP};
 use sdeck_core::store::deck_config::{deck_config_path, write_deck_config};
 
@@ -202,6 +204,7 @@ impl App {
             self.flash(format!("Invalid value for {}", field.label), now);
             return;
         };
+        let usage_turned_on = !self.config.ui.show_usage && next.ui.show_usage;
         self.config = next;
         let _ = write_deck_config(&self.config, &deck_config_path());
         // A `tools.*.command` edit shouldn't need a restart to take effect.
@@ -215,7 +218,17 @@ impl App {
             // Turning `ui.gitStatus` on shows markers now, not after the next poll.
             self.poll_git_status();
         }
-        self.flash(format!("{} updated", field.label), now);
+        let mut message = format!("{} updated", field.label);
+        if usage_turned_on {
+            let mut dirs: Vec<PathBuf> = discover_accounts().into_iter().map(|a| a.config_dir).collect();
+            for known in &self.accounts {
+                if !dirs.contains(&known.config_dir) {
+                    dirs.push(known.config_dir.clone());
+                }
+            }
+            message.push_str(&format!(" ({})", Self::enable_usage_statusline(&dirs)));
+        }
+        self.flash(message, now);
     }
 
     /// Empty while the query is blank: nothing is listed yet, so nothing should run on Enter either.

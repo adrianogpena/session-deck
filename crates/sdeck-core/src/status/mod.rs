@@ -6,6 +6,7 @@ pub mod copilot_status_watcher;
 pub mod process;
 pub mod session_status;
 pub mod session_usage;
+pub mod statusline;
 pub mod usage_display;
 pub mod waiting_notifier;
 pub mod watch;

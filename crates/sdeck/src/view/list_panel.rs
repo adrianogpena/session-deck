@@ -338,7 +338,8 @@ fn usage_row(
     };
     let body_role = if stale { Role::TextDim } else { Role::Text };
     let bar = render_usage_bar(percent, USAGE_BAR_WIDTH);
-    let plain = format!("{label} {bar} {percent}%{reset}");
+    let shown = percent.round();
+    let plain = format!("{label} {bar} {shown}%{reset}");
     if text_width(&plain) > avail {
         let fitted = fit(&plain, avail);
         let pad = " ".repeat(width.saturating_sub(text_width(lead) + text_width(&fitted)));
@@ -356,7 +357,7 @@ fn usage_row(
                 severity_role(usage_severity(metric, percent))
             }),
         ),
-        Span::styled(format!(" {percent}%"), t.fg(body_role)),
+        Span::styled(format!(" {shown}%"), t.fg(body_role)),
         Span::styled(reset, t.fg(Role::TextDim)),
         Span::raw(pad),
     ])

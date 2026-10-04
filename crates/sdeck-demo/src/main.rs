@@ -522,7 +522,7 @@ fn write_scenarios(sb: &Sandbox, all: &[Session]) {
 
 fn write_config_and_accounts(sb: &Sandbox, agent: &Path) {
     let config = json!({
-        "ui": {"notifications": false},
+        "ui": {"notifications": false, "showUsage": true},
         "tools": {"claude": {"command": agent.display().to_string()}, "copilot": {"enabled": false}},
     });
     let dir = sb.home.join(".session-deck");

@@ -1,4 +1,4 @@
-use std::io::{stdout, IsTerminal, Write};
+use std::io::{stdout, IsTerminal, Read, Write};
 use std::sync::mpsc;
 
 use ratatui::backend::CrosstermBackend;
@@ -14,6 +14,7 @@ use sdeck::event::spawn_input_thread;
 use sdeck::keys::RESET_AGENT_MODES;
 use sdeck::theme::read_os_theme;
 use sdeck_core::status::account::discover_accounts;
+use sdeck_core::status::statusline::run_statusline_hook;
 use sdeck_core::store::deck_config::{deck_config_path, read_deck_config};
 use sdeck_core::store::deck_store::DeckStore;
 
@@ -52,6 +53,12 @@ impl Drop for TerminalGuard {
 fn main() -> anyhow::Result<()> {
     if std::env::args().skip(1).any(|a| a == "--version" || a == "-V") {
         println!("{VERSION}");
+        return Ok(());
+    }
+    if std::env::args().nth(1).as_deref() == Some("statusline-hook") {
+        let mut payload = String::new();
+        let _ = std::io::stdin().read_to_string(&mut payload);
+        println!("{}", run_statusline_hook(&payload));
         return Ok(());
     }
     if !std::io::stdin().is_terminal() {

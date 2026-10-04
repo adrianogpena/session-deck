@@ -91,7 +91,7 @@ impl Default for DeckConfig {
                 new_session_full_screen: true,
                 git_status: true,
                 expand_collapsed_on_active_jump: true,
-                show_usage: true,
+                show_usage: false,
                 use_24_hour_clock: false,
                 active_account_config_dir: None,
                 extra: Map::new(),
@@ -360,7 +360,7 @@ mod tests {
         assert!(c.ui.new_session_full_screen);
         assert!(c.ui.git_status);
         assert!(c.ui.expand_collapsed_on_active_jump);
-        assert!(c.ui.show_usage);
+        assert!(!c.ui.show_usage);
         assert!(!c.ui.use_24_hour_clock);
         assert_eq!(c.tools["claude"], ToolConfig::default());
         assert_eq!(c.tools["copilot"], ToolConfig::default());
