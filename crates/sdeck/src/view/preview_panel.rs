@@ -327,6 +327,7 @@ mod tests {
             detail: None,
             git: None,
             account_tag: None,
+            other_account: false,
         }
     }
 

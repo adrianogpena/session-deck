@@ -340,15 +340,18 @@ Sessions from every logged-in Claude account are listed together.
 
 - **Accounts**: `~/.claude` is the default account. Every sibling folder `~/.claude-<name>` whose
   `.claude.json` has an `oauthAccount` email is another one.
-- **Adding an account**: run `CLAUDE_CONFIG_DIR=~/.claude-<name> claude` once and log in. Then point
-  that folder's `settings.json` `statusLine` at the shared script (`~/.claude/statusline-command.sh`),
-  so its usage numbers reach Session Deck.
+- **Adding an account**: `F4` → "+ Add account…", type the folder name, pick what to share. With a
+  project selected, a new Claude then opens as the new account: run `/login` there. It shows in `F4`
+  with its email once logged in. (Or run `CLAUDE_CONFIG_DIR=~/.claude-<name> claude` yourself.)
+  With `ui.showUsage` on, the usage `statusLine` is added to the new folder.
 - **`F4`**: picks the account new sessions launch as. The default account is launched without
   `CLAUDE_CONFIG_DIR`; the others with it set to their folder.
 - **`accounts.shareProjects`** (default on): a project used by several accounts shows as one row.
   Off: one row per account.
 - **`accounts.showAllSessions`** (default on): list every account's sessions. Off: only the active
   account's.
+- **`accounts.showOwner`** (default off): another account's session line also shows its owner's name.
+  Off: the session's title is only dimmed.
 - Pins, folders and order are kept per folder path, not per account.
 
 ---

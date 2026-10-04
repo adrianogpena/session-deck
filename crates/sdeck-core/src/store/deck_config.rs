@@ -61,6 +61,8 @@ pub struct AccountsConfig {
     pub share_projects: bool,
     /// Show every account's sessions (true) or only the active account's (false). Default: true.
     pub show_all_sessions: bool,
+    /// Show the owning account's name on the session line of another account's session. Default: false.
+    pub show_owner: bool,
     pub extra: Map<String, Value>,
 }
 
@@ -107,6 +109,7 @@ impl Default for DeckConfig {
             accounts: AccountsConfig {
                 share_projects: true,
                 show_all_sessions: true,
+                show_owner: false,
                 extra: Map::new(),
             },
             extra: Map::new(),
@@ -244,12 +247,15 @@ pub fn parse_deck_config(raw: &str) -> DeckConfig {
     }
 
     if let Some(accounts) = root.get("accounts").and_then(Value::as_object) {
-        config.accounts.extra = extras(accounts, &["shareProjects", "showAllSessions"]);
+        config.accounts.extra = extras(accounts, &["shareProjects", "showAllSessions", "showOwner"]);
         if let Some(b) = accounts.get("shareProjects").and_then(Value::as_bool) {
             config.accounts.share_projects = b;
         }
         if let Some(b) = accounts.get("showAllSessions").and_then(Value::as_bool) {
             config.accounts.show_all_sessions = b;
+        }
+        if let Some(b) = accounts.get("showOwner").and_then(Value::as_bool) {
+            config.accounts.show_owner = b;
         }
     }
     config
@@ -311,6 +317,7 @@ pub fn deck_config_to_json(config: &DeckConfig) -> String {
     let mut accounts = Map::new();
     accounts.insert("shareProjects".into(), config.accounts.share_projects.into());
     accounts.insert("showAllSessions".into(), config.accounts.show_all_sessions.into());
+    accounts.insert("showOwner".into(), config.accounts.show_owner.into());
     accounts.extend(config.accounts.extra.clone());
 
     let mut root = Map::new();

@@ -246,7 +246,7 @@ fn session_row(t: Theme, width: usize, r: SessionRow, selected: bool) -> Line<'s
     if v.elsewhere {
         spans.push(Span::styled("↗ ", t.fg(Role::Purple)));
     }
-    let mut title_style = t.fg(Role::Text);
+    let mut title_style = t.fg(if v.other_account { Role::TextDim } else { Role::Text });
     if active {
         title_style = bold(title_style);
     }
@@ -518,6 +518,7 @@ mod tests {
             detail: None,
             git: None,
             account_tag: None,
+            other_account: false,
         }
     }
 
@@ -657,12 +658,15 @@ mod tests {
         let t = Theme::new(ThemeName::Dark);
         let mut other = view("Other", SessionStatus::Waiting);
         other.account_tag = Some("me".into());
+        other.other_account = true;
         let lines = render_list_panel(t, 40, 5, &[session(other, true, None)], 9, "", "empty");
         let row = &lines[2];
         let tag = row.spans.iter().find(|s| s.content == " me").unwrap();
         assert_eq!(tag.style, t.fg(Role::TextDim));
         let dot = row.spans.iter().find(|s| s.content == "◐").unwrap();
         assert_eq!(dot.style.fg, Some(t.color(Role::Yellow)));
+        let title = row.spans.iter().find(|s| s.content == "Other").unwrap();
+        assert_eq!(title.style.fg, Some(t.color(Role::TextDim)));
     }
 
     #[test]

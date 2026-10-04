@@ -36,6 +36,7 @@ enum Setting {
     TrashRetentionDays,
     ShareProjects,
     ShowAllSessions,
+    ShowOwner,
 }
 
 pub struct ConfigField {
@@ -166,6 +167,7 @@ impl ConfigField {
             Setting::TrashRetentionDays => c.trash.retention_days.to_string(),
             Setting::ShareProjects => on_off(c.accounts.share_projects),
             Setting::ShowAllSessions => on_off(c.accounts.show_all_sessions),
+            Setting::ShowOwner => on_off(c.accounts.show_owner),
         }
     }
 
@@ -234,6 +236,7 @@ impl ConfigField {
             Setting::TrashRetentionDays => c.trash.retention_days = positive_int(input)?,
             Setting::ShareProjects => c.accounts.share_projects = !c.accounts.share_projects,
             Setting::ShowAllSessions => c.accounts.show_all_sessions = !c.accounts.show_all_sessions,
+            Setting::ShowOwner => c.accounts.show_owner = !c.accounts.show_owner,
         }
         Some(c)
     }
@@ -327,6 +330,12 @@ fn build_fields() -> Vec<ConfigField> {
         Toggle,
         Setting::ShowAllSessions,
         Some("On: every logged-in account's sessions are listed. Off: only the active account's (F4 switches it)."),
+    ));
+    fields.push(ConfigField::new(
+        "accounts.showOwner",
+        Toggle,
+        Setting::ShowOwner,
+        Some("On: another account's session line shows its owner's name. Off: the title is only dimmed."),
     ));
     fields
 }

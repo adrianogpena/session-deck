@@ -54,6 +54,9 @@ pub struct SessionView {
     /// The owning account's email local part, for a session of an account that isn't the active
     /// one (only set when more than one account exists).
     pub account_tag: Option<String>,
+    /// The session belongs to an account other than the active one (only set when more than one
+    /// account exists); its title is dimmed.
+    pub other_account: bool,
 }
 
 /// Counts shown on a folder or project row.

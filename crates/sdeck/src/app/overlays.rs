@@ -393,7 +393,7 @@ mod tests {
         let mut f = fixture();
         f.add(Some("a"), true);
         f.key("C");
-        let last = crate::config_fields::CONFIG_FIELDS.len() - 1;
+        let last = crate::config_fields::CONFIG_FIELDS.len() - 2;
         for _ in 0..last {
             f.key("j");
         }

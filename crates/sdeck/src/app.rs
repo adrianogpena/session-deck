@@ -767,10 +767,12 @@ impl App {
         let status = self.procs.status_of(s);
         let active = s.is_live() && matches!(status, SessionStatus::Running | SessionStatus::Waiting);
         let active_dir = self.active_account().map(|a| &a.config_dir);
-        let account_tag = (self.accounts.len() > 1)
+        let other = (self.accounts.len() > 1)
             .then_some(s.account.as_ref())
             .flatten()
-            .filter(|a| Some(&a.config_dir) != active_dir)
+            .filter(|a| Some(&a.config_dir) != active_dir);
+        let account_tag = other
+            .filter(|_| self.config.accounts.show_owner)
             .and_then(|a| a.email.as_deref())
             .map(|email| email.split('@').next().unwrap_or(email).to_string());
         SessionView {
@@ -797,6 +799,7 @@ impl App {
                 .then(|| self.git.get(&s.cwd).cloned())
                 .flatten(),
             account_tag,
+            other_account: other.is_some(),
         }
     }
 

@@ -45,8 +45,9 @@ impl App {
     /// are rediscovered first, so one logged in since startup is listed.
     pub(super) fn open_account_picker(&mut self) {
         for found in discover_accounts() {
-            if !self.accounts.iter().any(|a| a.config_dir == found.config_dir) {
-                self.accounts.push(found);
+            match self.accounts.iter_mut().find(|a| a.config_dir == found.config_dir) {
+                Some(known) => known.email = found.email.or(known.email.take()),
+                None => self.accounts.push(found),
             }
         }
         let active = self.active_account().map(|a| a.config_dir.clone());
@@ -119,16 +120,29 @@ impl App {
             .collect();
         match create_account_dir(dir, source, &entries) {
             Ok(linked) => {
-                let mut message = format!(
-                    "Created {} ({} linked). Run `claude` with CLAUDE_CONFIG_DIR set to it and /login; it then shows in F4",
-                    dir.display(),
-                    linked.len()
-                );
+                let mut message = format!("Created {} ({} linked)", dir.display(), linked.len());
                 if self.config.ui.show_usage {
                     let usage = Self::enable_usage_statusline(&[dir.to_path_buf()]);
                     message.push_str(&format!(" ({usage})"));
                 }
-                self.flash(message, now);
+                let account = Account {
+                    config_dir: dir.to_path_buf(),
+                    email: None,
+                    is_default: false,
+                };
+                if !self.accounts.iter().any(|a| a.config_dir == account.config_dir) {
+                    self.accounts.push(account.clone());
+                }
+                if self.selected_project().is_some() {
+                    self.switch_account(&account, now);
+                    self.new_session("claude", now);
+                    self.flash(format!("{message}. Run /login here; it then shows in F4"), now);
+                } else {
+                    self.flash(
+                        format!("{message}. Select a project and press n after F4 to log in"),
+                        now,
+                    );
+                }
             }
             Err(message) => self.flash(message, now),
         }
@@ -261,6 +275,21 @@ mod tests {
         assert!(f.app.picker.is_none());
         assert!(f.home.path().join(".claude-work").is_dir());
         assert!(f.app.message.starts_with("Created"));
+    }
+
+    #[test]
+    fn adding_an_account_with_a_project_selected_opens_claude_as_it_to_log_in() {
+        let mut f = fixture();
+        f.add(Some("abc"), true);
+        f.key("\x1bOS");
+        f.key("j\r");
+        f.key("work\r");
+        f.key("\r");
+        let dir = f.home.path().join(".claude-work");
+        assert!(dir.is_dir());
+        assert!(f.app.message.contains("/login"), "{}", f.app.message);
+        let fresh = f.app.attached.expect("attached");
+        f.wait_for_screen(fresh, &format!("CLAUDE_CONFIG_DIR={}", dir.display()));
     }
 
     #[test]
