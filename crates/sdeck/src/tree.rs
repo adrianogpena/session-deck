@@ -5,7 +5,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
 use indexmap::IndexMap;
+use sdeck_core::discovery::claude_storage::CacheState;
 use sdeck_core::discovery::git_status::GitStatus;
+use sdeck_core::format::humanize_since;
 use sdeck_core::status::session_usage::RateLimitUsage;
 use sdeck_core::status::usage_display::UsageMetric;
 use sdeck_core::store::tree_prefs::{
@@ -66,6 +68,37 @@ pub enum TreeRow {
     UsageModel {
         label: Option<String>,
     },
+    /// Whether the selected session's next message reads from the prompt cache or re-sends the
+    /// whole context.
+    UsageCache {
+        cache: Option<UsageCache>,
+    },
+}
+
+/// `Cached Session` while the prompt cache is alive, `Fetch Session` once it expired.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UsageCache {
+    pub warm: bool,
+    /// Time left on the cache, or time since it expired, e.g. `4m left`.
+    pub detail: String,
+}
+
+/// A cache alive for `ttl` after its last request: `4m left` while warm, `47m ago` (the last request)
+/// once expired.
+pub fn usage_cache(state: CacheState, now_ms: i64) -> UsageCache {
+    let left = state.last_request_ms + state.ttl_ms - now_ms;
+    if left > 0 {
+        let minutes = (left + 59_999) / 60_000;
+        UsageCache {
+            warm: true,
+            detail: format!("{minutes}m left"),
+        }
+    } else {
+        UsageCache {
+            warm: false,
+            detail: humanize_since(state.last_request_ms, now_ms),
+        }
+    }
 }
 
 /// The rows under the USAGE divider.
@@ -77,6 +110,9 @@ pub fn usage_rows(usage: &UsageSectionInput) -> Vec<TreeRow> {
     });
     vec![
         TreeRow::UsageModel { label: model_label },
+        TreeRow::UsageCache {
+            cache: usage.cache.clone(),
+        },
         TreeRow::Usage {
             metric: UsageMetric::Context,
             percent: usage.context_percent,
@@ -106,7 +142,7 @@ impl TreeRow {
     pub fn is_unselectable(&self) -> bool {
         matches!(
             self,
-            Self::Divider { .. } | Self::Usage { .. } | Self::UsageModel { .. }
+            Self::Divider { .. } | Self::Usage { .. } | Self::UsageModel { .. } | Self::UsageCache { .. }
         )
     }
 }
@@ -132,6 +168,7 @@ pub struct UsageSectionInput {
     /// The session's model display name and reasoning effort.
     pub model: Option<String>,
     pub effort: Option<String>,
+    pub cache: Option<UsageCache>,
     pub rate_limit: Option<RateLimitUsage>,
     pub five_hour_reset_label: Option<String>,
     pub seven_day_reset_label: Option<String>,
@@ -1057,9 +1094,10 @@ mod tests {
     fn the_usage_section_is_omitted_unless_asked_for() {
         let sessions = fixture();
         let rows = build_tree(&sessions, &default_tree_prefs(), &opts()).rows;
-        assert!(!rows
-            .iter()
-            .any(|r| matches!(r, TreeRow::Usage { .. } | TreeRow::UsageModel { .. })));
+        assert!(!rows.iter().any(|r| matches!(
+            r,
+            TreeRow::Usage { .. } | TreeRow::UsageModel { .. } | TreeRow::UsageCache { .. }
+        )));
     }
 
     #[test]
@@ -1072,6 +1110,10 @@ mod tests {
                 context_startup_percent: Some(6.4),
                 model: Some("Opus 5.5".into()),
                 effort: Some("high".into()),
+                cache: Some(UsageCache {
+                    warm: true,
+                    detail: "4m left".into(),
+                }),
                 rate_limit: Some(RateLimitUsage {
                     five_hour_percent: Some(30.0),
                     five_hour_resets_at: None,
@@ -1086,13 +1128,19 @@ mod tests {
         };
         let rows = build_tree(&sessions, &default_tree_prefs(), &o).rows;
         assert_eq!(
-            rows[rows.len() - 5..],
+            rows[rows.len() - 6..],
             [
                 TreeRow::Divider {
                     label: "USAGE".into()
                 },
                 TreeRow::UsageModel {
                     label: Some("Opus 5.5 · high".into())
+                },
+                TreeRow::UsageCache {
+                    cache: Some(UsageCache {
+                        warm: true,
+                        detail: "4m left".into()
+                    })
                 },
                 TreeRow::Usage {
                     metric: UsageMetric::Context,
@@ -1124,10 +1172,11 @@ mod tests {
             ..opts()
         };
         let rows = build_tree(&sessions, &default_tree_prefs(), &o).rows;
-        let tail = &rows[rows.len() - 5..];
+        let tail = &rows[rows.len() - 6..];
         assert!(matches!(tail[0], TreeRow::Divider { .. }));
         assert_eq!(tail[1], TreeRow::UsageModel { label: None });
-        for r in &tail[2..5] {
+        assert_eq!(tail[2], TreeRow::UsageCache { cache: None });
+        for r in &tail[3..6] {
             assert!(matches!(r, TreeRow::Usage { percent: None, .. }));
         }
     }

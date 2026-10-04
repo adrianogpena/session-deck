@@ -308,6 +308,80 @@ fn parse_session_search_text(path: &Path) -> String {
     parts.join("\n")
 }
 
+/// When a session last called the API and how long Anthropic keeps its prompt cache after that.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CacheState {
+    /// Epoch ms of the last assistant message.
+    pub last_request_ms: i64,
+    pub ttl_ms: i64,
+}
+
+const CACHE_TTL_5M_MS: i64 = 5 * 60 * 1000;
+const CACHE_TTL_1H_MS: i64 = 60 * 60 * 1000;
+const CACHE_TAIL_BYTES: u64 = 512 * 1024;
+
+static CACHE_STATE_CACHE: MtimeCache<Option<CacheState>> = Mutex::new(None);
+
+/// The session's prompt-cache state, from the newest assistant usage in its transcript. Cached by mtime.
+pub fn read_cache_state(path: &Path) -> Option<CacheState> {
+    cached(&CACHE_STATE_CACHE, path, || parse_cache_state(path)).flatten()
+}
+
+fn parse_cache_state(path: &Path) -> Option<CacheState> {
+    let mut file = File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let start = len.saturating_sub(CACHE_TAIL_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut tail = Vec::new();
+    file.read_to_end(&mut tail).ok()?;
+    let body = if start > 0 {
+        tail.iter()
+            .position(|&b| b == b'\n')
+            .map_or(&tail[..0], |i| &tail[i + 1..])
+    } else {
+        &tail[..]
+    };
+    let mut last_request_ms = None;
+    for line in body.split(|&b| b == b'\n').rev() {
+        let Ok(record) = serde_json::from_slice::<Value>(line) else {
+            continue;
+        };
+        let Some(usage) = message_of(&record, "assistant", "assistant").and_then(|m| m.get("usage")) else {
+            continue;
+        };
+        if last_request_ms.is_none() {
+            let stamp = record.get("timestamp").and_then(Value::as_str)?;
+            last_request_ms = Some(
+                chrono::DateTime::parse_from_rfc3339(stamp)
+                    .ok()?
+                    .timestamp_millis(),
+            );
+        }
+        let written = |key: &str| {
+            usage
+                .get("cache_creation")
+                .and_then(|c| c.get(key))
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+        };
+        let ttl_ms = if written("ephemeral_1h_input_tokens") > 0 {
+            CACHE_TTL_1H_MS
+        } else if written("ephemeral_5m_input_tokens") > 0 {
+            CACHE_TTL_5M_MS
+        } else {
+            continue;
+        };
+        return Some(CacheState {
+            last_request_ms: last_request_ms?,
+            ttl_ms,
+        });
+    }
+    last_request_ms.map(|last_request_ms| CacheState {
+        last_request_ms,
+        ttl_ms: CACHE_TTL_5M_MS,
+    })
+}
+
 /// The last assistant reply's text, for "Copy Last Response". Not cached: a one-off action.
 pub fn read_last_assistant_response(path: &Path) -> Option<String> {
     read_records(path)
@@ -589,6 +663,50 @@ mod tests {
         fs::write(home.path().join(".claude-me/.claude.json"), login("me@x.com")).unwrap();
         let accounts = discover_accounts();
         (g, home, accounts)
+    }
+
+    fn assistant_at(stamp: &str, created_5m: u64, created_1h: u64) -> String {
+        json!({
+            "type": "assistant",
+            "timestamp": stamp,
+            "message": {"role": "assistant", "usage": {"cache_creation": {
+                "ephemeral_5m_input_tokens": created_5m,
+                "ephemeral_1h_input_tokens": created_1h
+            }}}
+        })
+        .to_string()
+    }
+
+    fn cache_state_of(lines: &[String]) -> Option<CacheState> {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("s.jsonl");
+        fs::write(&file, lines.join("\n")).unwrap();
+        parse_cache_state(&file)
+    }
+
+    #[test]
+    fn cache_state_takes_the_ttl_of_the_newest_cache_write_and_the_time_of_the_last_reply() {
+        let state = cache_state_of(&[
+            assistant_at("2026-10-04T10:00:00.000Z", 900, 0),
+            assistant_at("2026-10-04T10:05:00.000Z", 0, 0),
+        ])
+        .unwrap();
+        assert_eq!(state.ttl_ms, CACHE_TTL_5M_MS);
+        assert_eq!(state.last_request_ms, 1_791_108_300_000);
+
+        let state = cache_state_of(&[
+            assistant_at("2026-10-04T10:00:00.000Z", 0, 900),
+            assistant_at("2026-10-04T10:05:00.000Z", 0, 0),
+        ])
+        .unwrap();
+        assert_eq!(state.ttl_ms, CACHE_TTL_1H_MS);
+    }
+
+    #[test]
+    fn cache_state_defaults_to_five_minutes_and_is_none_without_a_reply() {
+        let state = cache_state_of(&[assistant_at("2026-10-04T10:00:00.000Z", 0, 0)]).unwrap();
+        assert_eq!(state.ttl_ms, CACHE_TTL_5M_MS);
+        assert_eq!(cache_state_of(&[transcript("C:\\a", "hi")]), None);
     }
 
     #[test]

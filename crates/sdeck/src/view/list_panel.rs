@@ -56,6 +56,10 @@ pub enum ListRow {
     UsageModel {
         label: Option<String>,
     },
+    /// `(warm, detail)`: the prompt cache is alive, and how long is left or has passed.
+    UsageCache {
+        cache: Option<(bool, String)>,
+    },
 }
 
 /// `(glyph, role, bold)` of a session's status dot.
@@ -386,6 +390,24 @@ fn usage_model_row(t: Theme, width: usize, label: Option<&str>) -> Line<'static>
     ])
 }
 
+/// `Cache   Cached Session · 4m left` or `Cache   Fetch Session · idle 47m`, or `—` without a transcript.
+fn usage_cache_row(t: Theme, width: usize, cache: Option<&(bool, String)>) -> Line<'static> {
+    let lead = "  ";
+    let head = fit("Cache", USAGE_LABEL_WIDTH);
+    let (text, role) = match cache {
+        Some((true, detail)) => (format!("{head} Cached Session · {detail}"), Role::Green),
+        Some((false, detail)) => (format!("{head} Fetch Session · {detail}"), Role::Yellow),
+        None => (format!("{head} —"), Role::TextDim),
+    };
+    let fitted = fit(&text, width.saturating_sub(text_width(lead)).max(1));
+    let pad = " ".repeat(width.saturating_sub(text_width(lead) + text_width(&fitted)));
+    Line::from(vec![
+        Span::styled(lead, t.fg(Role::TextDim)),
+        Span::styled(fitted, t.fg(role)),
+        Span::raw(pad),
+    ])
+}
+
 /// Lines for the sessions panel: `height` lines, `width` columns each.
 pub fn render_list_panel(
     t: Theme,
@@ -450,6 +472,7 @@ pub fn render_list_panel(
                 stale,
             }) => usage_row(t, width, *metric, *percent, reset_label.as_deref(), *stale),
             Some(ListRow::UsageModel { label }) => usage_model_row(t, width, label.as_deref()),
+            Some(ListRow::UsageCache { cache }) => usage_cache_row(t, width, cache.as_ref()),
             Some(ListRow::Folder {
                 name,
                 counts,
@@ -593,6 +616,9 @@ mod tests {
             ListRow::UsageModel {
                 label: Some("Opus 5.5 · high".into()),
             },
+            ListRow::UsageCache {
+                cache: Some((true, "4m left".into())),
+            },
             ListRow::Usage {
                 metric: UsageMetric::Context,
                 percent: Some(42.0),
@@ -632,6 +658,7 @@ mod tests {
             "  # urgent (2)",
             "── USAGE",
             "  Model   Opus 5.5 · high",
+            "  Cache   Cached Session · 4m left",
             "  Context ████░░░░░░ 42%",
             "  5h      ███████░░░ 73% (8:30 PM)",
             "  7d      —",

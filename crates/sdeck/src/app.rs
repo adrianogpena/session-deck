@@ -38,7 +38,7 @@ use ratatui::layout::Rect;
 use ratatui::text::Line;
 use ratatui::{Frame, Terminal};
 use sdeck_core::agent_catalog::all_agent_ids;
-use sdeck_core::discovery::claude_storage::clear_session_meta_cache;
+use sdeck_core::discovery::claude_storage::{clear_session_meta_cache, read_cache_state};
 use sdeck_core::format::{humanize_since, now_ms};
 use sdeck_core::paths::user_home;
 use sdeck_core::status::account::Account;
@@ -73,7 +73,7 @@ use crate::theme::{
     extract_background_reply, next_theme_preference, preference_label, theme_label, Role, Theme, ThemeName,
     OSC11_QUERY,
 };
-use crate::tree::{build_tree, usage_rows, BuiltTree, TreeOptions, TreeRow, UsageSectionInput};
+use crate::tree::{build_tree, usage_cache, usage_rows, BuiltTree, TreeOptions, TreeRow, UsageSectionInput};
 use crate::view::list_panel::{render_list_panel, ListRow};
 use crate::view::overlays::AccountUsage;
 use crate::view::preview_panel::{group_preview_lines, render_preview_panel};
@@ -618,6 +618,11 @@ impl App {
             context_startup_percent: session_usage.as_ref().and_then(|u| u.startup_context_percent),
             model: session_usage.as_ref().and_then(|u| u.model.clone()),
             effort: session_usage.as_ref().and_then(|u| u.effort.clone()),
+            cache: self
+                .selected_session()
+                .and_then(|s| s.file.as_deref())
+                .and_then(read_cache_state)
+                .map(|state| usage_cache(state, now_ms())),
             five_hour_reset_label: rate_limit
                 .as_ref()
                 .and_then(|r| r.five_hour_resets_at)
@@ -1175,6 +1180,9 @@ impl App {
                             && updated_at.is_some_and(|at| is_rate_limit_stale(at, now_ms())),
                     },
                     TreeRow::UsageModel { label } => ListRow::UsageModel { label: label.clone() },
+                    TreeRow::UsageCache { cache } => ListRow::UsageCache {
+                        cache: cache.as_ref().map(|c| (c.warm, c.detail.clone())),
+                    },
                 })
             })
             .collect()
