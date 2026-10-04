@@ -39,3 +39,7 @@ cargo fmt --all --check
 - `crates/sdeck-core`: discovery, status, the shared state store. No terminal dependencies.
 - `crates/sdeck`: the TUI binary.
 - `crates/fake-agent`: test-only stand-in for `claude`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
