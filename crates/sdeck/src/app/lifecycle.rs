@@ -12,8 +12,9 @@ use sdeck_core::status::session_status::{
     acknowledge_session_status, clear_session_status, write_session_status, SessionStatus as CoreStatus,
 };
 use sdeck_core::status::waiting_notifier::{CheckOptions, OnActivated, WatchedSession};
-use sdeck_core::store::tree_prefs::{prepend_session, rename_session_id, TreePrefs};
+use sdeck_core::store::tree_prefs::{prepend_session, TreePrefs};
 
+use super::new_session::id_change;
 use super::App;
 use crate::event::AppEvent;
 use crate::filters::StatusCategory;
@@ -313,14 +314,7 @@ impl App {
                 };
                 if !recent_first {
                     // Keeps its manual position instead of falling to the back.
-                    tree_changes.push(Box::new(move |t| {
-                        let renamed = rename_session_id(&t, &key, &old_id, &new_id);
-                        if renamed != t {
-                            renamed
-                        } else {
-                            prepend_session(&t, &key, &new_id)
-                        }
-                    }));
+                    tree_changes.push(Box::new(id_change(key, old_id, new_id)));
                 }
             }
         }
@@ -419,16 +413,20 @@ impl App {
         else {
             return;
         };
-        let selected = self.select_where(|r| matches!(r, TreeRow::Session { uid: u, .. } if *u == uid));
-        let other_account_hidden = !self.config.accounts.show_all_sessions
-            && self.session_by_uid(uid).is_some_and(|s| {
-                s.account.as_ref().map(|a| &a.config_dir) != self.active_account().map(|a| &a.config_dir)
-            });
-        if !selected && other_account_hidden {
-            self.flash(
-                "That session belongs to another account, hidden from the list.".into(),
-                now,
-            );
+        let is_row = |r: &TreeRow| matches!(r, TreeRow::Session { uid: u, .. } if *u == uid);
+        if !self.select_where(is_row) {
+            // Hidden by `accounts.showAllSessions = false`: follow the session to its account.
+            let hidden_account = self
+                .session_by_uid(uid)
+                .and_then(|s| s.account.clone())
+                .filter(|a| {
+                    !self.config.accounts.show_all_sessions
+                        && Some(&a.config_dir) != self.active_account().map(|a| &a.config_dir)
+                });
+            if let Some(account) = hidden_account {
+                self.switch_account(&account, now);
+                self.select_where(is_row);
+            }
         }
         self.dirty = true;
     }

@@ -103,3 +103,25 @@ impl Fixture {
         }
     }
 }
+
+impl Fixture {
+    /// Stands in for Claude's own pid file: the session's live process reports `status`.
+    pub fn set_process_status(&mut self, uid: u64, status: &str) {
+        let pid = self.session(uid).unwrap().live.as_ref().unwrap().pid;
+        let id = self.session(uid).unwrap().id.clone().unwrap_or_default();
+        self.app.procs.by_pid.insert(
+            pid,
+            sdeck_core::status::claude_process_watcher::LiveClaudeProcess {
+                pid,
+                session_id: id,
+                status: status.into(),
+                cwd: None,
+                account: sdeck_core::status::account::Account {
+                    config_dir: r"C:\.claude".into(),
+                    email: None,
+                    is_default: true,
+                },
+            },
+        );
+    }
+}

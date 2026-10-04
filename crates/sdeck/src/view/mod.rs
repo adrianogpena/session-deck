@@ -2,6 +2,7 @@
 
 pub mod bars;
 pub mod list_panel;
+pub mod overlay;
 pub mod preview_panel;
 
 use sdeck_core::discovery::git_status::GitStatus;

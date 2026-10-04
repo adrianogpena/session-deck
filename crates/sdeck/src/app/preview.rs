@@ -183,9 +183,16 @@ impl App {
         self.preview_scroll = self.preview_scroll.saturating_add_signed(delta).min(max);
     }
 
-    /// ↑/↓: scrolls the selected session's preview when it has scrollback, else moves the selection.
+    /// ↑/↓: scrolls the selected session's preview while it can go that way, else moves the
+    /// selection (so ↓ at the live bottom of a preview with scrollback still leaves the session).
     pub(super) fn on_arrow(&mut self, delta: isize) {
-        if self.selected_session().is_some() && self.preview_max_scroll() > 0 {
+        let max = self.preview_max_scroll();
+        let can_scroll = if delta < 0 {
+            self.preview_scroll < max
+        } else {
+            self.preview_scroll > 0
+        };
+        if self.selected_session().is_some() && can_scroll {
             self.scroll_preview(-delta);
         } else {
             self.move_selection(delta);

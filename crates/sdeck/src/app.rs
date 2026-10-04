@@ -1,13 +1,17 @@
 //! App state and the main loop, port of the `App` class in `app.ts`. One thread owns this state;
 //! everything else reaches it as an [`AppEvent`].
 
+mod accounts;
 mod attach;
 mod chords;
+mod input;
 mod interact;
 mod lifecycle;
 mod navigation;
 mod new_session;
 mod preview;
+mod prompt;
+mod session_text;
 #[cfg(test)]
 mod test_fixture;
 
@@ -20,6 +24,7 @@ use ratatui::backend::Backend;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 use ratatui::{Frame, Terminal};
+use sdeck_core::agent_catalog::all_agent_ids;
 use sdeck_core::discovery::claude_storage::clear_session_meta_cache;
 use sdeck_core::format::{humanize_since, now_ms};
 use sdeck_core::paths::user_home;
@@ -55,7 +60,8 @@ use crate::theme::{
 use crate::tree::{build_tree, BuiltTree, TreeOptions, TreeRow, UsageSectionInput};
 use crate::view::list_panel::{render_list_panel, ListRow};
 use crate::view::preview_panel::{group_preview_lines, render_preview_panel};
-use crate::view::{bars, GroupCounts, SessionView};
+use crate::view::{bars, overlay, GroupCounts, SessionView};
+use input::{Picker, TextPrompt};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const THEME_POLL: Duration = Duration::from_millis(5000);
@@ -102,6 +108,12 @@ pub struct App {
     interacting: Option<u64>,
     /// Ctrl+K arrived while attached/interacting; the next key decides if it's a chord.
     chord_pending: bool,
+    /// Footer text input (`p`, `o`, `e`) and the centered picker (`N`, `F3`); while either is open it
+    /// takes every key.
+    prompt: Option<TextPrompt>,
+    picker: Option<Picker>,
+    /// The agent `n` starts (`F3`, persisted).
+    active_agent: String,
     /// `m`: sdeck's mouse scrolling. Off by default (and always while attached), not persisted.
     mouse_tracking: bool,
 
@@ -186,6 +198,12 @@ impl App {
             interacting: None,
             chord_pending: false,
             mouse_tracking: false,
+            prompt: None,
+            picker: None,
+            active_agent: ui
+                .active_agent
+                .filter(|a| all_agent_ids().contains(&a.as_str()))
+                .unwrap_or_else(|| "claude".into()),
             config: DeckConfig::default(),
             accounts: Vec::new(),
             sources_enabled: false,
@@ -763,6 +781,14 @@ impl App {
             }
             return;
         }
+        if self.prompt.is_some() {
+            self.on_prompt_key(key, now);
+            return;
+        }
+        if self.picker.is_some() {
+            self.on_picker_key(key, now);
+            return;
+        }
         if let Some(category) = filter_key_category(key) {
             toggle_status_filter(&mut self.status_filter, category);
             self.rebuild_rows();
@@ -792,6 +818,18 @@ impl App {
                 Some(uid) => self.start_interacting(uid, now),
                 None => self.flash("Select a session to interact with.".into(), now),
             },
+            "n" => {
+                let agent = self.active_agent.clone();
+                self.new_session(&agent, now);
+            }
+            "N" => self.open_agent_picker(false, now),
+            "\x1bOR" | "\x1b[13~" => self.open_agent_picker(true, now),
+            "\x1bOS" | "\x1b[14~" => self.cycle_account(now),
+            "p" => self.open_add_project(),
+            "o" => self.open_prompt_input(now),
+            "c" => self.copy_last_response(now),
+            "e" | "\x1bOQ" | "\x1b[12~" => self.rename(now),
+            "\x0c" => self.clear_context(now),
             "m" => self.toggle_mouse_tracking(now),
             "`" => self.select_previous_session(now),
             "[" => self.cycle_active_session(-1, now),
@@ -1039,8 +1077,13 @@ impl App {
             }
         }
 
+        if let Some(picker) = &self.picker {
+            overlay::render_picker(frame, t, &picker.title, &picker.items, picker.index);
+        }
         let bottom = row(area.height.saturating_sub(1));
-        if !self.message.is_empty() {
+        if let Some(prompt) = &self.prompt {
+            frame.render_widget(bars::prompt_bar(t, cols, &prompt.label, &prompt.value), bottom);
+        } else if !self.message.is_empty() {
             frame.render_widget(bars::message_bar(t, cols, &self.message), bottom);
         } else if self.interacting.is_some() {
             let text = "Interacting · Ctrl+Q to stop · Ctrl+K T to attach";
