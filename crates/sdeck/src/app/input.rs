@@ -23,6 +23,18 @@ pub(super) struct TextPrompt {
 pub(super) enum PickerAction {
     SetActiveAgent(Vec<String>),
     NewSession(Vec<String>),
+    /// Session ids of the trash entries listed, in order.
+    RestoreFromTrash(Vec<String>),
+}
+
+/// What `y` does.
+pub(super) enum ConfirmAction {
+    RemoveProject(String),
+}
+
+pub(super) struct Confirm {
+    pub question: String,
+    pub action: ConfirmAction,
 }
 
 pub(super) struct Picker {
@@ -88,10 +100,22 @@ impl App {
         self.dirty = true;
     }
 
+    pub(super) fn on_confirm_key(&mut self, key: &str, now: Instant) {
+        if let Some(Confirm { action, .. }) = self.confirm.take() {
+            if key == "y" || key == "Y" {
+                match action {
+                    ConfirmAction::RemoveProject(key) => self.remove_project_now(&key, now),
+                }
+            }
+        }
+        self.dirty = true;
+    }
+
     fn pick(&mut self, picker: Picker, now: Instant) {
         match picker.action {
             PickerAction::SetActiveAgent(ids) => self.set_active_agent(&ids[picker.index], now),
             PickerAction::NewSession(ids) => self.new_session(&ids[picker.index], now),
+            PickerAction::RestoreFromTrash(ids) => self.restore_from_trash(&ids[picker.index], now),
         }
     }
 }

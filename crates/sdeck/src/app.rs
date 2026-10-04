@@ -2,11 +2,15 @@
 //! everything else reaches it as an [`AppEvent`].
 
 mod accounts;
+mod archive;
 mod attach;
+mod bulk;
 mod chords;
+mod delete;
 mod input;
 mod interact;
 mod lifecycle;
+mod marks;
 mod navigation;
 mod new_session;
 mod preview;
@@ -15,6 +19,7 @@ mod session_text;
 #[cfg(test)]
 mod test_fixture;
 
+use std::collections::HashSet;
 use std::io::Write;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
@@ -61,7 +66,7 @@ use crate::tree::{build_tree, BuiltTree, TreeOptions, TreeRow, UsageSectionInput
 use crate::view::list_panel::{render_list_panel, ListRow};
 use crate::view::preview_panel::{group_preview_lines, render_preview_panel};
 use crate::view::{bars, overlay, GroupCounts, SessionView};
-use input::{Picker, TextPrompt};
+use input::{Confirm, Picker, TextPrompt};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const THEME_POLL: Duration = Duration::from_millis(5000);
@@ -112,6 +117,14 @@ pub struct App {
     /// takes every key.
     prompt: Option<TextPrompt>,
     picker: Option<Picker>,
+    /// Footer yes/no question: `y` confirms, any other key cancels.
+    confirm: Option<Confirm>,
+    /// Sessions checked with Space (by uid) for a batch action.
+    multi_selected: HashSet<u64>,
+    /// Ids moved to the trash this run, newest last, for Ctrl+Z.
+    deleted: Vec<String>,
+    /// A restored session's id: selected once the discovery that lists it again arrives.
+    select_after_discovery: Option<String>,
     /// The agent `n` starts (`F3`, persisted).
     active_agent: String,
     /// `m`: sdeck's mouse scrolling. Off by default (and always while attached), not persisted.
@@ -200,6 +213,10 @@ impl App {
             mouse_tracking: false,
             prompt: None,
             picker: None,
+            confirm: None,
+            multi_selected: HashSet::new(),
+            deleted: Vec::new(),
+            select_after_discovery: None,
             active_agent: ui
                 .active_agent
                 .filter(|a| all_agent_ids().contains(&a.as_str()))
@@ -314,6 +331,16 @@ impl App {
                 self.sessions = merge_found(std::mem::take(&mut self.sessions), found);
                 self.tree = self.store.get_tree();
                 self.rebuild_rows();
+                if let Some(id) = self.select_after_discovery.take() {
+                    let restored = self
+                        .sessions
+                        .iter()
+                        .find(|s| s.id.as_deref() == Some(id.as_str()))
+                        .map(|s| s.uid);
+                    self.select_where(
+                        |r| matches!(r, TreeRow::Session { uid, .. } if Some(*uid) == restored),
+                    );
+                }
                 self.dirty = true;
                 if std::mem::take(&mut self.discover_again) {
                     self.spawn_discovery();
@@ -566,6 +593,9 @@ impl App {
         if !self.config.ui.recent_sessions_first {
             self.apply_freeze_session_order();
         }
+        let sessions = &self.sessions;
+        self.multi_selected
+            .retain(|uid| sessions.iter().any(|s| s.uid == *uid));
         let keep = previous
             .as_ref()
             .and_then(|p| self.rows.iter().position(|r| same_row(r, p)));
@@ -789,6 +819,10 @@ impl App {
             self.on_picker_key(key, now);
             return;
         }
+        if self.confirm.is_some() {
+            self.on_confirm_key(key, now);
+            return;
+        }
         if let Some(category) = filter_key_category(key) {
             toggle_status_filter(&mut self.status_filter, category);
             self.rebuild_rows();
@@ -828,6 +862,16 @@ impl App {
             "p" => self.open_add_project(),
             "o" => self.open_prompt_input(now),
             "c" => self.copy_last_response(now),
+            " " => self.toggle_multi_select(),
+            "\x1b" => self.clear_multi_select(now),
+            "A" => self.toggle_archived(now),
+            "^" => self.toggle_archived_view(now),
+            "\x1a" => self.undo_delete(now),
+            "Z" => self.open_trash_picker(now),
+            "u" => self.mark_unread(now),
+            "U" => self.mark_read(now),
+            "," => self.cycle_pin(now),
+            "d" => self.delete_selected(now),
             "e" | "\x1bOQ" | "\x1b[12~" => self.rename(now),
             "\x0c" => self.clear_context(now),
             "m" => self.toggle_mouse_tracking(now),
@@ -836,7 +880,8 @@ impl App {
             "]" => self.cycle_active_session(1, now),
             "T" => self.cycle_theme(now),
             "s" => self.start_selected(now),
-            "x" => self.stop_selected(now),
+            "x" if self.multi_selected.is_empty() => self.stop_selected(now),
+            "x" => self.bulk_stop(now),
             "R" => self.restart(now),
             "S" => {
                 self.change_tree(|t| TreePrefs {
@@ -949,7 +994,7 @@ impl App {
                         is_last: *is_last,
                         depth: *depth,
                         pin: *pin,
-                        checked: false,
+                        checked: self.multi_selected.contains(uid),
                     },
                     TreeRow::Divider { label } => ListRow::Divider { label: label.clone() },
                     TreeRow::Tag { name, count } => ListRow::Tag {
@@ -1025,6 +1070,10 @@ impl App {
         let layout = compute_layout(area.width, area.height, self.sidebar_pct, self.sidebar_visible);
         if let Some(list) = layout.list {
             let mut modes = Vec::new();
+            let selected_note = format!("{} selected", self.multi_selected.len());
+            if !self.multi_selected.is_empty() {
+                modes.push(selected_note.as_str());
+            }
             if self.archived_view {
                 modes.push("archived");
             }
@@ -1083,6 +1132,8 @@ impl App {
         let bottom = row(area.height.saturating_sub(1));
         if let Some(prompt) = &self.prompt {
             frame.render_widget(bars::prompt_bar(t, cols, &prompt.label, &prompt.value), bottom);
+        } else if let Some(confirm) = &self.confirm {
+            frame.render_widget(bars::confirm_bar(t, cols, &confirm.question), bottom);
         } else if !self.message.is_empty() {
             frame.render_widget(bars::message_bar(t, cols, &self.message), bottom);
         } else if self.interacting.is_some() {
