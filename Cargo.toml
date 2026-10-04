@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/sdeck-core", "crates/sdeck", "crates/fake-agent"]
+members = ["crates/sdeck-core", "crates/sdeck", "crates/fake-agent", "crates/sdeck-demo"]
 
 [workspace.package]
 version = "0.10.0"

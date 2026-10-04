@@ -1502,6 +1502,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sdeck-demo"
+version = "0.10.0"
+dependencies = [
+ "chrono",
+ "crossterm",
+ "serde_json",
+]
+
+[[package]]
 name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
