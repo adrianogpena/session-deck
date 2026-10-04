@@ -8,8 +8,8 @@ Every command and key is explained in the [user manual](docs/user-manual.md).
 
 ## Build and run
 
-Requires the stable Rust toolchain (`x86_64-pc-windows-gnu` on Windows, pinned in
-`rust-toolchain.toml`).
+Requires the stable Rust toolchain (`x86_64-pc-windows-gnu` on Windows, set locally with
+`rustup override set stable-x86_64-pc-windows-gnu`; CI releases build with MSVC).
 
 ```bash
 cargo build --release        # target/release/sdeck.exe

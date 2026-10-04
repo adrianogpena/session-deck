@@ -127,9 +127,6 @@ jobs:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           fi
-      - name: "Use the MSVC toolchain (rust-toolchain.toml pins GNU for local builds)"
-        run: "echo \"RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc\" >> \"$GITHUB_ENV\""
-        shell: "bash"
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest

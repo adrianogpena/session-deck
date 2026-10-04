@@ -15,5 +15,4 @@ targets = ["x86_64-pc-windows-msvc"]
 install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = false
-github-build-setup = "build-setup.yml"
 publish-jobs = ["npm"]
