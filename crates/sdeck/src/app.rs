@@ -65,7 +65,7 @@ use crate::filters::{
 use crate::git_status_tracker::{read_all, GitStatusTracker};
 use crate::keys::{extract_focus_events, split_keys};
 use crate::layout::{compute_layout, Layout, DEFAULT_SIDEBAR_PCT, SIDEBAR_STEP};
-use crate::live_session::Executables;
+use crate::live_session::{looks_like_multiline_paste, Executables};
 use crate::sessions::{
     discover_found, display_title, merge_found, refresh_live_title, DeckSession, SessionStatus, StatusTracker,
 };
@@ -877,6 +877,11 @@ impl App {
         if let Some(theme) = theme {
             self.terminal_reports_background = true;
             self.set_system_theme(theme);
+        }
+        if let Some(uid) = self.interacting.filter(|_| looks_like_multiline_paste(&rest)) {
+            self.dirty = true;
+            self.on_live_input(uid, &rest, now);
+            return;
         }
         let keys = split_keys(&rest);
         for (i, key) in keys.iter().enumerate() {

@@ -415,6 +415,18 @@ impl LiveSession {
         }
     }
 
+    /// Forwards the user's keyboard input. Windows consoles give crossterm a paste as plain key events,
+    /// so a multi-line paste arrives as text with Enters inside it and would submit at the first line
+    /// break. Such a chunk is wrapped in bracketed-paste markers if the agent turned that mode on.
+    pub fn write_input(&mut self, data: &str) {
+        if self.screen().bracketed_paste() && looks_like_multiline_paste(data) {
+            let text = data.replace("\r\n", "\n").replace('\r', "\n");
+            self.write(format!("\x1b[200~{text}\x1b[201~").as_bytes());
+        } else {
+            self.write(data.as_bytes());
+        }
+    }
+
     /// Types a line and submits it: text and Enter as separate writes, so the input box doesn't take
     /// the Enter as part of a paste.
     pub fn type_line(&mut self, text: &str, now: Instant) {
@@ -480,12 +492,34 @@ impl Drop for LiveSession {
     }
 }
 
+/// Plain text (no escape sequences) with an Enter that has text on both sides: typed lines end in
+/// their Enter, so an Enter in the middle means a paste.
+pub(crate) fn looks_like_multiline_paste(data: &str) -> bool {
+    if data.contains('\x1b') {
+        return false;
+    }
+    let bytes = data.as_bytes();
+    bytes.iter().enumerate().any(|(i, &b)| {
+        b == b'\r' && i > 0 && bytes[i - 1] != b'\r' && bytes[i + 1..].iter().any(|&n| n != b'\r')
+    })
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use crate::test_support::EnvGuard;
     use std::sync::mpsc::{self, Receiver};
     use std::sync::OnceLock;
+
+    #[test]
+    fn multiline_paste_is_told_from_typed_lines() {
+        assert!(looks_like_multiline_paste("one\rtwo"));
+        assert!(looks_like_multiline_paste("one\rtwo\r"));
+        assert!(!looks_like_multiline_paste("one\r"));
+        assert!(!looks_like_multiline_paste("\rone"));
+        assert!(!looks_like_multiline_paste("one"));
+        assert!(!looks_like_multiline_paste("one\x1b[A\rtwo"));
+    }
 
     /// The `fake-agent` binary, built once per test run.
     pub(crate) fn fake_agent() -> PathBuf {

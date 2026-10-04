@@ -48,6 +48,9 @@ pub enum AppEvent {
     ToastClicked(String),
 }
 
+/// How long the input thread waits after plain text for the next key of the same paste.
+const PASTE_GAP: Duration = Duration::from_millis(8);
+
 /// Reads the real terminal on its own thread. Events already queued are sent as one `Input`, like a
 /// stdin chunk in TS, so a pasted or fast-typed run (or a terminal reply such as OSC 11) stays
 /// together. Ends when the receiver is gone or the terminal can't be read.
@@ -67,7 +70,14 @@ pub fn spawn_input_thread(tx: Sender<AppEvent>) {
                 } else if let Some(bytes) = encode_event(&ev) {
                     chunk.push_str(&bytes);
                 }
-                if event::poll(Duration::ZERO).unwrap_or(false) {
+                // Windows consoles deliver a paste key by key, a few ms apart: after plain text, wait a
+                // moment for the rest so the paste stays one chunk.
+                let wait = if !chunk.is_empty() && !chunk.contains('\x1b') {
+                    PASTE_GAP
+                } else {
+                    Duration::ZERO
+                };
+                if event::poll(wait).unwrap_or(false) {
                     next = event::read().ok();
                 }
             }

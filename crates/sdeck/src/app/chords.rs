@@ -51,6 +51,12 @@ impl App {
         }
     }
 
+    fn write_live_input(&mut self, uid: u64, data: &str) {
+        if let Some(live) = self.session_mut(uid).and_then(|s| s.live.as_mut()) {
+            live.write_input(data);
+        }
+    }
+
     /// Input for the attached or interacting session `uid`. A chord's resolving key usually arrives
     /// in the same chunk as Ctrl+K, but may come in the next one (`chord_pending`). Keys before
     /// Ctrl+Q are forwarded, the rest of that chunk is dropped. Unlike TS, keys after an unresolved
@@ -72,12 +78,12 @@ impl App {
             (Some((c, _)), None) => c,
             (None, Some(d)) => d,
             (None, None) => {
-                self.write_live(uid, data.as_bytes());
+                self.write_live_input(uid, data);
                 return;
             }
         };
         if idx > 0 {
-            self.write_live(uid, &data.as_bytes()[..idx]);
+            self.write_live_input(uid, &data[..idx]);
         }
         match chord {
             Some((start, end)) if start == idx => {
