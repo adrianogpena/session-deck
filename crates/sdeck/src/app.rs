@@ -46,7 +46,7 @@ use sdeck_core::status::claude_process_watcher::ClaudeProcessWatcher;
 use sdeck_core::status::claude_transcript_tailer::{ClaudeTranscriptTailer, TailedTurn};
 use sdeck_core::status::copilot_status_watcher::CopilotStatusWatcher;
 use sdeck_core::status::session_usage::{
-    read_latest_rate_limit_usage, read_session_usage, read_seven_day_daily_spend,
+    prune_stale_usage_files, read_session_usage, read_seven_day_daily_spend, RateLimitScanner,
 };
 use sdeck_core::status::usage_display::format_reset_time;
 use sdeck_core::status::waiting_notifier::{ToastSender, WaitingNotifier};
@@ -183,6 +183,7 @@ pub struct App {
     last_session: Option<u64>,
     /// Which session the USAGE rows were last read for, and when.
     usage_synced: Option<(Option<u64>, Instant)>,
+    rate_limits: std::cell::RefCell<RateLimitScanner>,
     previous_session: Option<u64>,
     _store_watch: Option<WatchHandle>,
 
@@ -271,6 +272,7 @@ impl App {
             discover_again: false,
             last_session: None,
             usage_synced: None,
+            rate_limits: Default::default(),
             previous_session: None,
             _store_watch: None,
             term_size: (120, 30),
@@ -297,6 +299,7 @@ impl App {
         // Pays the `where.exe` lookups now, not on whichever session starts first.
         self.executables.warm(&self.config);
         self.purge_expired_trash();
+        prune_stale_usage_files();
         let tx = self.tx.clone();
         self._store_watch = self
             .store
@@ -588,7 +591,7 @@ impl App {
             .selected_session()
             .and_then(|s| s.id.as_deref())
             .and_then(read_session_usage);
-        let rate_limit = read_latest_rate_limit_usage(email.as_deref());
+        let rate_limit = self.rate_limits.borrow_mut().latest(email.as_deref());
         let use_24 = self.config.ui.use_24_hour_clock;
         UsageSectionInput {
             context_percent: session_usage.as_ref().and_then(|u| u.context_percent),

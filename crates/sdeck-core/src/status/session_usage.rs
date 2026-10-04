@@ -1,6 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
+use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Days, Local, NaiveDate, TimeZone};
 use serde_json::{Map, Value};
@@ -73,53 +74,111 @@ pub fn read_session_usage(session_id: &str) -> Option<SessionUsageRecord> {
     parse_usage_record(&fs::read_to_string(usage_file_path(session_id)?).ok()?)
 }
 
-/// The freshest 5h/7d reading for `account_email`, scanning every session's usage file: these
-/// numbers are account-wide, so an idle session shouldn't make the quota look emptier than it is.
-///
-/// Readings tagged with a different account are skipped, so switching accounts never shows the
-/// other account's quota. Untagged readings are still considered (excluding them would blank the
-/// view rather than attribute them wrong). Also records today's 7d sample for the daily-spend row.
+/// Re-parses a session's usage file only when its modification time or size changed, so polling the
+/// whole status dir stays a `read_dir` plus metadata calls instead of reading every file.
+#[derive(Default)]
+pub struct RateLimitScanner {
+    cache: HashMap<PathBuf, (SystemTime, u64, Option<SessionUsageRecord>)>,
+}
+
+impl RateLimitScanner {
+    /// The freshest 5h/7d reading for `account_email`, across every session's usage file: these
+    /// numbers are account-wide, so an idle session shouldn't make the quota look emptier than it is.
+    ///
+    /// Readings tagged with a different account are skipped, so switching accounts never shows the
+    /// other account's quota. Untagged readings are still considered (excluding them would blank the
+    /// view rather than attribute them wrong). Also records today's 7d sample for the daily-spend row.
+    pub fn latest(&mut self, account_email: Option<&str>) -> Option<RateLimitUsage> {
+        let entries = fs::read_dir(session_status_dir()).ok()?;
+        let mut seen = HashSet::new();
+        let mut latest: Option<RateLimitUsage> = None;
+        for entry in entries.flatten() {
+            if !entry.file_name().to_string_lossy().ends_with(".usage.json") {
+                continue;
+            }
+            let path = entry.path();
+            // Deleted between listing and reading.
+            let Some((modified, len)) = entry
+                .metadata()
+                .ok()
+                .and_then(|m| Some((m.modified().ok()?, m.len())))
+            else {
+                continue;
+            };
+            seen.insert(path.clone());
+            let unchanged = self
+                .cache
+                .get(&path)
+                .is_some_and(|(at, size, _)| *at == modified && *size == len);
+            if !unchanged {
+                // A transient partial write reads as "nothing" until the next change.
+                let record = fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|raw| parse_usage_record(&raw));
+                self.cache.insert(path.clone(), (modified, len, record));
+            }
+            let Some(record) = self.cache.get(&path).and_then(|(_, _, r)| r.as_ref()) else {
+                continue;
+            };
+            if record.five_hour_percent.is_none() && record.seven_day_percent.is_none() {
+                continue;
+            }
+            if let (Some(account), Some(tagged)) = (account_email, record.account_email.as_deref()) {
+                if tagged != account {
+                    continue;
+                }
+            }
+            if latest.as_ref().is_none_or(|l| record.updated_at > l.updated_at) {
+                latest = Some(RateLimitUsage {
+                    five_hour_percent: record.five_hour_percent,
+                    five_hour_resets_at: record.five_hour_resets_at,
+                    seven_day_percent: record.seven_day_percent,
+                    seven_day_resets_at: record.seven_day_resets_at,
+                    updated_at: record.updated_at,
+                });
+            }
+        }
+        self.cache.retain(|path, _| seen.contains(path));
+        if let Some(l) = &latest {
+            if let (Some(percent), Some(at)) = (
+                l.seven_day_percent,
+                Local.timestamp_millis_opt(l.updated_at).single(),
+            ) {
+                record_seven_day_usage_sample(account_email, percent, at);
+            }
+        }
+        latest
+    }
+}
+
+/// One-off [`RateLimitScanner::latest`] with no cache.
 pub fn read_latest_rate_limit_usage(account_email: Option<&str>) -> Option<RateLimitUsage> {
-    let entries = fs::read_dir(session_status_dir()).ok()?;
-    let mut latest: Option<RateLimitUsage> = None;
+    RateLimitScanner::default().latest(account_email)
+}
+
+/// A bit over the 7d history retention: a session idle longer than this has nothing left worth showing.
+const USAGE_FILE_MAX_AGE: Duration = Duration::from_secs(9 * 24 * 60 * 60);
+
+/// Deletes per-session usage files not written for [`USAGE_FILE_MAX_AGE`]. A live session's
+/// statusLine rewrites its file, so only abandoned sessions go. Best-effort.
+pub fn prune_stale_usage_files() {
+    let Ok(entries) = fs::read_dir(session_status_dir()) else {
+        return;
+    };
     for entry in entries.flatten() {
         if !entry.file_name().to_string_lossy().ends_with(".usage.json") {
             continue;
         }
-        // Deleted between listing and reading, or a transient partial write.
-        let Some(record) = fs::read_to_string(entry.path())
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
             .ok()
-            .and_then(|raw| parse_usage_record(&raw))
-        else {
-            continue;
-        };
-        if record.five_hour_percent.is_none() && record.seven_day_percent.is_none() {
-            continue;
-        }
-        if let (Some(account), Some(tagged)) = (account_email, record.account_email.as_deref()) {
-            if tagged != account {
-                continue;
-            }
-        }
-        if latest.as_ref().is_none_or(|l| record.updated_at > l.updated_at) {
-            latest = Some(RateLimitUsage {
-                five_hour_percent: record.five_hour_percent,
-                five_hour_resets_at: record.five_hour_resets_at,
-                seven_day_percent: record.seven_day_percent,
-                seven_day_resets_at: record.seven_day_resets_at,
-                updated_at: record.updated_at,
-            });
+            .and_then(|at| at.elapsed().ok())
+            .is_some_and(|age| age > USAGE_FILE_MAX_AGE);
+        if stale {
+            let _ = fs::remove_file(entry.path());
         }
     }
-    if let Some(l) = &latest {
-        if let (Some(percent), Some(at)) = (
-            l.seven_day_percent,
-            Local.timestamp_millis_opt(l.updated_at).single(),
-        ) {
-            record_seven_day_usage_sample(account_email, percent, at);
-        }
-    }
-    latest
 }
 
 /// `<status dir>/seven-day-history.json`: `account email -> date -> cumulative 7d percent used`.
@@ -357,5 +416,37 @@ mod tests {
             [spend("Tu", 25.0)]
         );
         assert!(read_seven_day_daily_spend(Some("work@x.com"), updated.date_naive()).is_empty());
+    }
+
+    #[test]
+    fn scanner_picks_up_changed_and_removed_files() {
+        let (_g, _tmp) = fixture();
+        let mut scanner = RateLimitScanner::default();
+        write_usage("a", json!({"fiveHourPercent": 10, "updatedAt": 1000}));
+        assert_eq!(scanner.latest(None).unwrap().five_hour_percent, Some(10.0));
+        write_usage("a", json!({"fiveHourPercent": 55, "updatedAt": 2000}));
+        assert_eq!(scanner.latest(None).unwrap().five_hour_percent, Some(55.0));
+        fs::remove_file(usage_file_path("a").unwrap()).unwrap();
+        assert!(scanner.latest(None).is_none());
+    }
+
+    #[test]
+    fn prune_removes_only_stale_usage_files() {
+        let (_g, _tmp) = fixture();
+        write_usage("old", json!({"updatedAt": 1}));
+        write_usage("new", json!({"updatedAt": 2}));
+        let old = usage_file_path("old").unwrap();
+        let stale = SystemTime::now() - USAGE_FILE_MAX_AGE - Duration::from_secs(60);
+        fs::File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(stale)
+            .unwrap();
+        fs::write(session_status_dir().join("keep.json"), "{}").unwrap();
+        prune_stale_usage_files();
+        assert!(!old.exists());
+        assert!(usage_file_path("new").unwrap().exists());
+        assert!(session_status_dir().join("keep.json").exists());
     }
 }
