@@ -30,6 +30,8 @@ pub enum AppEvent {
     GitStatuses(GitStatuses),
     /// The shared state file changed (the other front end, or us): names and flags may differ.
     StoreChanged,
+    /// A usage or status file in the status folder changed: the USAGE rows may differ.
+    UsageChanged,
     /// Output of a live session's PTY, by `LiveSession::id`.
     PtyOutput(u64, Vec<u8>),
     /// A live session's process ended with this exit code, by `LiveSession::id`.

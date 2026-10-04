@@ -45,11 +45,14 @@ use sdeck_core::status::account::Account;
 use sdeck_core::status::claude_process_watcher::ClaudeProcessWatcher;
 use sdeck_core::status::claude_transcript_tailer::{ClaudeTranscriptTailer, TailedTurn};
 use sdeck_core::status::copilot_status_watcher::CopilotStatusWatcher;
+use sdeck_core::status::session_status::{ensure_session_status_dir, session_status_dir};
 use sdeck_core::status::session_usage::{
-    prune_stale_usage_files, read_session_usage, read_seven_day_daily_spend, RateLimitScanner,
+    is_rate_limit_stale, prune_stale_usage_files, read_session_usage, read_seven_day_daily_spend,
+    RateLimitScanner,
 };
-use sdeck_core::status::usage_display::format_reset_time;
+use sdeck_core::status::usage_display::{format_reset_time, UsageMetric};
 use sdeck_core::status::waiting_notifier::{ToastSender, WaitingNotifier};
+use sdeck_core::status::watch::{watch_path, PathWatch};
 use sdeck_core::store::deck_config::DeckConfig;
 use sdeck_core::store::deck_store::{DeckStore, Patch, ThemePreference, UiPatch, WatchHandle};
 use sdeck_core::store::tree_prefs::{freeze_session_order, GroupView, SessionSort, TreePrefs};
@@ -184,6 +187,7 @@ pub struct App {
     /// Which session the USAGE rows were last read for, and when.
     usage_synced: Option<(Option<u64>, Instant)>,
     rate_limits: std::cell::RefCell<RateLimitScanner>,
+    _usage_watch: Option<PathWatch>,
     previous_session: Option<u64>,
     _store_watch: Option<WatchHandle>,
 
@@ -273,6 +277,7 @@ impl App {
             last_session: None,
             usage_synced: None,
             rate_limits: Default::default(),
+            _usage_watch: None,
             previous_session: None,
             _store_watch: None,
             term_size: (120, 30),
@@ -307,6 +312,13 @@ impl App {
                 let _ = tx.send(AppEvent::StoreChanged);
             })
             .ok();
+        let tx = self.tx.clone();
+        self._usage_watch = ensure_session_status_dir().ok().and_then(|()| {
+            watch_path(&session_status_dir(), move || {
+                let _ = tx.send(AppEvent::UsageChanged);
+            })
+            .ok()
+        });
         self.spawn_discovery();
     }
 
@@ -387,6 +399,7 @@ impl App {
                 self.dirty = true;
             }
             AppEvent::StoreChanged => self.spawn_discovery(),
+            AppEvent::UsageChanged => self.usage_synced = None,
             AppEvent::PtyOutput(id, data) => self.on_pty_output(id, &data, now),
             AppEvent::PtyExited(id, code) => self.on_pty_exit(id, code),
             AppEvent::LastResponse(uid, text) => self.on_last_response(uid, text),
@@ -400,12 +413,13 @@ impl App {
         self.sync_preview();
     }
 
-    /// Keeps the USAGE rows on the selected session, and re-reads the files every few seconds.
+    /// Keeps the USAGE rows on the selected session. File changes arrive as `UsageChanged`; the timer
+    /// only catches a reset time passing, or does the whole job when the folder can't be watched.
     fn refresh_usage_rows(&mut self, now: Instant) {
-        const REFRESH: std::time::Duration = std::time::Duration::from_secs(3);
+        let refresh = std::time::Duration::from_secs(if self._usage_watch.is_some() { 30 } else { 3 });
         let uid = self.selected_session().map(|s| s.uid);
         if let Some((synced_uid, at)) = self.usage_synced {
-            if synced_uid == uid && now.duration_since(at) < REFRESH {
+            if synced_uid == uid && now.duration_since(at) < refresh {
                 return;
             }
         }
@@ -591,7 +605,11 @@ impl App {
             .selected_session()
             .and_then(|s| s.id.as_deref())
             .and_then(read_session_usage);
-        let rate_limit = self.rate_limits.borrow_mut().latest(email.as_deref());
+        let rate_limit = self
+            .rate_limits
+            .borrow_mut()
+            .latest(email.as_deref())
+            .map(|r| r.without_expired(now_ms()));
         let use_24 = self.config.ui.use_24_hour_clock;
         UsageSectionInput {
             context_percent: session_usage.as_ref().and_then(|u| u.context_percent),
@@ -1099,12 +1117,14 @@ impl App {
                     TreeRow::Usage {
                         metric,
                         percent,
+                        updated_at,
                         reset_label,
-                        ..
                     } => ListRow::Usage {
                         metric: *metric,
                         percent: *percent,
                         reset_label: reset_label.clone(),
+                        stale: *metric != UsageMetric::Context
+                            && updated_at.is_some_and(|at| is_rate_limit_stale(at, now_ms())),
                     },
                     TreeRow::UsageBudget { days } => ListRow::UsageBudget { days: days.clone() },
                 })

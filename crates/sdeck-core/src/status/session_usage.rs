@@ -39,6 +39,30 @@ pub struct RateLimitUsage {
     pub updated_at: i64,
 }
 
+/// How long after its last statusLine report a 5h/7d reading is drawn dimmed.
+pub const RATE_LIMIT_STALE_AFTER_MS: i64 = 15 * 60 * 1000;
+
+impl RateLimitUsage {
+    /// Drops a window whose reset time has passed: its percentage belongs to the previous window,
+    /// so showing it would overstate what's used.
+    pub fn without_expired(mut self, now_ms: i64) -> Self {
+        if self.five_hour_resets_at.is_some_and(|at| at <= now_ms) {
+            self.five_hour_percent = None;
+            self.five_hour_resets_at = None;
+        }
+        if self.seven_day_resets_at.is_some_and(|at| at <= now_ms) {
+            self.seven_day_percent = None;
+            self.seven_day_resets_at = None;
+        }
+        self
+    }
+}
+
+/// Whether a 5h/7d reading last reported at `updated_at` (epoch ms) is old enough to draw dimmed.
+pub fn is_rate_limit_stale(updated_at: i64, now_ms: i64) -> bool {
+    now_ms - updated_at > RATE_LIMIT_STALE_AFTER_MS
+}
+
 fn usage_file_path(session_id: &str) -> Option<PathBuf> {
     // Not a real session id: refuse rather than read outside the status dir.
     is_safe_session_id(session_id).then(|| session_status_dir().join(format!("{session_id}.usage.json")))
@@ -448,5 +472,25 @@ mod tests {
         assert!(!old.exists());
         assert!(usage_file_path("new").unwrap().exists());
         assert!(session_status_dir().join("keep.json").exists());
+    }
+
+    #[test]
+    fn expired_windows_are_dropped_and_live_ones_kept() {
+        let usage = RateLimitUsage {
+            five_hour_percent: Some(80.0),
+            five_hour_resets_at: Some(1000),
+            seven_day_percent: Some(30.0),
+            seven_day_resets_at: Some(5000),
+            updated_at: 10,
+        };
+        let shown = usage.without_expired(1000);
+        assert_eq!((shown.five_hour_percent, shown.five_hour_resets_at), (None, None));
+        assert_eq!(shown.seven_day_percent, Some(30.0));
+    }
+
+    #[test]
+    fn staleness_starts_after_the_threshold() {
+        assert!(!is_rate_limit_stale(0, RATE_LIMIT_STALE_AFTER_MS));
+        assert!(is_rate_limit_stale(0, RATE_LIMIT_STALE_AFTER_MS + 1));
     }
 }

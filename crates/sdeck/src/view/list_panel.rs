@@ -50,6 +50,8 @@ pub enum ListRow {
         metric: UsageMetric,
         percent: Option<f64>,
         reset_label: Option<String>,
+        /// The reading is old: drawn dimmed.
+        stale: bool,
     },
     UsageBudget {
         days: Vec<DailySpend>,
@@ -320,6 +322,7 @@ fn usage_row(
     metric: UsageMetric,
     percent: Option<f64>,
     reset_label: Option<&str>,
+    stale: bool,
 ) -> Line<'static> {
     let lead = "  ";
     let label = fit(metric.label(), USAGE_LABEL_WIDTH);
@@ -333,19 +336,27 @@ fn usage_row(
         let pad = " ".repeat(width.saturating_sub(text_width(lead) + text_width(&fitted)));
         return Line::styled(format!("{lead}{fitted}{pad}"), t.fg(Role::TextDim));
     };
+    let body_role = if stale { Role::TextDim } else { Role::Text };
     let bar = render_usage_bar(percent, USAGE_BAR_WIDTH);
     let plain = format!("{label} {bar} {percent}%{reset}");
     if text_width(&plain) > avail {
         let fitted = fit(&plain, avail);
         let pad = " ".repeat(width.saturating_sub(text_width(lead) + text_width(&fitted)));
-        return Line::styled(format!("{lead}{fitted}{pad}"), t.fg(Role::Text));
+        return Line::styled(format!("{lead}{fitted}{pad}"), t.fg(body_role));
     }
     let pad = " ".repeat(width.saturating_sub(text_width(lead) + text_width(&plain)));
     Line::from(vec![
         Span::styled(lead, t.fg(Role::TextDim)),
-        Span::styled(format!("{label} "), t.fg(Role::Text)),
-        Span::styled(bar, t.fg(severity_role(usage_severity(metric, percent)))),
-        Span::styled(format!(" {percent}%"), t.fg(Role::Text)),
+        Span::styled(format!("{label} "), t.fg(body_role)),
+        Span::styled(
+            bar,
+            t.fg(if stale {
+                Role::TextDim
+            } else {
+                severity_role(usage_severity(metric, percent))
+            }),
+        ),
+        Span::styled(format!(" {percent}%"), t.fg(body_role)),
         Span::styled(reset, t.fg(Role::TextDim)),
         Span::raw(pad),
     ])
@@ -434,7 +445,8 @@ pub fn render_list_panel(
                 metric,
                 percent,
                 reset_label,
-            }) => usage_row(t, width, *metric, *percent, reset_label.as_deref()),
+                stale,
+            }) => usage_row(t, width, *metric, *percent, reset_label.as_deref(), *stale),
             Some(ListRow::UsageBudget { days }) => usage_budget_row(t, width, days),
             Some(ListRow::Folder {
                 name,
@@ -579,16 +591,19 @@ mod tests {
                 metric: UsageMetric::Context,
                 percent: Some(42.0),
                 reset_label: None,
+                stale: false,
             },
             ListRow::Usage {
                 metric: UsageMetric::FiveHour,
                 percent: Some(73.0),
                 reset_label: Some("8:30 PM".into()),
+                stale: false,
             },
             ListRow::Usage {
                 metric: UsageMetric::SevenDay,
                 percent: None,
                 reset_label: None,
+                stale: false,
             },
             ListRow::UsageBudget {
                 days: vec![
