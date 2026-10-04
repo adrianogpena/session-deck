@@ -6,6 +6,15 @@ from several logged-in Claude accounts are listed together.
 
 Every command and key is explained in the [user manual](docs/user-manual.md).
 
+## Install
+
+```bash
+npm i -g sdeck
+```
+
+The package downloads the prebuilt `sdeck.exe` in a `postinstall` script. If your npm blocks install
+scripts, allow it: `npm i -g --allow-scripts=sdeck sdeck`.
+
 ## Build and run
 
 Requires the stable Rust toolchain (`x86_64-pc-windows-gnu` on Windows, set locally with
