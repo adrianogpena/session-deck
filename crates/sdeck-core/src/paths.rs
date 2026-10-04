@@ -38,7 +38,12 @@ pub(crate) mod test_env {
 
     static LOCK: Mutex<()> = Mutex::new(());
 
-    pub const VARS: [&str; 3] = ["SDECK_USER_HOME", "SESSION_DECK_HOME", "SESSION_DECK_STATUS_DIR"];
+    pub const VARS: [&str; 4] = [
+        "SDECK_USER_HOME",
+        "SESSION_DECK_HOME",
+        "SESSION_DECK_STATUS_DIR",
+        "CLAUDE_CONFIG_DIR",
+    ];
 
     /// Serializes tests that touch the process environment and restores the variables on drop.
     pub struct EnvGuard {

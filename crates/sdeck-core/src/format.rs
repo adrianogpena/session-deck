@@ -36,6 +36,11 @@ pub fn humanize_since(time_ms: i64, now_ms: i64) -> String {
     }
 }
 
+/// Collapses every whitespace run to one space and trims the ends.
+pub fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
