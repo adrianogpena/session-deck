@@ -98,6 +98,9 @@ pub struct App {
     system_theme: ThemeName,
     /// Set once the terminal answers an OSC 11 query; from then on the OS setting isn't consulted.
     terminal_reports_background: bool,
+    /// Whether to send the OSC 11 query at all. Off on Windows, where the console input layer turns
+    /// the reply into typed characters instead of an escape sequence.
+    pub query_terminal_background: bool,
     os_probe_running: bool,
     last_theme_poll: Option<Instant>,
     sidebar_pct: f64,
@@ -213,6 +216,7 @@ impl App {
             theme_preference: ui.theme.unwrap_or(ThemePreference::System),
             system_theme: ThemeName::Dark,
             terminal_reports_background: false,
+            query_terminal_background: true,
             os_probe_running: false,
             last_theme_poll: None,
             sidebar_pct: ui.sidebar_pct.unwrap_or(DEFAULT_SIDEBAR_PCT),
@@ -760,7 +764,9 @@ impl App {
         if self.theme_preference != ThemePreference::System || self.attached.is_some() {
             return;
         }
-        self.emit(OSC11_QUERY);
+        if self.query_terminal_background {
+            self.emit(OSC11_QUERY);
+        }
         if let Some(probe) = self
             .os_theme_probe
             .filter(|_| !self.terminal_reports_background && !self.os_probe_running)
@@ -895,7 +901,7 @@ impl App {
             }
             "N" => self.open_agent_picker(false, now),
             "\x1bOR" | "\x1b[13~" => self.open_agent_picker(true, now),
-            "\x1bOS" | "\x1b[14~" => self.cycle_account(now),
+            "\x1bOS" | "\x1b[14~" => self.open_account_picker(),
             "p" => self.open_add_project(),
             "o" => self.open_prompt_input(now),
             "c" => self.copy_last_response(now),

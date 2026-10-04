@@ -1,8 +1,10 @@
 //! The footer text input (`prompt`) and the centered list picker, with their keys. Port of
 //! `App.onPromptKey` and `onPickerKey`; what a submit or a pick does lives with each feature.
 
+use std::path::PathBuf;
 use std::time::Instant;
 
+use sdeck_core::status::account::Account;
 use sdeck_core::store::tree_prefs::delete_folder;
 
 use super::App;
@@ -19,6 +21,8 @@ pub(super) enum PromptAction {
     AddTags(Vec<String>),
     /// A config popup row, by its index in `CONFIG_FIELDS`.
     ConfigField(usize),
+    /// The folder name of a new Claude account.
+    NewAccountDir,
 }
 
 pub(super) struct TextPrompt {
@@ -38,6 +42,14 @@ pub(super) enum PickerAction {
         project_keys: Vec<String>,
         folder_ids: Vec<String>,
         bulk: bool,
+    },
+    /// The accounts listed, in order, then "+ Add account…".
+    SwitchAccount(Vec<Account>),
+    /// Space checks entries (`SHAREABLE` order); Enter creates `dir` linking the checked ones to `source`.
+    ShareWithAccount {
+        dir: PathBuf,
+        source: PathBuf,
+        checked: Vec<bool>,
     },
 }
 
@@ -99,6 +111,7 @@ impl App {
             PromptAction::SetTags(id) => self.set_session_tags(&id, &value, now),
             PromptAction::AddTags(ids) => self.add_tags_to_sessions(&ids, &value, now),
             PromptAction::ConfigField(index) => self.apply_config_field(index, &value, now),
+            PromptAction::NewAccountDir => self.new_account_dir(&value, now),
         }
     }
 
@@ -115,6 +128,14 @@ impl App {
                 }
             }
             "\x1b" | "q" | "\x03" => self.picker = None,
+            " " => {
+                if let PickerAction::ShareWithAccount { checked, .. } = &mut picker.action {
+                    let on = !checked[picker.index];
+                    checked[picker.index] = on;
+                    let label = &picker.items[picker.index][4..];
+                    picker.items[picker.index] = format!("[{}] {label}", if on { 'x' } else { ' ' });
+                }
+            }
             _ => {}
         }
         self.dirty = true;
@@ -143,6 +164,17 @@ impl App {
                 folder_ids,
                 bulk,
             } => self.move_to_folder(picker.index, project_keys, &folder_ids, bulk),
+            PickerAction::SwitchAccount(accounts) => match accounts.get(picker.index) {
+                Some(account) => self.switch_account(account, now),
+                None => self.open_prompt(
+                    "New account folder (e.g. claude-personal)".into(),
+                    String::new(),
+                    PromptAction::NewAccountDir,
+                ),
+            },
+            PickerAction::ShareWithAccount { dir, source, checked } => {
+                self.create_account(&dir, &source, &checked, now)
+            }
         }
     }
 }

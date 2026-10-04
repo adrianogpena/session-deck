@@ -82,6 +82,58 @@ pub fn discover_accounts() -> Vec<Account> {
     accounts
 }
 
+/// What a new account's config dir can share with another one: (entry, label, checked by default).
+pub const SHAREABLE: &[(&str, &str, bool)] = &[
+    ("skills", "skills", true),
+    ("agents", "agents", true),
+    ("commands", "commands", true),
+    ("CLAUDE.md", "CLAUDE.md", true),
+    ("settings.json", "settings.json", false),
+    ("plugins", "plugins", false),
+    ("projects", "projects (session history)", false),
+];
+
+/// The config dir for a typed folder name: `personal`, `claude-personal` and `.claude-personal` all
+/// give `~/.claude-personal`. Errors on an empty or path-like name.
+pub fn account_dir_for_name(input: &str) -> Result<PathBuf, String> {
+    let name = input.trim().trim_start_matches('.');
+    let name = name.strip_prefix("claude-").unwrap_or(name);
+    if name.is_empty() || name.contains(['/', '\\', ':']) || name == ".." {
+        return Err("Use a plain folder name, e.g. claude-personal".into());
+    }
+    Ok(paths::user_home().join(format!(".claude-{name}")))
+}
+
+#[cfg(windows)]
+fn link(target: &Path, link: &Path) -> std::io::Result<()> {
+    if target.is_dir() {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    }
+}
+
+#[cfg(unix)]
+fn link(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+/// Creates `dir` and symlinks each of `entries` in it to the same entry of `source`. Entries that
+/// don't exist in `source` or already exist in `dir` are skipped. Returns the entries linked.
+pub fn create_account_dir(dir: &Path, source: &Path, entries: &[&str]) -> Result<Vec<String>, String> {
+    fs::create_dir_all(dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    let mut linked = Vec::new();
+    for entry in entries {
+        let (from, to) = (source.join(entry), dir.join(entry));
+        if !from.exists() || to.symlink_metadata().is_ok() {
+            continue;
+        }
+        link(&from, &to).map_err(|e| format!("Could not link {entry}: {e}"))?;
+        linked.push((*entry).to_string());
+    }
+    Ok(linked)
+}
+
 /// The discovered account whose config dir is `path`.
 pub fn account_for_config_dir(path: &Path) -> Option<Account> {
     discover_accounts().into_iter().find(|a| a.config_dir == path)
@@ -151,6 +203,37 @@ mod tests {
             home.path().join(".claude-personal/.claude.json")
         );
         assert!(account_for_config_dir(&home.path().join(".claude-empty")).is_none());
+    }
+
+    #[test]
+    fn account_dir_names_are_normalised() {
+        let (_g, home) = fixture();
+        for input in ["personal", "claude-personal", ".claude-personal", " personal "] {
+            assert_eq!(
+                account_dir_for_name(input).unwrap(),
+                home.path().join(".claude-personal")
+            );
+        }
+        assert!(account_dir_for_name("").is_err());
+        assert!(account_dir_for_name("a/b").is_err());
+    }
+
+    #[test]
+    fn creating_an_account_links_only_existing_entries() {
+        let (_g, home) = fixture();
+        let source = home.path().join(".claude");
+        fs::create_dir_all(source.join("skills")).unwrap();
+        fs::write(source.join("CLAUDE.md"), "x").unwrap();
+        let dir = home.path().join(".claude-new");
+        let linked = create_account_dir(&dir, &source, &["skills", "agents", "CLAUDE.md"]);
+        match linked {
+            Ok(linked) => {
+                assert_eq!(linked, ["skills", "CLAUDE.md"]);
+                assert!(dir.join("skills").exists());
+                assert!(!dir.join("agents").exists());
+            }
+            Err(e) => assert!(dir.is_dir(), "{e}"),
+        }
     }
 
     #[test]

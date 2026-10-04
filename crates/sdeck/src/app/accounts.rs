@@ -1,10 +1,15 @@
 //! `F4`: which logged-in Claude account new sessions launch as. New in the Rust version.
 
+use std::path::Path;
 use std::time::Instant;
 
-use sdeck_core::status::account::Account;
+use sdeck_core::paths;
+use sdeck_core::status::account::{
+    account_dir_for_name, create_account_dir, discover_accounts, Account, SHAREABLE,
+};
 use sdeck_core::store::deck_config::{deck_config_path, write_deck_config};
 
+use super::input::{Picker, PickerAction};
 use super::App;
 
 fn label(account: &Account) -> String {
@@ -15,19 +20,93 @@ fn label(account: &Account) -> String {
 }
 
 impl App {
-    pub(super) fn cycle_account(&mut self, now: Instant) {
-        if self.accounts.len() < 2 {
-            self.flash("Only one account configured".into(), now);
-            return;
+    /// `F4`: the accounts (a `*` marks the one new sessions launch as) and "+ Add account…". Accounts
+    /// are rediscovered first, so one logged in since startup is listed.
+    pub(super) fn open_account_picker(&mut self) {
+        for found in discover_accounts() {
+            if !self.accounts.iter().any(|a| a.config_dir == found.config_dir) {
+                self.accounts.push(found);
+            }
         }
         let active = self.active_account().map(|a| a.config_dir.clone());
-        let at = self
+        let mut items: Vec<String> = self
+            .accounts
+            .iter()
+            .map(|a| {
+                format!(
+                    "{} {}",
+                    if Some(&a.config_dir) == active.as_ref() {
+                        '*'
+                    } else {
+                        ' '
+                    },
+                    label(a)
+                )
+            })
+            .collect();
+        items.push("+ Add account…".into());
+        let index = self
             .accounts
             .iter()
             .position(|a| Some(&a.config_dir) == active.as_ref())
             .unwrap_or(0);
-        let next = self.accounts[(at + 1) % self.accounts.len()].clone();
-        self.switch_account(&next, now);
+        self.picker = Some(Picker {
+            title: "Switch account".into(),
+            items,
+            index,
+            action: PickerAction::SwitchAccount(self.accounts.clone()),
+        });
+        self.dirty = true;
+    }
+
+    /// Enter on the folder-name prompt: asks which of the default account's entries to share.
+    pub(super) fn new_account_dir(&mut self, input: &str, now: Instant) {
+        let dir = match account_dir_for_name(input) {
+            Ok(dir) => dir,
+            Err(message) => return self.flash(message, now),
+        };
+        if self.accounts.iter().any(|a| a.config_dir == dir) {
+            return self.flash(format!("{} is already an account", dir.display()), now);
+        }
+        let source = self
+            .accounts
+            .iter()
+            .find(|a| a.is_default)
+            .map_or_else(paths::claude_dir, |a| a.config_dir.clone());
+        self.picker = Some(Picker {
+            title: format!("Share with {} · Space checks, Enter creates", dir.display()),
+            items: SHAREABLE
+                .iter()
+                .map(|(_, label, on)| format!("[{}] {label}", if *on { 'x' } else { ' ' }))
+                .collect(),
+            index: 0,
+            action: PickerAction::ShareWithAccount {
+                dir,
+                source,
+                checked: SHAREABLE.iter().map(|(_, _, on)| *on).collect(),
+            },
+        });
+        self.dirty = true;
+    }
+
+    pub(super) fn create_account(&mut self, dir: &Path, source: &Path, checked: &[bool], now: Instant) {
+        let entries: Vec<&str> = SHAREABLE
+            .iter()
+            .zip(checked)
+            .filter(|(_, on)| **on)
+            .map(|((entry, _, _), _)| *entry)
+            .collect();
+        match create_account_dir(dir, source, &entries) {
+            Ok(linked) => self.flash(
+                format!(
+                    "Created {} ({} linked). Run `claude` with CLAUDE_CONFIG_DIR set to it and /login; it then shows in F4",
+                    dir.display(),
+                    linked.len()
+                ),
+                now,
+            ),
+            Err(message) => self.flash(message, now),
+        }
     }
 
     /// Persists the choice (unset for the default account) and rebuilds the tree, whose
@@ -72,6 +151,7 @@ mod tests {
         f.add(Some("abc"), true);
 
         f.key("\x1bOS");
+        f.key("j\r");
         assert_eq!(f.app.message, "New sessions will launch as me@x.com");
         let saved = read_deck_config(&deck_config_path());
         assert_eq!(
@@ -84,6 +164,7 @@ mod tests {
         f.key("\x0bq");
 
         f.key("\x1bOS");
+        f.key("k\r");
         assert_eq!(f.app.message, "New sessions will launch as work@x.com");
         assert_eq!(
             read_deck_config(&deck_config_path()).ui.active_account_config_dir,
@@ -95,11 +176,33 @@ mod tests {
     }
 
     #[test]
-    fn f4_with_one_account_only_flashes() {
+    fn f4_with_one_account_lists_it_and_add_account() {
         let mut f = fixture();
         f.key("\x1bOS");
-        assert_eq!(f.app.message, "Only one account configured");
+        let picker = f.app.picker.as_ref().expect("picker");
+        assert_eq!(picker.title, "Switch account");
+        assert_eq!(picker.items.len(), 2);
+        assert_eq!(picker.items[1], "+ Add account…");
         assert_eq!(f.app.config.ui.active_account_config_dir, None);
+    }
+
+    #[test]
+    fn adding_an_account_asks_for_the_folder_then_what_to_share() {
+        let mut f = fixture();
+        std::fs::create_dir_all(f.home.path().join(".claude/skills")).unwrap();
+        f.key("\x1bOS");
+        f.key("j\r");
+        assert!(f.app.prompt.is_some());
+        f.key("work\r");
+        let picker = f.app.picker.as_ref().expect("share picker");
+        assert!(picker.items[0].starts_with("[x] skills"));
+        assert!(picker.items[4].starts_with("[ ] settings.json"));
+        f.key(" j ");
+        assert!(f.app.picker.as_ref().unwrap().items[0].starts_with("[ ] skills"));
+        f.key("\r");
+        assert!(f.app.picker.is_none());
+        assert!(f.home.path().join(".claude-work").is_dir());
+        assert!(f.app.message.starts_with("Created"));
     }
 
     #[test]

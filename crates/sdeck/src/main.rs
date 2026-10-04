@@ -66,6 +66,7 @@ fn main() -> anyhow::Result<()> {
 
     let (tx, rx) = mpsc::channel();
     let mut app = App::new(DeckStore::at_default_path(), tx.clone(), Some(read_os_theme));
+    app.query_terminal_background = !cfg!(windows);
     app.start_background(discover_accounts(), read_deck_config(&deck_config_path()));
     #[cfg(windows)]
     app.enable_notifications(Box::new(
