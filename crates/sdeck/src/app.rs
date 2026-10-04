@@ -17,6 +17,7 @@ mod new_session;
 mod overlays;
 mod preview;
 mod prompt;
+mod quit;
 mod reorder;
 mod search;
 mod session_text;
@@ -24,6 +25,7 @@ mod tags;
 #[cfg(test)]
 mod test_fixture;
 mod trace;
+mod view_controls;
 
 use std::collections::HashSet;
 use std::io::Write;
@@ -59,7 +61,7 @@ use crate::filters::{
 };
 use crate::git_status_tracker::{read_all, GitStatusTracker};
 use crate::keys::{extract_focus_events, split_keys};
-use crate::layout::{compute_layout, Layout, DEFAULT_SIDEBAR_PCT};
+use crate::layout::{compute_layout, Layout, DEFAULT_SIDEBAR_PCT, SIDEBAR_STEP};
 use crate::live_session::Executables;
 use crate::sessions::{
     discover_found, display_title, merge_found, refresh_live_title, DeckSession, SessionStatus, StatusTracker,
@@ -74,6 +76,7 @@ use crate::view::preview_panel::{group_preview_lines, render_preview_panel};
 use crate::view::{bars, overlay, GroupCounts, SessionView};
 use input::{Confirm, Picker, TextPrompt};
 use overlays::Overlay;
+use quit::QuitConfirm;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const THEME_POLL: Duration = Duration::from_millis(5000);
@@ -113,6 +116,10 @@ pub struct App {
     /// console input records on Windows, so raw mode sequences wouldn't do).
     mouse_capture_change: Option<bool>,
     quit: bool,
+    /// The popup asking before quitting with sessions running; while open it takes every key.
+    quit_confirm: Option<QuitConfirm>,
+    /// The new sidebar width, shown in the list header until the instant.
+    resize_note: Option<(String, Instant)>,
 
     /// Full-screen attached session (by uid): sdeck doesn't draw, the agent owns the terminal.
     attached: Option<u64>,
@@ -218,6 +225,8 @@ impl App {
             clear_screen: false,
             mouse_capture_change: None,
             quit: false,
+            quit_confirm: None,
+            resize_note: None,
             attached: None,
             interacting: None,
             chord_pending: false,
@@ -280,6 +289,7 @@ impl App {
         self.sources_enabled = true;
         // Pays the `where.exe` lookups now, not on whichever session starts first.
         self.executables.warm(&self.config);
+        self.purge_expired_trash();
         let tx = self.tx.clone();
         self._store_watch = self
             .store
@@ -380,6 +390,10 @@ impl App {
     }
 
     fn on_tick(&mut self, now: Instant) {
+        if self.resize_note.as_ref().is_some_and(|(_, until)| now >= *until) {
+            self.resize_note = None;
+            self.dirty = true;
+        }
         if self.message_until.is_some_and(|until| now >= until) {
             self.message.clear();
             self.message_until = None;
@@ -826,6 +840,10 @@ impl App {
             }
             return;
         }
+        if self.quit_confirm.is_some() {
+            self.on_quit_confirm_key(key);
+            return;
+        }
         if self.prompt.is_some() {
             self.on_prompt_key(key, now);
             return;
@@ -960,8 +978,10 @@ impl App {
                 clear_session_meta_cache();
                 self.spawn_discovery();
             }
-            // A confirm popup arrives in 14.1.
-            "q" | "\x03" => self.quit = true,
+            "<" => self.resize_sidebar(-SIDEBAR_STEP, now),
+            ">" => self.resize_sidebar(SIDEBAR_STEP, now),
+            "b" => self.toggle_sidebar(),
+            "q" | "\x03" => self.quit(),
             _ => {}
         }
     }
@@ -1117,7 +1137,9 @@ impl App {
             if self.tree.view == GroupView::Active {
                 modes.push("active on top");
             }
-            let note = if modes.is_empty() {
+            let note = if let Some(width) = self.active_resize_note(Instant::now()) {
+                width.to_string()
+            } else if modes.is_empty() {
                 String::new()
             } else {
                 format!("· {}", modes.join(" · "))
@@ -1161,6 +1183,9 @@ impl App {
             overlay::render_picker(frame, t, &picker.title, &picker.items, picker.index);
         }
         self.draw_overlay(frame, t);
+        if let Some(confirm) = &self.quit_confirm {
+            overlay::render_quit_confirm(frame, t, confirm.active_count, confirm.yes);
+        }
         let bottom = row(area.height.saturating_sub(1));
         if let Some(prompt) = &self.prompt {
             frame.render_widget(bars::prompt_bar(t, cols, &prompt.label, &prompt.value), bottom);
