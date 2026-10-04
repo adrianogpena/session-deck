@@ -7,3 +7,5 @@ pub mod discovery;
 pub mod format;
 pub mod fuzzy_match;
 pub mod paths;
+pub mod status;
+pub mod store;

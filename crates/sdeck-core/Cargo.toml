@@ -5,8 +5,13 @@ edition.workspace = true
 
 [dependencies]
 dirs = "6"
+indexmap = "2"
+notify = "8"
 regex = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "2"
 unicode-width = "0.2"
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 tempfile = "3"

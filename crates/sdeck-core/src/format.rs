@@ -2,6 +2,13 @@ const MINUTE: u64 = 60_000;
 const HOUR: u64 = 60 * MINUTE;
 const DAY: u64 = 24 * HOUR;
 
+/// Current time as epoch milliseconds.
+pub fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
+}
+
 /// `just now`, `5m ago`, `2h 10m ago`, `3d 4h ago`. Times are epoch milliseconds.
 pub fn humanize_since(time_ms: i64, now_ms: i64) -> String {
     let elapsed = (now_ms - time_ms).max(0) as u64;
