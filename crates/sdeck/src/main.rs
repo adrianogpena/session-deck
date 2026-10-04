@@ -29,6 +29,8 @@ fn restore_terminal() {
         Show,
         LeaveAlternateScreen
     );
+    let _ = out.write_all(b"\x1b[?1049l\x1b[?47l");
+    let _ = out.flush();
     let _ = disable_raw_mode();
 }
 
@@ -82,5 +84,9 @@ fn main() -> anyhow::Result<()> {
     let _guard = TerminalGuard::enter()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     spawn_input_thread(tx);
-    run_loop(&mut app, &mut terminal, &rx, &mut stdout())
+    let result = run_loop(&mut app, &mut terminal, &rx, &mut stdout());
+    // Shutting down live sessions can still write to the screen, so do it before leaving it.
+    drop(terminal);
+    drop(app);
+    result
 }
