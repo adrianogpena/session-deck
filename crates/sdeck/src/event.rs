@@ -1,11 +1,13 @@
 //! Everything the main loop reacts to. Background threads (input, probes, and later PTY readers and
 //! watchers) send [`AppEvent`]s over one channel; only the main loop touches app state.
 
+use std::collections::HashMap;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 use ratatui::crossterm::event::{self, Event};
 
+use sdeck_core::discovery::claude_trace::TraceStep;
 use sdeck_core::status::claude_transcript_tailer::TailedTurn;
 
 use crate::git_status_tracker::GitStatuses;
@@ -36,6 +38,10 @@ pub enum AppEvent {
     LastResponse(u64, String),
     /// New turns of the session open elsewhere that the preview tails, by `DeckSession::uid`.
     LiveTurns(u64, Vec<TailedTurn>),
+    /// The prompts and replies of every session, read off the main thread for a search, by search id.
+    SearchText(u64, HashMap<String, String>),
+    /// A session's trajectory, read off the main thread, by `DeckSession::uid`.
+    Trace(u64, Vec<TraceStep>),
     /// A toast was clicked, by session id.
     ToastClicked(String),
 }

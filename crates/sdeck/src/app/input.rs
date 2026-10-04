@@ -17,6 +17,8 @@ pub(super) enum PromptAction {
     NewFolder(Vec<String>),
     SetTags(String),
     AddTags(Vec<String>),
+    /// A config popup row, by its index in `CONFIG_FIELDS`.
+    ConfigField(usize),
 }
 
 pub(super) struct TextPrompt {
@@ -96,6 +98,7 @@ impl App {
             PromptAction::NewFolder(keys) => self.new_folder(&value, &keys, now),
             PromptAction::SetTags(id) => self.set_session_tags(&id, &value, now),
             PromptAction::AddTags(ids) => self.add_tags_to_sessions(&ids, &value, now),
+            PromptAction::ConfigField(index) => self.apply_config_field(index, &value, now),
         }
     }
 

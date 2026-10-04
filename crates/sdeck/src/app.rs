@@ -14,13 +14,16 @@ mod lifecycle;
 mod marks;
 mod navigation;
 mod new_session;
+mod overlays;
 mod preview;
 mod prompt;
 mod reorder;
+mod search;
 mod session_text;
 mod tags;
 #[cfg(test)]
 mod test_fixture;
+mod trace;
 
 use std::collections::HashSet;
 use std::io::Write;
@@ -70,6 +73,7 @@ use crate::view::list_panel::{render_list_panel, ListRow};
 use crate::view::preview_panel::{group_preview_lines, render_preview_panel};
 use crate::view::{bars, overlay, GroupCounts, SessionView};
 use input::{Confirm, Picker, TextPrompt};
+use overlays::Overlay;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const THEME_POLL: Duration = Duration::from_millis(5000);
@@ -120,6 +124,10 @@ pub struct App {
     /// takes every key.
     prompt: Option<TextPrompt>,
     picker: Option<Picker>,
+    /// The popup opened by `?`, `C`, `w`, `v`, `a`, `/` or `:`; while open it takes every key.
+    overlay: Option<Overlay>,
+    /// Hands out ids that tell one search apart from the next.
+    next_overlay_id: u64,
     /// Footer yes/no question: `y` confirms, any other key cancels.
     confirm: Option<Confirm>,
     /// Sessions checked with Space (by uid) for a batch action.
@@ -216,6 +224,8 @@ impl App {
             mouse_tracking: false,
             prompt: None,
             picker: None,
+            overlay: None,
+            next_overlay_id: 0,
             confirm: None,
             multi_selected: HashSet::new(),
             deleted: Vec::new(),
@@ -361,6 +371,8 @@ impl App {
             AppEvent::PtyExited(id, code) => self.on_pty_exit(id, code),
             AppEvent::LastResponse(uid, text) => self.on_last_response(uid, text),
             AppEvent::LiveTurns(uid, turns) => self.on_live_turns(uid, turns),
+            AppEvent::SearchText(id, text) => self.on_search_text(id, text),
+            AppEvent::Trace(uid, steps) => self.on_trace_steps(uid, steps),
             AppEvent::ToastClicked(id) => self.on_toast_clicked(&id, now),
         }
         self.track_selection();
@@ -818,6 +830,10 @@ impl App {
             self.on_prompt_key(key, now);
             return;
         }
+        if self.overlay.is_some() {
+            self.on_overlay_key(key, now);
+            return;
+        }
         if self.picker.is_some() {
             self.on_picker_key(key, now);
             return;
@@ -887,6 +903,13 @@ impl App {
             "[" => self.cycle_active_session(-1, now),
             "]" => self.cycle_active_session(1, now),
             "T" => self.cycle_theme(now),
+            "?" => self.open_help(),
+            "C" => self.open_config(),
+            "w" => self.open_skills(),
+            "v" => self.open_trace(now),
+            "a" => self.open_alerts(),
+            "/" => self.open_search(),
+            ":" => self.open_palette(),
             "s" => self.start_selected(now),
             "x" if self.multi_selected.is_empty() => self.stop_selected(now),
             "x" => self.bulk_stop(now),
@@ -1137,6 +1160,7 @@ impl App {
         if let Some(picker) = &self.picker {
             overlay::render_picker(frame, t, &picker.title, &picker.items, picker.index);
         }
+        self.draw_overlay(frame, t);
         let bottom = row(area.height.saturating_sub(1));
         if let Some(prompt) = &self.prompt {
             frame.render_widget(bars::prompt_bar(t, cols, &prompt.label, &prompt.value), bottom);
