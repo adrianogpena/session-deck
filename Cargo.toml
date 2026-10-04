@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["crates/sdeck-core", "crates/sdeck"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"

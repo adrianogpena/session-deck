@@ -1,0 +1,8 @@
+[package]
+name = "sdeck"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sdeck-core = { path = "../sdeck-core" }
+anyhow = "1"
