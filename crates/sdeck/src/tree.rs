@@ -65,12 +65,21 @@ pub enum TreeRow {
     UsageBudget {
         days: Vec<DailySpend>,
     },
+    /// The selected session's model and effort, e.g. `Opus 5.5 · high`.
+    UsageModel {
+        label: Option<String>,
+    },
 }
 
 /// The rows under the USAGE divider.
 pub fn usage_rows(usage: &UsageSectionInput) -> Vec<TreeRow> {
     let rate = usage.rate_limit.as_ref();
+    let model_label = usage.model.as_ref().map(|model| match &usage.effort {
+        Some(effort) => format!("{model} · {effort}"),
+        None => model.clone(),
+    });
     vec![
+        TreeRow::UsageModel { label: model_label },
         TreeRow::Usage {
             metric: UsageMetric::Context,
             percent: usage.context_percent,
@@ -103,7 +112,7 @@ impl TreeRow {
     pub fn is_unselectable(&self) -> bool {
         matches!(
             self,
-            Self::Divider { .. } | Self::Usage { .. } | Self::UsageBudget { .. }
+            Self::Divider { .. } | Self::Usage { .. } | Self::UsageBudget { .. } | Self::UsageModel { .. }
         )
     }
 }
@@ -126,6 +135,9 @@ pub struct UsageSectionInput {
     pub context_updated_at: Option<i64>,
     /// The session's first context reading, shown beside the current one.
     pub context_startup_percent: Option<f64>,
+    /// The session's model display name and reasoning effort.
+    pub model: Option<String>,
+    pub effort: Option<String>,
     pub rate_limit: Option<RateLimitUsage>,
     pub five_hour_reset_label: Option<String>,
     pub seven_day_reset_label: Option<String>,
@@ -1053,9 +1065,10 @@ mod tests {
     fn the_usage_section_is_omitted_unless_asked_for() {
         let sessions = fixture();
         let rows = build_tree(&sessions, &default_tree_prefs(), &opts()).rows;
-        assert!(!rows
-            .iter()
-            .any(|r| matches!(r, TreeRow::Usage { .. } | TreeRow::UsageBudget { .. })));
+        assert!(!rows.iter().any(|r| matches!(
+            r,
+            TreeRow::Usage { .. } | TreeRow::UsageBudget { .. } | TreeRow::UsageModel { .. }
+        )));
     }
 
     #[test]
@@ -1070,6 +1083,8 @@ mod tests {
                 context_percent: Some(42.0),
                 context_updated_at: Some(789),
                 context_startup_percent: Some(6.4),
+                model: Some("Opus 5.5".into()),
+                effort: Some("high".into()),
                 rate_limit: Some(RateLimitUsage {
                     five_hour_percent: Some(30.0),
                     five_hour_resets_at: None,
@@ -1085,10 +1100,13 @@ mod tests {
         };
         let rows = build_tree(&sessions, &default_tree_prefs(), &o).rows;
         assert_eq!(
-            rows[rows.len() - 5..],
+            rows[rows.len() - 6..],
             [
                 TreeRow::Divider {
                     label: "USAGE".into()
+                },
+                TreeRow::UsageModel {
+                    label: Some("Opus 5.5 · high".into())
                 },
                 TreeRow::Usage {
                     metric: UsageMetric::Context,
@@ -1121,12 +1139,13 @@ mod tests {
             ..opts()
         };
         let rows = build_tree(&sessions, &default_tree_prefs(), &o).rows;
-        let tail = &rows[rows.len() - 5..];
+        let tail = &rows[rows.len() - 6..];
         assert!(matches!(tail[0], TreeRow::Divider { .. }));
-        for r in &tail[1..4] {
+        assert_eq!(tail[1], TreeRow::UsageModel { label: None });
+        for r in &tail[2..5] {
             assert!(matches!(r, TreeRow::Usage { percent: None, .. }));
         }
-        assert_eq!(tail[4], TreeRow::UsageBudget { days: vec![] });
+        assert_eq!(tail[5], TreeRow::UsageBudget { days: vec![] });
     }
 
     #[test]

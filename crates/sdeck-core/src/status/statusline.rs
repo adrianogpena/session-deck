@@ -34,6 +34,27 @@ fn context_percent(payload: &Map<String, Value>) -> Option<f64> {
     pct(payload.get("context_window")?.get("used_percentage")).map(one_decimal)
 }
 
+fn non_empty(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// The model's display name, falling back to its id.
+fn model_name(payload: &Map<String, Value>) -> Option<String> {
+    let model = payload.get("model")?;
+    non_empty(model.get("display_name"))
+        .or_else(|| non_empty(model.get("id")))
+        .or_else(|| non_empty(Some(model)))
+}
+
+/// The reasoning effort, as either `"effort": "high"` or `"effort": {"level": "high"}`.
+fn effort_level(payload: &Map<String, Value>) -> Option<String> {
+    let effort = payload.get("effort")?;
+    non_empty(Some(effort)).or_else(|| non_empty(effort.get("level")))
+}
+
 /// `used_percentage` and `resets_at` (epoch seconds, returned as ms) of one rate-limit window.
 fn window(payload: &Map<String, Value>, key: &str) -> (Option<f64>, Option<i64>) {
     let Some(window) = payload.get("rate_limits").and_then(|r| r.get(key)) else {
@@ -71,6 +92,12 @@ fn write_usage_record(payload: &Map<String, Value>, now: i64) -> io::Result<()> 
         // CLAUDE.md), so it stays as the session's baseline.
         if context > 0.0 && !record.contains_key("startupContextPercent") {
             record.insert("startupContextPercent".into(), json!(context));
+        }
+    }
+    // Both can change mid-session (`/model`), so the latest report always wins.
+    for (key, value) in [("model", model_name(payload)), ("effort", effort_level(payload))] {
+        if let Some(value) = value {
+            record.insert(key.into(), json!(value));
         }
     }
     for (key, percent_key, resets_key) in [
@@ -215,6 +242,21 @@ mod tests {
         let r = read_record("s1");
         assert_eq!(r["startupContextPercent"], json!(6.4));
         assert_eq!(r["contextPercent"], json!(30.0));
+    }
+
+    #[test]
+    fn the_model_and_effort_follow_the_latest_report() {
+        let (_g, _tmp) = fixture();
+        run_statusline_hook(
+            r#"{"session_id":"s1","model":{"id":"claude-opus-5-5","display_name":"Opus 5.5"},"effort":{"level":"high"}}"#,
+        );
+        let r = read_record("s1");
+        assert_eq!(r["model"], json!("Opus 5.5"));
+        assert_eq!(r["effort"], json!("high"));
+        run_statusline_hook(r#"{"session_id":"s1","model":{"id":"claude-sonnet-5-5"},"effort":"low"}"#);
+        let r = read_record("s1");
+        assert_eq!(r["model"], json!("claude-sonnet-5-5"));
+        assert_eq!(r["effort"], json!("low"));
     }
 
     #[test]

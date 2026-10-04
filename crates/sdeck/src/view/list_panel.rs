@@ -56,6 +56,9 @@ pub enum ListRow {
     UsageBudget {
         days: Vec<DailySpend>,
     },
+    UsageModel {
+        label: Option<String>,
+    },
 }
 
 /// `(glyph, role, bold)` of a session's status dot.
@@ -246,7 +249,11 @@ fn session_row(t: Theme, width: usize, r: SessionRow, selected: bool) -> Line<'s
     if v.elsewhere {
         spans.push(Span::styled("↗ ", t.fg(Role::Purple)));
     }
-    let mut title_style = t.fg(if v.other_account { Role::TextDim } else { Role::Text });
+    let mut title_style = t.fg(if v.other_account {
+        Role::TextDim
+    } else {
+        Role::Text
+    });
     if active {
         title_style = bold(title_style);
     }
@@ -363,6 +370,25 @@ fn usage_row(
     ])
 }
 
+/// `Model   Opus 5.5 · high`, or `—` when this session hasn't reported one.
+fn usage_model_row(t: Theme, width: usize, label: Option<&str>) -> Line<'static> {
+    let lead = "  ";
+    let head = fit("Model", USAGE_LABEL_WIDTH);
+    let text = format!("{head} {}", label.unwrap_or("—"));
+    let fitted = fit(&text, width.saturating_sub(text_width(lead)).max(1));
+    let pad = " ".repeat(width.saturating_sub(text_width(lead) + text_width(&fitted)));
+    let role = if label.is_some() {
+        Role::Text
+    } else {
+        Role::TextDim
+    };
+    Line::from(vec![
+        Span::styled(lead, t.fg(Role::TextDim)),
+        Span::styled(fitted, t.fg(role)),
+        Span::raw(pad),
+    ])
+}
+
 /// This week's day-by-day spend against the 7d quota, below the 7d row.
 fn usage_budget_row(t: Theme, width: usize, days: &[DailySpend]) -> Line<'static> {
     let lead = "  ";
@@ -449,6 +475,7 @@ pub fn render_list_panel(
                 stale,
             }) => usage_row(t, width, *metric, *percent, reset_label.as_deref(), *stale),
             Some(ListRow::UsageBudget { days }) => usage_budget_row(t, width, days),
+            Some(ListRow::UsageModel { label }) => usage_model_row(t, width, label.as_deref()),
             Some(ListRow::Folder {
                 name,
                 counts,
@@ -589,6 +616,9 @@ mod tests {
             ListRow::Divider {
                 label: "USAGE".into(),
             },
+            ListRow::UsageModel {
+                label: Some("Opus 5.5 · high".into()),
+            },
             ListRow::Usage {
                 metric: UsageMetric::Context,
                 percent: Some(42.0),
@@ -625,7 +655,7 @@ mod tests {
     #[test]
     fn a_fixture_tree_with_every_row_kind_renders_as_expected() {
         let t = Theme::new(ThemeName::Dark);
-        let lines = render_list_panel(t, 44, 18, &fixture(), 2, "· filtered", "empty");
+        let lines = render_list_panel(t, 44, 19, &fixture(), 2, "· filtered", "empty");
         let rendered: Vec<String> = lines.iter().map(text).collect();
         let expected = [
             "SESSIONS · filtered",
@@ -639,6 +669,7 @@ mod tests {
             "── TAGS",
             "  # urgent (2)",
             "── USAGE",
+            "  Model   Opus 5.5 · high",
             "  Context ████░░░░░░ 42%",
             "  5h      ███████░░░ 73% (8:30 PM)",
             "  7d      —",

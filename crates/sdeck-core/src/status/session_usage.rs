@@ -19,6 +19,9 @@ pub struct SessionUsageRecord {
     pub context_percent: Option<f64>,
     /// The session's first context reading: what a request carries before any real conversation.
     pub startup_context_percent: Option<f64>,
+    /// The model's display name and reasoning effort, as of the last statusLine report.
+    pub model: Option<String>,
+    pub effort: Option<String>,
     pub five_hour_percent: Option<f64>,
     /// Epoch ms.
     pub five_hour_resets_at: Option<i64>,
@@ -79,9 +82,18 @@ fn parse_usage_record(raw: &str) -> Option<SessionUsageRecord> {
     let parsed: Value = serde_json::from_str(raw).ok()?;
     let record = parsed.as_object()?;
     let ms = |key: &str| num(record.get(key)).map(|n| n as i64);
+    let text = |key: &str| {
+        record
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
     Some(SessionUsageRecord {
         context_percent: num(record.get("contextPercent")),
         startup_context_percent: num(record.get("startupContextPercent")),
+        model: text("model"),
+        effort: text("effort"),
         five_hour_percent: num(record.get("fiveHourPercent")),
         five_hour_resets_at: ms("fiveHourResetsAt"),
         seven_day_percent: num(record.get("sevenDayPercent")),
@@ -393,6 +405,8 @@ mod tests {
             Some(SessionUsageRecord {
                 context_percent: Some(42.0),
                 startup_context_percent: None,
+                model: None,
+                effort: None,
                 five_hour_percent: None,
                 five_hour_resets_at: None,
                 seven_day_percent: None,

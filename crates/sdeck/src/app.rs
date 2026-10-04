@@ -615,6 +615,8 @@ impl App {
             context_percent: session_usage.as_ref().and_then(|u| u.context_percent),
             context_updated_at: session_usage.as_ref().map(|u| u.updated_at),
             context_startup_percent: session_usage.as_ref().and_then(|u| u.startup_context_percent),
+            model: session_usage.as_ref().and_then(|u| u.model.clone()),
+            effort: session_usage.as_ref().and_then(|u| u.effort.clone()),
             five_hour_reset_label: rate_limit
                 .as_ref()
                 .and_then(|r| r.five_hour_resets_at)
@@ -1136,6 +1138,7 @@ impl App {
                             && updated_at.is_some_and(|at| is_rate_limit_stale(at, now_ms())),
                     },
                     TreeRow::UsageBudget { days } => ListRow::UsageBudget { days: days.clone() },
+                    TreeRow::UsageModel { label } => ListRow::UsageModel { label: label.clone() },
                 })
             })
             .collect()

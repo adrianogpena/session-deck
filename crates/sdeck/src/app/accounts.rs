@@ -45,7 +45,11 @@ impl App {
     /// are rediscovered first, so one logged in since startup is listed.
     pub(super) fn open_account_picker(&mut self) {
         for found in discover_accounts() {
-            match self.accounts.iter_mut().find(|a| a.config_dir == found.config_dir) {
+            match self
+                .accounts
+                .iter_mut()
+                .find(|a| a.config_dir == found.config_dir)
+            {
                 Some(known) => known.email = found.email.or(known.email.take()),
                 None => self.accounts.push(found),
             }
