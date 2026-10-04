@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 
 use sdeck_core::agent_catalog::all_agent_ids;
 use sdeck_core::status::session_status::SessionStatus;
-use sdeck_core::store::deck_config::{DeckConfig, ToolConfig};
+use sdeck_core::store::deck_config::{DeckConfig, ToolConfig, UsagePosition};
 
 /// `Toggle` applies immediately on Enter; the others open a text prompt first, pre-filled with
 /// [`ConfigField::edit_value`].
@@ -29,6 +29,7 @@ enum Setting {
     GitStatus,
     ExpandCollapsedOnActiveJump,
     ShowUsage,
+    UsagePosition,
     Use24HourClock,
     ToolEnabled,
     ToolCommand,
@@ -145,6 +146,12 @@ impl ConfigField {
             Setting::GitStatus => on_off(c.ui.git_status),
             Setting::ExpandCollapsedOnActiveJump => on_off(c.ui.expand_collapsed_on_active_jump),
             Setting::ShowUsage => on_off(c.ui.show_usage),
+            Setting::UsagePosition => match c.ui.usage_position {
+                UsagePosition::Top => "Top",
+                UsagePosition::Bottom => "Bottom",
+                UsagePosition::Float => "Float",
+            }
+            .into(),
             Setting::Use24HourClock => if c.ui.use_24_hour_clock {
                 "24-hour"
             } else {
@@ -219,6 +226,7 @@ impl ConfigField {
                 c.ui.expand_collapsed_on_active_jump = !c.ui.expand_collapsed_on_active_jump
             }
             Setting::ShowUsage => c.ui.show_usage = !c.ui.show_usage,
+            Setting::UsagePosition => c.ui.usage_position = c.ui.usage_position.next(),
             Setting::Use24HourClock => c.ui.use_24_hour_clock = !c.ui.use_24_hour_clock,
             Setting::ToolEnabled => {
                 let tool = c.tools.entry(self.agent.clone()).or_default();
@@ -300,6 +308,12 @@ fn build_fields() -> Vec<ConfigField> {
             Toggle,
             Setting::ShowUsage,
             "Shows a Context/5h/7d usage section at the bottom of the list for the selected Claude session.",
+        ),
+        ui(
+            "usagePosition",
+            Toggle,
+            Setting::UsagePosition,
+            "Where the usage section sits — Enter cycles: Float (right after the last row), Top (pinned above the tree), Bottom (pinned to the bottom of the panel).",
         ),
         ui(
             "use24HourClock",
@@ -437,6 +451,17 @@ mod tests {
             assert_eq!(f.display(&flipped), after, "{label}");
             assert_eq!(f.display(&f.apply(&flipped, "").unwrap()), before, "{label}");
         }
+    }
+
+    #[test]
+    fn usage_position_cycles_float_top_bottom() {
+        let f = field("ui.usagePosition");
+        assert_eq!(f.display(&base()), "Float");
+        let top = f.apply(&base(), "").unwrap();
+        assert_eq!(f.display(&top), "Top");
+        let bottom = f.apply(&top, "").unwrap();
+        assert_eq!(f.display(&bottom), "Bottom");
+        assert_eq!(f.display(&f.apply(&bottom, "").unwrap()), "Float");
     }
 
     #[test]

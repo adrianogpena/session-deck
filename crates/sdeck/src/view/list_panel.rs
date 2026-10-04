@@ -7,6 +7,7 @@ use sdeck_core::discovery::git_status::GitStatus;
 use sdeck_core::status::usage_display::{
     render_usage_bar, usage_severity, UsageMetric, UsageSeverity, USAGE_BAR_WIDTH,
 };
+use sdeck_core::store::deck_config::UsagePosition;
 use sdeck_core::store::tree_prefs::SessionPin;
 
 use super::{panel_header, GroupCounts, SessionView};
@@ -408,7 +409,89 @@ fn usage_cache_row(t: Theme, width: usize, cache: Option<&(bool, String)>) -> Li
     ])
 }
 
-/// Lines for the sessions panel: `height` lines, `width` columns each.
+fn list_row_line(
+    t: Theme,
+    width: usize,
+    row: &ListRow,
+    is_selected: bool,
+    show_checkbox: bool,
+) -> Line<'static> {
+    match row {
+        ListRow::Session {
+            view,
+            is_last,
+            depth,
+            pin,
+            checked,
+        } => session_row(
+            t,
+            width,
+            SessionRow {
+                view,
+                is_last: *is_last,
+                depth: *depth,
+                pin: *pin,
+                checked: *checked,
+                show_checkbox,
+            },
+            is_selected,
+        ),
+        ListRow::Divider { label } => divider_row(t, width, label),
+        ListRow::Tag { name, count, active } => tag_row(t, width, name, *count, *active, is_selected),
+        ListRow::Usage {
+            metric,
+            percent,
+            reset_label,
+            stale,
+        } => usage_row(t, width, *metric, *percent, reset_label.as_deref(), *stale),
+        ListRow::UsageModel { label } => usage_model_row(t, width, label.as_deref()),
+        ListRow::UsageCache { cache } => usage_cache_row(t, width, cache.as_ref()),
+        ListRow::Folder {
+            name,
+            counts,
+            collapsed,
+            hotkey,
+        } => group_row(
+            t,
+            width,
+            GroupRow {
+                is_folder: true,
+                name,
+                counts,
+                collapsed: *collapsed,
+                depth: 0,
+                hotkey: *hotkey,
+                git: None,
+            },
+            is_selected,
+        ),
+        ListRow::Project {
+            label,
+            counts,
+            collapsed,
+            depth,
+            hotkey,
+            git,
+        } => group_row(
+            t,
+            width,
+            GroupRow {
+                is_folder: false,
+                name: label,
+                counts,
+                collapsed: *collapsed,
+                depth: *depth,
+                hotkey: *hotkey,
+                git: git.as_ref(),
+            },
+            is_selected,
+        ),
+    }
+}
+
+/// Lines for the sessions panel: `height` lines, `width` columns each. With `usage_position` `Top` or
+/// `Bottom`, the trailing USAGE block is pinned there and only the rows before it scroll.
+#[allow(clippy::too_many_arguments)]
 pub fn render_list_panel(
     t: Theme,
     width: usize,
@@ -417,10 +500,35 @@ pub fn render_list_panel(
     selected: usize,
     note: &str,
     empty_message: &str,
+    usage_position: UsagePosition,
 ) -> Vec<Line<'static>> {
     let mut lines = panel_header(t, width, "SESSIONS", note).to_vec();
-    let body = height.saturating_sub(2);
-    if rows.is_empty() {
+    let split = match usage_position {
+        UsagePosition::Float => None,
+        _ => rows
+            .iter()
+            .rposition(|r| matches!(r, ListRow::Divider { label } if label == "USAGE")),
+    };
+    let (tree, block) = rows.split_at(split.unwrap_or(rows.len()));
+    let block_lines = |lines: &mut Vec<Line<'static>>| {
+        for row in block {
+            lines.push(list_row_line(t, width, row, false, false));
+        }
+    };
+    if usage_position == UsagePosition::Top {
+        block_lines(&mut lines);
+        if !block.is_empty() {
+            lines.push(Line::from(blank(width)));
+        }
+    }
+    let reserved = if usage_position == UsagePosition::Bottom && !block.is_empty() {
+        block.len() + 1
+    } else {
+        0
+    };
+    let tree_end = height.saturating_sub(reserved);
+    let body = tree_end.saturating_sub(lines.len());
+    if tree.is_empty() {
         lines.push(Line::from(blank(width)));
         lines.push(Line::styled(
             fit(&format!("  {empty_message}"), width),
@@ -428,93 +536,30 @@ pub fn render_list_panel(
         ));
     }
     // Once anything is checked, every session row reserves the checkbox column so they stay aligned.
-    let show_checkbox = rows
+    let show_checkbox = tree
         .iter()
         .any(|r| matches!(r, ListRow::Session { checked: true, .. }));
     // Keep the selection in view, roughly centered.
     let start = (selected as isize - (body / 2) as isize)
-        .min(rows.len() as isize - body as isize)
+        .min(tree.len() as isize - body as isize)
         .max(0) as usize;
     for i in 0..body {
-        if lines.len() >= height {
+        if lines.len() >= tree_end {
             break;
         }
         let is_selected = start + i == selected;
-        lines.push(match rows.get(start + i) {
+        lines.push(match tree.get(start + i) {
             None => Line::from(blank(width)),
-            Some(ListRow::Session {
-                view,
-                is_last,
-                depth,
-                pin,
-                checked,
-            }) => session_row(
-                t,
-                width,
-                SessionRow {
-                    view,
-                    is_last: *is_last,
-                    depth: *depth,
-                    pin: *pin,
-                    checked: *checked,
-                    show_checkbox,
-                },
-                is_selected,
-            ),
-            Some(ListRow::Divider { label }) => divider_row(t, width, label),
-            Some(ListRow::Tag { name, count, active }) => {
-                tag_row(t, width, name, *count, *active, is_selected)
-            }
-            Some(ListRow::Usage {
-                metric,
-                percent,
-                reset_label,
-                stale,
-            }) => usage_row(t, width, *metric, *percent, reset_label.as_deref(), *stale),
-            Some(ListRow::UsageModel { label }) => usage_model_row(t, width, label.as_deref()),
-            Some(ListRow::UsageCache { cache }) => usage_cache_row(t, width, cache.as_ref()),
-            Some(ListRow::Folder {
-                name,
-                counts,
-                collapsed,
-                hotkey,
-            }) => group_row(
-                t,
-                width,
-                GroupRow {
-                    is_folder: true,
-                    name,
-                    counts,
-                    collapsed: *collapsed,
-                    depth: 0,
-                    hotkey: *hotkey,
-                    git: None,
-                },
-                is_selected,
-            ),
-            Some(ListRow::Project {
-                label,
-                counts,
-                collapsed,
-                depth,
-                hotkey,
-                git,
-            }) => group_row(
-                t,
-                width,
-                GroupRow {
-                    is_folder: false,
-                    name: label,
-                    counts,
-                    collapsed: *collapsed,
-                    depth: *depth,
-                    hotkey: *hotkey,
-                    git: git.as_ref(),
-                },
-                is_selected,
-            ),
+            Some(row) => list_row_line(t, width, row, is_selected, show_checkbox),
         });
     }
+    while lines.len() < tree_end {
+        lines.push(Line::from(blank(width)));
+    }
+    if usage_position == UsagePosition::Bottom {
+        block_lines(&mut lines);
+    }
+    lines.truncate(height);
     while lines.len() < height {
         lines.push(Line::from(blank(width)));
     }
@@ -643,7 +688,16 @@ mod tests {
     #[test]
     fn a_fixture_tree_with_every_row_kind_renders_as_expected() {
         let t = Theme::new(ThemeName::Dark);
-        let lines = render_list_panel(t, 44, 19, &fixture(), 2, "· filtered", "empty");
+        let lines = render_list_panel(
+            t,
+            44,
+            19,
+            &fixture(),
+            2,
+            "· filtered",
+            "empty",
+            UsagePosition::Float,
+        );
         let rendered: Vec<String> = lines.iter().map(text).collect();
         let expected = [
             "SESSIONS · filtered",
@@ -673,12 +727,36 @@ mod tests {
     }
 
     #[test]
+    fn a_pinned_usage_block_sits_at_the_top_or_bottom_and_the_tree_scrolls_around_it() {
+        let t = Theme::new(ThemeName::Dark);
+        let rows = fixture();
+        for (position, usage_at) in [(UsagePosition::Top, 2), (UsagePosition::Bottom, 7)] {
+            let lines = render_list_panel(t, 44, 14, &rows, 2, "", "empty", position);
+            let rendered: Vec<String> = lines.iter().map(|l| text(l).trim_end().to_string()).collect();
+            assert_eq!(rendered.len(), 14);
+            assert_eq!(rendered[usage_at], "── USAGE", "{position:?}");
+            assert_eq!(rendered[usage_at + 1], "  Model   Opus 5.5 · high");
+            assert_eq!(rendered[usage_at + 5], "  7d      —");
+            assert!(rendered.iter().any(|r| r.contains("Fix the build")));
+        }
+    }
+
+    #[test]
     fn a_session_row_of_another_account_dims_its_tag_and_keeps_the_status_color() {
         let t = Theme::new(ThemeName::Dark);
         let mut other = view("Other", SessionStatus::Waiting);
         other.account_tag = Some("me".into());
         other.other_account = true;
-        let lines = render_list_panel(t, 40, 5, &[session(other, true, None)], 9, "", "empty");
+        let lines = render_list_panel(
+            t,
+            40,
+            5,
+            &[session(other, true, None)],
+            9,
+            "",
+            "empty",
+            UsagePosition::Float,
+        );
         let row = &lines[2];
         let tag = row.spans.iter().find(|s| s.content == " me").unwrap();
         assert_eq!(tag.style, t.fg(Role::TextDim));
@@ -691,7 +769,7 @@ mod tests {
     #[test]
     fn the_selected_row_is_highlighted_across_its_full_width() {
         let t = Theme::new(ThemeName::Dark);
-        let lines = render_list_panel(t, 30, 6, &fixture()[..3], 2, "", "empty");
+        let lines = render_list_panel(t, 30, 6, &fixture()[..3], 2, "", "empty", UsagePosition::Float);
         assert!(lines[4]
             .spans
             .iter()
@@ -706,10 +784,10 @@ mod tests {
         let rows: Vec<ListRow> = (0..30)
             .map(|i| session(view(&format!("session {i}"), SessionStatus::Idle), i == 29, None))
             .collect();
-        let lines = render_list_panel(t, 30, 12, &rows, 20, "", "empty");
+        let lines = render_list_panel(t, 30, 12, &rows, 20, "", "empty", UsagePosition::Float);
         let shown: Vec<String> = lines.iter().skip(2).map(text).collect();
         assert!(shown.iter().any(|l| l.contains("session 20")), "{shown:?}");
-        let empty = render_list_panel(t, 30, 6, &[], 0, "", "Nothing here.");
+        let empty = render_list_panel(t, 30, 6, &[], 0, "", "Nothing here.", UsagePosition::Float);
         assert_eq!(text(&empty[3]).trim_end(), "  Nothing here.");
     }
 
@@ -723,7 +801,7 @@ mod tests {
         if let ListRow::Session { checked, .. } = &mut rows[1] {
             *checked = true;
         }
-        let lines = render_list_panel(t, 30, 6, &rows, 9, "", "empty");
+        let lines = render_list_panel(t, 30, 6, &rows, 9, "", "empty", UsagePosition::Float);
         assert!(text(&lines[2]).starts_with("·   ├─ ○ one"), "{}", text(&lines[2]));
         assert!(text(&lines[3]).starts_with("✔   └─ ○ two"), "{}", text(&lines[3]));
     }

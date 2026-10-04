@@ -1276,6 +1276,7 @@ impl App {
                 self.selected,
                 &note,
                 empty,
+                self.config.ui.usage_position,
             );
             place_lines(frame, list, lines);
         }

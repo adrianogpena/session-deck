@@ -21,6 +21,44 @@ pub struct ToolConfig {
     pub extra: Map<String, Value>,
 }
 
+/// Where the USAGE section sits in the list panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsagePosition {
+    /// Pinned above the tree.
+    Top,
+    /// Pinned to the bottom of the panel.
+    Bottom,
+    /// Right after the last row, so it follows the tree's size.
+    Float,
+}
+
+impl UsagePosition {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+            Self::Float => "float",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "top" => Some(Self::Top),
+            "bottom" => Some(Self::Bottom),
+            "float" => Some(Self::Float),
+            _ => None,
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Float => Self::Top,
+            Self::Top => Self::Bottom,
+            Self::Bottom => Self::Float,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct UiConfig {
     /// How many of the most recent sessions are loaded from disk. Default: 30.
@@ -41,6 +79,8 @@ pub struct UiConfig {
     pub expand_collapsed_on_active_jump: bool,
     /// Context / 5h / 7d usage section at the bottom of the list. Default: true.
     pub show_usage: bool,
+    /// Where the usage section sits: top, bottom or float. Default: float.
+    pub usage_position: UsagePosition,
     /// The 5h reset time shows as `20:30` (true) or `8:30 PM` (false). Default: false.
     pub use_24_hour_clock: bool,
     /// Config dir of the account new sessions launch as; unset = the default account.
@@ -94,6 +134,7 @@ impl Default for DeckConfig {
                 git_status: true,
                 expand_collapsed_on_active_jump: true,
                 show_usage: false,
+                usage_position: UsagePosition::Float,
                 use_24_hour_clock: false,
                 active_account_config_dir: None,
                 extra: Map::new(),
@@ -185,6 +226,7 @@ pub fn parse_deck_config(raw: &str) -> DeckConfig {
                 "gitStatus",
                 "expandCollapsedOnActiveJump",
                 "showUsage",
+                "usagePosition",
                 "use24HourClock",
                 "activeAccountConfigDir",
             ],
@@ -208,6 +250,13 @@ pub fn parse_deck_config(raw: &str) -> DeckConfig {
         );
         flag("showUsage", &mut c.show_usage);
         flag("use24HourClock", &mut c.use_24_hour_clock);
+        if let Some(p) = ui
+            .get("usagePosition")
+            .and_then(Value::as_str)
+            .and_then(UsagePosition::parse)
+        {
+            c.usage_position = p;
+        }
         if let Some(items) = ui.get("notifyStatuses").and_then(Value::as_array) {
             let parsed: Vec<SessionStatus> = items
                 .iter()
@@ -298,6 +347,7 @@ pub fn deck_config_to_json(config: &DeckConfig) -> String {
         ui.expand_collapsed_on_active_jump.into(),
     );
     ui_obj.insert("showUsage".into(), ui.show_usage.into());
+    ui_obj.insert("usagePosition".into(), ui.usage_position.as_str().into());
     ui_obj.insert("use24HourClock".into(), ui.use_24_hour_clock.into());
     if let Some(dir) = &ui.active_account_config_dir {
         ui_obj.insert("activeAccountConfigDir".into(), dir.clone().into());
@@ -368,6 +418,7 @@ mod tests {
         assert!(c.ui.git_status);
         assert!(c.ui.expand_collapsed_on_active_jump);
         assert!(!c.ui.show_usage);
+        assert_eq!(c.ui.usage_position, UsagePosition::Float);
         assert!(!c.ui.use_24_hour_clock);
         assert_eq!(c.tools["claude"], ToolConfig::default());
         assert_eq!(c.tools["copilot"], ToolConfig::default());
@@ -415,6 +466,15 @@ mod tests {
         assert!(c.ui.new_session_full_screen);
         assert!(c.ui.git_status);
         assert!(c.ui.expand_collapsed_on_active_jump);
+    }
+
+    #[test]
+    fn usage_position_accepts_known_values_and_falls_back_to_float() {
+        let c = parse(json!({ "ui": { "usagePosition": "Bottom" } }));
+        assert_eq!(c.ui.usage_position, UsagePosition::Bottom);
+        assert_eq!(parse_deck_config(&deck_config_to_json(&c)), c);
+        let c = parse(json!({ "ui": { "usagePosition": "middle" } }));
+        assert_eq!(c.ui.usage_position, UsagePosition::Float);
     }
 
     #[test]
