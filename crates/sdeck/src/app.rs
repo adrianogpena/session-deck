@@ -70,7 +70,7 @@ use crate::theme::{
     extract_background_reply, next_theme_preference, preference_label, theme_label, Role, Theme, ThemeName,
     OSC11_QUERY,
 };
-use crate::tree::{build_tree, BuiltTree, TreeOptions, TreeRow, UsageSectionInput};
+use crate::tree::{build_tree, usage_rows, BuiltTree, TreeOptions, TreeRow, UsageSectionInput};
 use crate::view::list_panel::{render_list_panel, ListRow};
 use crate::view::preview_panel::{group_preview_lines, render_preview_panel};
 use crate::view::{bars, overlay, GroupCounts, SessionView};
@@ -181,6 +181,8 @@ pub struct App {
     discover_again: bool,
     /// For `` ` `` (back to the previous session), by `DeckSession::uid`.
     last_session: Option<u64>,
+    /// Which session the USAGE rows were last read for, and when.
+    usage_synced: Option<(Option<u64>, Instant)>,
     previous_session: Option<u64>,
     _store_watch: Option<WatchHandle>,
 
@@ -268,6 +270,7 @@ impl App {
             discovering: false,
             discover_again: false,
             last_session: None,
+            usage_synced: None,
             previous_session: None,
             _store_watch: None,
             term_size: (120, 30),
@@ -390,7 +393,36 @@ impl App {
             AppEvent::ToastClicked(id) => self.on_toast_clicked(&id, now),
         }
         self.track_selection();
+        self.refresh_usage_rows(now);
         self.sync_preview();
+    }
+
+    /// Keeps the USAGE rows on the selected session, and re-reads the files every few seconds.
+    fn refresh_usage_rows(&mut self, now: Instant) {
+        const REFRESH: std::time::Duration = std::time::Duration::from_secs(3);
+        let uid = self.selected_session().map(|s| s.uid);
+        if let Some((synced_uid, at)) = self.usage_synced {
+            if synced_uid == uid && now.duration_since(at) < REFRESH {
+                return;
+            }
+        }
+        self.usage_synced = Some((uid, now));
+        if !(self.config.ui.show_usage && self.sources_enabled) {
+            return;
+        }
+        let Some(start) = self
+            .rows
+            .iter()
+            .position(|r| matches!(r, TreeRow::Divider { label } if label == "USAGE"))
+        else {
+            return;
+        };
+        let fresh = usage_rows(&self.usage_section_input());
+        let end = (start + 1 + fresh.len()).min(self.rows.len());
+        if self.rows[start + 1..end] != fresh[..] {
+            self.rows.splice(start + 1..end, fresh);
+            self.dirty = true;
+        }
     }
 
     fn on_tick(&mut self, now: Instant) {
@@ -640,6 +672,8 @@ impl App {
                     .position(|r| matches!(r, TreeRow::Session { .. }))
                     .unwrap_or(0)
             });
+        // `build` ran with the rows taken, so it had no selection to read the context for.
+        self.usage_synced = None;
     }
 
     fn apply_freeze_session_order(&mut self) {

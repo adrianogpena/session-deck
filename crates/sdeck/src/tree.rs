@@ -67,6 +67,34 @@ pub enum TreeRow {
     },
 }
 
+/// The rows under the USAGE divider.
+pub fn usage_rows(usage: &UsageSectionInput) -> Vec<TreeRow> {
+    let rate = usage.rate_limit.as_ref();
+    vec![
+        TreeRow::Usage {
+            metric: UsageMetric::Context,
+            percent: usage.context_percent,
+            updated_at: usage.context_updated_at,
+            reset_label: None,
+        },
+        TreeRow::Usage {
+            metric: UsageMetric::FiveHour,
+            percent: rate.and_then(|r| r.five_hour_percent),
+            updated_at: rate.map(|r| r.updated_at),
+            reset_label: usage.five_hour_reset_label.clone(),
+        },
+        TreeRow::Usage {
+            metric: UsageMetric::SevenDay,
+            percent: rate.and_then(|r| r.seven_day_percent),
+            updated_at: rate.map(|r| r.updated_at),
+            reset_label: usage.seven_day_reset_label.clone(),
+        },
+        TreeRow::UsageBudget {
+            days: usage.seven_day_daily_spend.clone(),
+        },
+    ]
+}
+
 impl TreeRow {
     /// Dividers and the usage block are never selected.
     pub fn is_unselectable(&self) -> bool {
@@ -603,31 +631,10 @@ pub fn build_tree(sessions: &[DeckSession], tree: &TreePrefs, opts: &TreeOptions
     }
 
     if let Some(usage) = &opts.usage {
-        let rate = usage.rate_limit.as_ref();
         b.rows.push(TreeRow::Divider {
             label: "USAGE".into(),
         });
-        b.rows.push(TreeRow::Usage {
-            metric: UsageMetric::Context,
-            percent: usage.context_percent,
-            updated_at: usage.context_updated_at,
-            reset_label: None,
-        });
-        b.rows.push(TreeRow::Usage {
-            metric: UsageMetric::FiveHour,
-            percent: rate.and_then(|r| r.five_hour_percent),
-            updated_at: rate.map(|r| r.updated_at),
-            reset_label: usage.five_hour_reset_label.clone(),
-        });
-        b.rows.push(TreeRow::Usage {
-            metric: UsageMetric::SevenDay,
-            percent: rate.and_then(|r| r.seven_day_percent),
-            updated_at: rate.map(|r| r.updated_at),
-            reset_label: usage.seven_day_reset_label.clone(),
-        });
-        b.rows.push(TreeRow::UsageBudget {
-            days: usage.seven_day_daily_spend.clone(),
-        });
+        b.rows.extend(usage_rows(usage));
     }
 
     BuiltTree {
