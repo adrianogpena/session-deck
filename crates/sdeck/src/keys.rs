@@ -184,6 +184,7 @@ fn encode_key(key: &KeyEvent) -> Option<String> {
         }
         KeyCode::Char(c) if m.contains(KeyModifiers::ALT) => format!("\x1b{c}"),
         KeyCode::Char(c) => c.to_string(),
+        KeyCode::Enter if m.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) => "\x1b\r".into(),
         KeyCode::Enter => "\r".into(),
         KeyCode::Tab => "\t".into(),
         KeyCode::BackTab => "\x1b[Z".into(),
@@ -385,6 +386,14 @@ mod tests {
         assert_eq!(encode_event(&key(KeyCode::PageUp, none)).unwrap(), "\x1b[5~");
         assert_eq!(encode_event(&key(KeyCode::Home, none)).unwrap(), "\x1b[H");
         assert_eq!(encode_event(&key(KeyCode::Enter, none)).unwrap(), "\r");
+        assert_eq!(
+            encode_event(&key(KeyCode::Enter, KeyModifiers::SHIFT)).unwrap(),
+            "\x1b\r"
+        );
+        assert_eq!(
+            encode_event(&key(KeyCode::Enter, KeyModifiers::ALT)).unwrap(),
+            "\x1b\r"
+        );
         assert_eq!(encode_event(&key(KeyCode::Esc, none)).unwrap(), "\x1b");
         assert_eq!(
             encode_event(&key(KeyCode::Char('x'), KeyModifiers::ALT)).unwrap(),
