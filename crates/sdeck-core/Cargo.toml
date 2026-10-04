@@ -8,6 +8,7 @@ dirs = "6"
 indexmap = "2"
 notify = "8"
 regex = "1"
+rusqlite = { version = "0.37", features = ["bundled"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
 unicode-width = "0.2"
@@ -15,3 +16,9 @@ uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
