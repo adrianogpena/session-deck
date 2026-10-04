@@ -1,0 +1,3 @@
+- name: Use the MSVC toolchain (rust-toolchain.toml pins GNU for local builds)
+  shell: bash
+  run: echo "RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc" >> "$GITHUB_ENV"

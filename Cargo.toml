@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/sdeck-core", "crates/sdeck", "crates/fake-agent"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.10.0"
 edition = "2021"
 
 [profile.release]
@@ -11,3 +11,8 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

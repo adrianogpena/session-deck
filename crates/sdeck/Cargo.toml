@@ -2,6 +2,9 @@
 name = "sdeck"
 version.workspace = true
 edition.workspace = true
+description = "Terminal UI that manages Claude Code and GitHub Copilot CLI sessions"
+license = "MIT"
+repository = "https://github.com/adrianogpena/session-deck"
 
 [dependencies]
 sdeck-core = { path = "../sdeck-core" }
