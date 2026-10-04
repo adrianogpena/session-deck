@@ -1,6 +1,11 @@
 pub mod account;
+pub mod alert_log;
 pub mod claude_process_watcher;
+pub mod claude_transcript_tailer;
 pub mod copilot_status_watcher;
 pub mod process;
 pub mod session_status;
+pub mod session_usage;
+pub mod usage_display;
+pub mod waiting_notifier;
 pub mod watch;

@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 dirs = "6"
 indexmap = "2"
 notify = "8"
@@ -18,7 +19,8 @@ uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_System_Threading"] }
+tauri-winrt-notification = "0.8.1"
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_System_Registry", "Win32_System_Threading"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
