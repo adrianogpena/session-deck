@@ -13,6 +13,8 @@ use sdeck::app::{run_loop, App, VERSION};
 use sdeck::event::spawn_input_thread;
 use sdeck::keys::RESET_AGENT_MODES;
 use sdeck::theme::read_os_theme;
+use sdeck_core::status::account::discover_accounts;
+use sdeck_core::store::deck_config::{deck_config_path, read_deck_config};
 use sdeck_core::store::deck_store::DeckStore;
 
 /// Puts the real terminal back: also run from the panic hook, so a crash never leaves it raw.
@@ -58,6 +60,7 @@ fn main() -> anyhow::Result<()> {
 
     let (tx, rx) = mpsc::channel();
     let mut app = App::new(DeckStore::at_default_path(), tx.clone(), Some(read_os_theme));
+    app.start_background(discover_accounts(), read_deck_config(&deck_config_path()));
     let _guard = TerminalGuard::enter()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     spawn_input_thread(tx);

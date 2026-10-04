@@ -5,7 +5,13 @@ pub mod ansi;
 pub mod app;
 pub mod event;
 pub mod filters;
+pub mod git_status_tracker;
 pub mod keys;
 pub mod layout;
+pub mod sessions;
 pub mod theme;
+pub mod tree;
 pub mod view;
+
+#[cfg(test)]
+mod test_support;

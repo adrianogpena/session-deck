@@ -6,7 +6,9 @@ use std::time::Duration;
 
 use ratatui::crossterm::event::{self, Event};
 
+use crate::git_status_tracker::GitStatuses;
 use crate::keys::encode_event;
+use crate::sessions::FoundSession;
 use crate::theme::ThemeName;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -18,6 +20,12 @@ pub enum AppEvent {
     Tick,
     /// What an OS theme probe (`theme::read_os_theme`), run off the main thread, found.
     OsTheme(Option<ThemeName>),
+    /// What a discovery run (`sessions::discover_found`), off the main thread, found on disk.
+    Discovered(Vec<FoundSession>),
+    /// What a git poll (`git_status_tracker::read_all`), off the main thread, read.
+    GitStatuses(GitStatuses),
+    /// The shared state file changed (the other front end, or us): names and flags may differ.
+    StoreChanged,
 }
 
 /// Reads the real terminal on its own thread. Events already queued are sent as one `Input`, like a
