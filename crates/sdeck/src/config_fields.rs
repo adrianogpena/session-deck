@@ -5,7 +5,9 @@ use std::sync::LazyLock;
 
 use sdeck_core::agent_catalog::all_agent_ids;
 use sdeck_core::status::session_status::SessionStatus;
-use sdeck_core::store::deck_config::{parse_detach_letter, DeckConfig, ToolConfig, UsagePosition};
+use sdeck_core::store::deck_config::{
+    parse_detach_letter, DeckConfig, RestoreSessions, ToolConfig, UsagePosition,
+};
 
 /// `Toggle` applies immediately on Enter; the others open a text prompt first, pre-filled with
 /// [`ConfigField::edit_value`].
@@ -34,6 +36,7 @@ enum Setting {
     Use24HourClock,
     DetachKey,
     Ctl,
+    RestoreSessions,
     ToolEnabled,
     ToolCommand,
     ToolArgs,
@@ -164,6 +167,12 @@ impl ConfigField {
             .into(),
             Setting::DetachKey => c.ui.detach_key.clone(),
             Setting::Ctl => on_off(c.ui.ctl),
+            Setting::RestoreSessions => match c.ui.restore_sessions {
+                RestoreSessions::Ask => "Ask",
+                RestoreSessions::Always => "Always",
+                RestoreSessions::Never => "Never",
+            }
+            .into(),
             Setting::ToolEnabled => on_off(self.tool_of(c).and_then(|t| t.enabled) != Some(false)),
             Setting::ToolCommand => self
                 .tool_of(c)
@@ -239,6 +248,7 @@ impl ConfigField {
                 c.ui.detach_key = format!("ctrl+{}", parse_detach_letter(input)?);
             }
             Setting::Ctl => c.ui.ctl = !c.ui.ctl,
+            Setting::RestoreSessions => c.ui.restore_sessions = c.ui.restore_sessions.next(),
             Setting::ToolEnabled => {
                 let tool = c.tools.entry(self.agent.clone()).or_default();
                 tool.enabled = Some(tool.enabled == Some(false));
@@ -349,6 +359,12 @@ fn build_fields() -> Vec<ConfigField> {
             Toggle,
             Setting::Ctl,
             "The read-only sdeck ctl control server (list sessions, read status and screen). Takes effect after a restart.",
+        ),
+        ui(
+            "restoreSessions",
+            Toggle,
+            Setting::RestoreSessions,
+            "Reopens the sessions that were running when sdeck last exited (resumes their conversations) — Enter cycles: Ask (a prompt at startup), Always, Never.",
         ),
     ];
     for agent in all_agent_ids() {

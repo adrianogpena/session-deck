@@ -20,6 +20,7 @@ mod preview;
 mod prompt;
 mod quit;
 mod reorder;
+mod restore;
 mod search;
 mod session_text;
 mod tags;
@@ -86,6 +87,7 @@ use crate::view::{bars, overlay, GroupCounts, SessionView};
 use input::{Confirm, Picker, PickerAction, TextPrompt};
 use overlays::Overlay;
 use quit::QuitConfirm;
+use restore::RestoreConfirm;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const THEME_POLL: Duration = Duration::from_millis(5000);
@@ -133,6 +135,14 @@ pub struct App {
     quit: bool,
     /// The popup asking before quitting with sessions running; while open it takes every key.
     quit_confirm: Option<QuitConfirm>,
+    /// The "restore the previous run's sessions?" popup.
+    restore_confirm: Option<RestoreConfirm>,
+    /// Sessions of the previous run still to start, one per tick.
+    restore_queue: Vec<u64>,
+    /// False from startup until the restore question is settled; `running.json` is left alone until then.
+    restore_decided: bool,
+    /// What `running.json` holds, to skip writes that change nothing.
+    running_written: Option<Vec<sdeck_core::store::running_set::RunningEntry>>,
     /// The new sidebar width, shown in the list header until the instant.
     resize_note: Option<(String, Instant)>,
 
@@ -252,6 +262,10 @@ impl App {
             mouse_capture_change: None,
             quit: false,
             quit_confirm: None,
+            restore_confirm: None,
+            restore_queue: Vec::new(),
+            restore_decided: true,
+            running_written: None,
             resize_note: None,
             attached: None,
             interacting: None,
@@ -318,6 +332,7 @@ impl App {
         self.accounts = accounts;
         self.config = config;
         self.sources_enabled = true;
+        self.restore_decided = false;
         // Pays the `where.exe` lookups now, not on whichever session starts first.
         self.executables.warm(&self.config);
         self.purge_expired_trash();
@@ -408,6 +423,7 @@ impl App {
                     );
                 }
                 self.dirty = true;
+                self.check_restore();
                 if std::mem::take(&mut self.discover_again) {
                     self.spawn_discovery();
                 }
@@ -469,6 +485,7 @@ impl App {
     }
 
     fn on_tick(&mut self, now: Instant) {
+        self.tick_restore(now);
         if self.resize_note.as_ref().is_some_and(|(_, until)| now >= *until) {
             self.resize_note = None;
             self.dirty = true;
@@ -1078,6 +1095,10 @@ impl App {
             self.on_quit_confirm_key(key);
             return;
         }
+        if self.restore_confirm.is_some() {
+            self.on_restore_confirm_key(key);
+            return;
+        }
         if self.prompt.is_some() {
             self.on_prompt_key(key, now);
             return;
@@ -1446,6 +1467,9 @@ impl App {
         self.draw_overlay(frame, t);
         if let Some(confirm) = &self.quit_confirm {
             overlay::render_quit_confirm(frame, t, confirm.active_count, confirm.yes);
+        }
+        if let Some(confirm) = &self.restore_confirm {
+            overlay::render_restore_confirm(frame, t, confirm.uids.len(), confirm.yes);
         }
         let bottom = row(area.height.saturating_sub(1));
         if let Some(prompt) = &self.prompt {

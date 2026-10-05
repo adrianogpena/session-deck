@@ -92,6 +92,7 @@ impl App {
             }
         }
         self.rebuild_rows();
+        self.sync_running_set();
         true
     }
 
@@ -111,6 +112,7 @@ impl App {
                 clear_session_status(&id);
             }
         }
+        self.sync_running_set();
     }
 
     /// Stops the session. It stays listed only if it's resumable: found on disk, or its transcript
@@ -245,6 +247,7 @@ impl App {
                 clear_session_status(&id);
             }
         }
+        self.sync_running_set();
         let note = format!("Session exited (code {code})");
         if self.attached == Some(uid) {
             self.detach(Some(note));

@@ -21,6 +21,41 @@ pub struct ToolConfig {
     pub extra: Map<String, Value>,
 }
 
+/// Whether the sessions that were running when sdeck last exited reopen at startup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestoreSessions {
+    Ask,
+    Always,
+    Never,
+}
+
+impl RestoreSessions {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ask => "ask",
+            Self::Always => "always",
+            Self::Never => "never",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "ask" => Some(Self::Ask),
+            "always" => Some(Self::Always),
+            "never" => Some(Self::Never),
+            _ => None,
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Ask => Self::Always,
+            Self::Always => Self::Never,
+            Self::Never => Self::Ask,
+        }
+    }
+}
+
 /// Where the USAGE section sits in the list panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UsagePosition {
@@ -91,6 +126,8 @@ pub struct UiConfig {
     pub detach_key: String,
     /// The `sdeck ctl` control server (read-only). Default: on. Read at startup only.
     pub ctl: bool,
+    /// Reopen the sessions that were running when sdeck last exited: ask, always or never. Default: ask.
+    pub restore_sessions: RestoreSessions,
     pub extra: Map<String, Value>,
 }
 
@@ -175,6 +212,7 @@ impl Default for DeckConfig {
                 active_account_config_dir: None,
                 detach_key: DEFAULT_DETACH_KEY.to_string(),
                 ctl: true,
+                restore_sessions: RestoreSessions::Ask,
                 extra: Map::new(),
             },
             tools: all_agent_ids()
@@ -271,6 +309,7 @@ pub fn parse_deck_config(raw: &str) -> DeckConfig {
                 "activeAccountConfigDir",
                 "detachKey",
                 "ctl",
+                "restoreSessions",
             ],
         );
         if let Some(n) = ui.get("maxSessionsListed").and_then(positive_int) {
@@ -300,6 +339,13 @@ pub fn parse_deck_config(raw: &str) -> DeckConfig {
             .and_then(UsagePosition::parse)
         {
             c.usage_position = p;
+        }
+        if let Some(mode) = ui
+            .get("restoreSessions")
+            .and_then(Value::as_str)
+            .and_then(RestoreSessions::parse)
+        {
+            c.restore_sessions = mode;
         }
         if let Some(items) = ui.get("notifyStatuses").and_then(Value::as_array) {
             let parsed: Vec<SessionStatus> = items
@@ -412,6 +458,7 @@ pub fn deck_config_to_json(config: &DeckConfig) -> String {
     ui_obj.insert("use24HourClock".into(), ui.use_24_hour_clock.into());
     ui_obj.insert("detachKey".into(), ui.detach_key.clone().into());
     ui_obj.insert("ctl".into(), ui.ctl.into());
+    ui_obj.insert("restoreSessions".into(), ui.restore_sessions.as_str().into());
     if let Some(dir) = &ui.active_account_config_dir {
         ui_obj.insert("activeAccountConfigDir".into(), dir.clone().into());
     }
@@ -525,6 +572,16 @@ mod tests {
         assert!(!ctl_enabled(&off));
         assert_eq!(parse_deck_config(&deck_config_to_json(&off)), off);
         assert!(ctl_enabled(&parse(json!({ "ui": { "ctl": "no" } }))));
+    }
+
+    #[test]
+    fn restore_sessions_defaults_to_ask_and_ignores_bad_values() {
+        assert_eq!(parse_deck_config("{}").ui.restore_sessions, RestoreSessions::Ask);
+        let never = parse(json!({ "ui": { "restoreSessions": "Never" } }));
+        assert_eq!(never.ui.restore_sessions, RestoreSessions::Never);
+        let bad = parse(json!({ "ui": { "restoreSessions": "sometimes" } }));
+        assert_eq!(bad.ui.restore_sessions, RestoreSessions::Ask);
+        assert_eq!(RestoreSessions::Never.next(), RestoreSessions::Ask);
     }
 
     #[test]

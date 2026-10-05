@@ -108,13 +108,26 @@ pub fn render_picker(frame: &mut Frame, t: Theme, title: &str, items: &[String],
 /// The "N sessions still running will be stopped" warning with Yes/No buttons (`yes` picks the
 /// highlighted one). Port of `quitConfirmOverlay`.
 pub fn render_quit_confirm(frame: &mut Frame, t: Theme, active_count: usize, yes: bool) {
-    let area = frame.area();
-    let (cols, rows) = (usize::from(area.width), usize::from(area.height));
     let message = format!(
         "{active_count} session{} still running will be stopped.",
         if active_count == 1 { "" } else { "s" }
     );
-    let width = cols.saturating_sub(4).min((text_width(&message) + 8).max(40));
+    render_confirm(frame, t, " QUIT SESSION DECK? ", &message, yes);
+}
+
+/// The startup question about reopening the previous run's sessions.
+pub fn render_restore_confirm(frame: &mut Frame, t: Theme, count: usize, yes: bool) {
+    let message = format!(
+        "Restore {count} session{} from last time? Their conversations resume.",
+        if count == 1 { "" } else { "s" }
+    );
+    render_confirm(frame, t, " RESTORE SESSIONS? ", &message, yes);
+}
+
+fn render_confirm(frame: &mut Frame, t: Theme, heading: &str, message: &str, yes: bool) {
+    let area = frame.area();
+    let (cols, rows) = (usize::from(area.width), usize::from(area.height));
+    let width = cols.saturating_sub(4).min((text_width(message) + 8).max(40));
     if width < 4 {
         return;
     }
@@ -127,7 +140,6 @@ pub fn render_quit_confirm(frame: &mut Frame, t: Theme, active_count: usize, yes
         .add_modifier(Modifier::BOLD);
     let text = surface.patch(t.fg(Role::Text));
 
-    let heading = " QUIT SESSION DECK? ";
     let top_fill = width.saturating_sub(3 + text_width(heading));
     let (yes_text, no_text, gap) = (" Yes ", " No ", "  ");
     let buttons_width = text_width(yes_text) + gap.len() + text_width(no_text);
@@ -151,7 +163,7 @@ pub fn render_quit_confirm(frame: &mut Frame, t: Theme, active_count: usize, yes
             Span::styled(format!("{}╮", "─".repeat(top_fill + 1)), border),
         ]),
         blank(),
-        side(vec![Span::styled(fit(&message, inner), text)]),
+        side(vec![Span::styled(fit(message, inner), text)]),
         blank(),
         side(vec![
             Span::styled(" ".repeat(left_pad), surface),

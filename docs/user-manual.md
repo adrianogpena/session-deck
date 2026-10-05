@@ -468,6 +468,11 @@ it up next time it starts).
   random port, and every request must carry the token from `~/.session-deck/ctl.json`. `false` turns it
   off. Read at startup only. Two sdeck instances at once: the one started last owns `ctl.json`.
   Default: on.
+- **`ui.restoreSessions`**: what to do at startup with the sessions that were running when sdeck last
+  exited (also after a crash): `ask` shows a "Restore N sessions?" prompt, `always` reopens them,
+  `never` ignores them. Restoring *resumes the conversations* with `--resume`; the agent processes
+  themselves don't survive a quit. The list is kept in `~/.session-deck/running.json`. Skipped while
+  another sdeck is running, so a second window never takes the first one's sessions. Default: `ask`.
 - **`tools.claude` / `tools.copilot`**:
   - **`enabled`**: `false` hides that agent entirely — its sessions aren't discovered, and its `n`/`N`
     new-session key just flashes a message instead of starting one. Default: on.
@@ -489,6 +494,7 @@ it up next time it starts).
 |---|---|
 | `~/.session-deck/state.json` | Names, archive flags, pins, seen marks, folders, order, sort, collapsed state, and the terminal UI's theme and panel width. Also holds session tags, which only the terminal UI manages and filters by today. |
 | `~/.session-deck/config.json` | Global, hand-edited settings — mainly for the terminal UI. |
+| `~/.session-deck/running.json` | Pid of the writing sdeck and the sessions live in it, for `ui.restoreSessions`. |
 | `~/.session-deck/ctl.json` | Port, token and pid of the running sdeck's control server (`ui.ctl`); removed when it quits. |
 | `~/.session-deck/trash/` | Sessions deleted in the terminal UI (restorable for 30 days). |
 | `~/.claude/session-deck-status/` | Each session's current status. |

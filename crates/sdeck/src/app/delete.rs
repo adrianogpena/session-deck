@@ -78,6 +78,7 @@ impl App {
             live.dispose();
         }
         self.sessions.retain(|s| s.uid != uid);
+        self.sync_running_set();
         Ok(())
     }
 
