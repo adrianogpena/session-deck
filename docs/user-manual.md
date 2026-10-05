@@ -23,9 +23,9 @@ a colored status dot on each session.
 
 | Symbol | Status | Meaning |
 |---|---|---|
-| `●` red | **Running** | The agent is working. |
+| `●` blue | **Running** | The agent is working. |
 | `◐` yellow | **Waiting for you** | The agent asked something (a permission, a choice) and waits for your answer. |
-| `●` green | **Finished, not seen yet** | The agent finished a turn you haven't looked at yet. |
+| `✓` green | **Finished, not seen yet** | The agent finished a turn you haven't looked at yet. |
 | `○` | **Idle** | Running and ready for input, nothing new to see. |
 | `⟳` | **Starting** | Just started, not ready yet. |
 | `✕` red | **Error** | A sign-in or API error on its screen (e.g. "run /login"), or the agent exited with an error. |
@@ -159,7 +159,7 @@ a colored status dot on each session.
   - A Claude session running in another terminal must be renamed there, with `/rename`.
   - A Copilot session gets a Session Deck name (Copilot has no `/rename`).
   - Projects can't be renamed: they're named after their folder on disk.
-- **Mark as unread `u`**: makes the selected session show as finished, not seen yet (`●` green), until
+- **Mark as unread `u`**: makes the selected session show as finished, not seen yet (`✓` green), until
   you look at it again.
 - **Mark as read `U`**: the opposite of `u` — clears the "finished, not seen" mark on the selected
   session right away, without having to attach to it.

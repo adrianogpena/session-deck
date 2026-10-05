@@ -18,7 +18,7 @@ fn blank(width: usize) -> Span<'static> {
 
 fn category_glyph(category: StatusCategory) -> (char, Role) {
     match category {
-        StatusCategory::Running => ('●', Role::Red),
+        StatusCategory::Running => ('●', Role::Accent),
         StatusCategory::Waiting => ('◐', Role::Yellow),
         StatusCategory::Idle => ('○', Role::TextDim),
         StatusCategory::Error => ('✕', Role::Red),
@@ -118,7 +118,7 @@ pub fn pills(
         // "done" (finished, not yet seen) folds into the "waiting" filter category, so its pill rides along right after it.
         if category == StatusCategory::Waiting {
             let active = status_filter.contains(&StatusCategory::Waiting);
-            pill(&mut spans, format!("● {done_count}"), active, t.fg(Role::Green));
+            pill(&mut spans, format!("✓ {done_count}"), active, t.fg(Role::Green));
         }
     }
     spans.push(Span::styled("│", t.fg(Role::Border)));
@@ -295,7 +295,7 @@ mod tests {
     #[test]
     fn pills_at_120_and_60_columns() {
         let row = snapshot(pills(DARK, 120, 7, &counts(), 1, &[], TimeFilter::All, None), 120);
-        let left = "  All 7  ● 2  ◐ 0  ● 1  ○ 5  ✕ 0  ■ 0 │ all time ";
+        let left = "  All 7  ● 2  ◐ 0  ✓ 1  ○ 5  ✕ 0  ■ 0 │ all time ";
         let hint = "! @ # & ~ filter · * time · 0 clear ";
         assert_eq!(
             row,
@@ -317,7 +317,7 @@ mod tests {
         assert_eq!(line.width(), 60);
         assert_eq!(
             snapshot(line, 60).trim_end(),
-            "  All 7  ● 2  ◐ 0  ● 1  ○ 5  ✕ 0  ■ 0 │ today │ # work"
+            "  All 7  ● 2  ◐ 0  ✓ 1  ○ 5  ✕ 0  ■ 0 │ today │ # work"
         );
     }
 
@@ -339,7 +339,7 @@ mod tests {
             .filter(|s| s.style.bg == Some(DARK.color(Role::Accent)))
             .map(|s| s.content.to_string())
             .collect();
-        assert_eq!(active, [" ◐ 0 ", " ● 1 "]);
+        assert_eq!(active, [" ◐ 0 ", " ✓ 1 "]);
     }
 
     #[test]

@@ -83,9 +83,9 @@ or fails. Filter by status (`!` running, `@` waiting, `#` idle, `&` error, `~` s
 
 | Symbol | Status |
 |---|---|
-| `●` red | Running |
+| `●` blue | Running |
 | `◐` yellow | Waiting for you (a permission, a choice) |
-| `●` green | Finished, not seen yet |
+| `✓` green | Finished, not seen yet |
 | `○` | Idle |
 | `✕` red | Error (for example "run /login") |
 | `■` | Stopped; resume it any time |

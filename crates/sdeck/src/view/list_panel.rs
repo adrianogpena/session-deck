@@ -66,10 +66,10 @@ pub enum ListRow {
 /// `(glyph, role, bold)` of a session's status dot.
 fn status_glyph(status: SessionStatus) -> (char, Role, bool) {
     match status {
-        SessionStatus::Running => ('●', Role::Red, true),
+        SessionStatus::Running => ('●', Role::Accent, true),
         SessionStatus::Waiting => ('◐', Role::Yellow, true),
         // Finished, not seen yet: waiting for a look. Same green as the extension's "Done" decoration.
-        SessionStatus::Done => ('●', Role::Green, true),
+        SessionStatus::Done => ('✓', Role::Green, true),
         SessionStatus::Idle => ('○', Role::TextDim, false),
         SessionStatus::Starting => ('⟳', Role::Yellow, false),
         SessionStatus::Error | SessionStatus::Exited => ('✕', Role::Red, true),
@@ -157,7 +157,10 @@ fn group_row(t: Theme, width: usize, g: GroupRow, selected: bool) -> Line<'stati
         Span::styled(format!(" ({})", g.counts.count), t.fg(Role::Text)),
     ];
     if g.counts.running > 0 {
-        spans.push(Span::styled(format!(" ●{}", g.counts.running), t.fg(Role::Red)));
+        spans.push(Span::styled(
+            format!(" ●{}", g.counts.running),
+            t.fg(Role::Accent),
+        ));
     }
     if g.counts.waiting > 0 {
         spans.push(Span::styled(
@@ -580,6 +583,21 @@ pub fn render_list_panel(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn every_status_has_its_own_glyph_except_error_and_exited() {
+        use SessionStatus::*;
+        let glyphs: Vec<char> = [Running, Done, Waiting, Idle, Starting, Error, Stopped]
+            .map(|s| status_glyph(s).0)
+            .to_vec();
+        let mut unique = glyphs.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), glyphs.len(), "{glyphs:?}");
+        assert_eq!(status_glyph(Error).0, status_glyph(Exited).0);
+        assert_eq!(status_glyph(Running), ('●', Role::Accent, true));
+        assert_eq!(status_glyph(Done), ('✓', Role::Green, true));
+    }
+
     use super::*;
     use crate::theme::ThemeName;
 
