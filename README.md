@@ -9,13 +9,13 @@
 `sdeck` keeps every agent session running in the background, shows what each one is doing, and lets you
 jump in and out of any of them. It runs natively on Windows: no tmux, no WSL.
 
-Running five agents across three repositories means five terminals and a lot of "which one was waiting
+Running five agents across three repositories means five terminals and constant "which one was waiting
 for me?". Session Deck answers that at a glance:
 
 - Sessions are grouped by project (by git root, so worktrees land together) and by folder.
 - A status dot on every session: running, waiting for you, finished, error, stopped.
 - Attach to a session full-screen, detach with `Ctrl+Q`, and it keeps working.
-- Every past session is listed and resumable, from all your logged-in Claude accounts.
+- Session Deck lists and resumes every past session, from all your logged-in Claude accounts.
 
 [Install](#install) · [Quick start](#quick-start) · [Features](#features) · [Configuration](#configuration) · [User manual](docs/user-manual.md) · [Development](#development)
 
@@ -52,7 +52,7 @@ Or build from source:
    cargo install --path crates/sdeck
    ```
 
-Run `sdeck` from a real terminal (Windows Terminal, PowerShell, the VS Code terminal). It needs `claude`
+Run `sdeck` from a terminal that supports full-screen apps (Windows Terminal, PowerShell, the VS Code terminal). It needs `claude`
 and/or `copilot` on your PATH, or set their location in the [config](#configuration).
 
 ## Quick start
@@ -93,7 +93,7 @@ or fails. Filter by status (`!` running, `@` waiting, `#` idle, `&` error, `~` s
 ### Live preview and background sessions
 
 The right-hand panel is the live screen of the selected session. Sessions run in background PTYs, so you
-can attach, detach and switch without losing anything. `s` starts a session without attaching, `i` types
+can attach, detach and switch without interrupting the agent. `s` starts a session without attaching, `i` types
 into it from the list, `R` restarts it on the same conversation.
 
 ### Organize freely
@@ -110,7 +110,7 @@ into it from the list, `R` restarts it on the same conversation.
 ### Find anything
 
 `/` searches the full text of every session, not just titles. The command palette, the skills and agents
-browser (`w`) and the in-app settings editor (`C`) are all one key away.
+browser (`w`) and the in-app settings editor (`C`) have their own keys.
 
 ![Full-text search across sessions](docs/images/search.png)
 
@@ -142,11 +142,6 @@ Settings live in `~/.session-deck/config.json`; press `C` to edit them in the ap
 Every setting is described in the [user manual](docs/user-manual.md#4-global-config-sessiondeckconfigjson).
 Names, pins, tags, folders and order are stored in `~/.session-deck/state.json`.
 
-## Documentation
-
-- [User manual](docs/user-manual.md): every command and key, statuses, accounts, config and the files
-  Session Deck reads and writes.
-
 ## Development
 
 ```bash
@@ -160,9 +155,6 @@ cargo fmt --all --check
 - `crates/fake-agent`: test-only stand-in for `claude`.
 - `crates/sdeck-demo`: a sandbox with fake projects and sessions (below).
 
-On Windows the repository builds with the GNU toolchain locally
-(`rustup override set stable-x86_64-pc-windows-gnu`); CI releases build with MSVC.
-
 ### Try it with fake data
 
 ```bash
@@ -170,14 +162,11 @@ cargo build --release -p sdeck -p sdeck-demo
 target/release/sdeck-demo        # sandbox in target/demo, then starts sdeck inside it
 ```
 
-`sdeck-demo` writes six git repositories, fourteen sessions across two Claude accounts, tags, a folder and usage meters (context, 5h and 7d quotas, daily spend)
-under `target/demo`, and points `sdeck` at them, so your real sessions and settings are never touched.
+`sdeck-demo` writes six git repositories, fourteen sessions across two Claude accounts, tags, a folder
+and usage meters under `target/demo`. The meters cover context, the 5h and 7d quotas, and daily spend.
+It points `sdeck` at that sandbox, so your real sessions and settings are never touched.
 A few sessions are already running or waiting; press `Enter` on any other to start it under a scripted
 stand-in agent. Use it for screenshots and for trying the UI.
-
-## License
-
-MIT
 
 ## License
 
