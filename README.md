@@ -27,6 +27,12 @@ PowerShell (Windows):
 irm https://github.com/adrianogpena/session-deck/releases/latest/download/sdeck-installer.ps1 | iex
 ```
 
+[npm](https://www.npmjs.com/package/sdeck):
+
+```bash
+npm install -g sdeck
+```
+
 Or build from source (stable Rust toolchain):
 
 ```bash
