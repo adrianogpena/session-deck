@@ -187,24 +187,37 @@ pub fn discover_found(accounts: &[Account], config: &DeckConfig, hidden: &[Strin
         s.project_key = normalize_fs_path(&root.root);
         s.project_root = root.root;
     }
-    cap_per_project(found, max_per_project)
+    cap_per_project(
+        found,
+        max_per_project,
+        |s| s.project_key.clone(),
+        |_| false,
+        |s| s.mtime_ms,
+    )
 }
 
-/// Keeps each project's `max_per_project` most recent sessions across every agent, in the order given.
-fn cap_per_project(found: Vec<FoundSession>, max_per_project: usize) -> Vec<FoundSession> {
-    let mut by_recency: Vec<usize> = (0..found.len()).collect();
-    by_recency.sort_by_key(|&i| std::cmp::Reverse(found[i].mtime_ms));
-    let mut per_project: HashMap<&str, usize> = HashMap::new();
-    let mut keep = vec![false; found.len()];
-    for i in by_recency {
-        let count = per_project.entry(found[i].project_key.as_str()).or_insert(0);
-        if *count < max_per_project {
+/// Keeps each project's `max_per_project` most recent items across every agent, in the order given.
+/// A live item is always kept and is counted first, so it never loses its slot to an older one.
+fn cap_per_project<T>(
+    items: Vec<T>,
+    max_per_project: usize,
+    project_key: impl Fn(&T) -> String,
+    is_live: impl Fn(&T) -> bool,
+    mtime_ms: impl Fn(&T) -> i64,
+) -> Vec<T> {
+    let mut by_rank: Vec<usize> = (0..items.len()).collect();
+    by_rank.sort_by_key(|&i| (!is_live(&items[i]), std::cmp::Reverse(mtime_ms(&items[i]))));
+    let mut per_project: HashMap<String, usize> = HashMap::new();
+    let mut keep = vec![false; items.len()];
+    for i in by_rank {
+        let count = per_project.entry(project_key(&items[i])).or_insert(0);
+        if is_live(&items[i]) || *count < max_per_project {
             *count += 1;
             keep[i] = true;
         }
     }
     let mut keep = keep.into_iter();
-    found
+    items
         .into_iter()
         .filter(|_| keep.next().unwrap_or(false))
         .collect()
@@ -244,7 +257,11 @@ fn discover_copilot_found(
 /// Known sessions are updated in place, not replaced: the UI tracks the selection (and the previous
 /// session) by `uid`, and live ones carry their PTY. Live sessions not found on disk (new, or older
 /// than the cutoff) stay listed, before the found ones.
-pub fn merge_found(current: Vec<DeckSession>, found: Vec<FoundSession>) -> Vec<DeckSession> {
+pub fn merge_found(
+    current: Vec<DeckSession>,
+    found: Vec<FoundSession>,
+    max_per_project: usize,
+) -> Vec<DeckSession> {
     let index: HashMap<String, usize> = current
         .iter()
         .enumerate()
@@ -274,7 +291,13 @@ pub fn merge_found(current: Vec<DeckSession>, found: Vec<FoundSession>) -> Vec<D
     }
     let mut out: Vec<DeckSession> = slots.into_iter().flatten().filter(|s| s.live.is_some()).collect();
     out.extend(merged);
-    out
+    cap_per_project(
+        out,
+        max_per_project,
+        |s| s.project_key.clone(),
+        |s| s.live.is_some(),
+        |s| s.mtime_ms,
+    )
 }
 
 fn claude_status(status: &str) -> SessionStatus {
@@ -567,8 +590,26 @@ mod tests {
             found_session("cl3", 60),
             copilot,
         ];
-        let ids: Vec<_> = cap_per_project(found, 3).into_iter().map(|f| f.id).collect();
+        let ids: Vec<_> = cap_per_project(found, 3, |s| s.project_key.clone(), |_| false, |s| s.mtime_ms)
+            .into_iter()
+            .map(|f| f.id)
+            .collect();
         assert_eq!(ids, ["cl1", "cl2", "co1"]);
+    }
+
+    #[test]
+    fn merge_counts_a_live_session_toward_its_projects_cap() {
+        let mut live = DeckSession::new("claude", None, "C:/repos/api", "(new session)", 500);
+        live.project_key = found_session("x", 0).project_key;
+        live.live = Some(LiveSession::stub(1));
+        let found = vec![
+            found_session("a", 100),
+            found_session("b", 90),
+            found_session("c", 80),
+        ];
+        let merged = merge_found(vec![live], found, 3);
+        let ids: Vec<_> = merged.iter().map(|s| s.id.as_deref()).collect();
+        assert_eq!(ids, [None, Some("a"), Some("b")]);
     }
 
     #[test]
@@ -593,6 +634,7 @@ mod tests {
         let merged = merge_found(
             vec![known, live_new, gone],
             vec![found_session("a", 99), found_session("b", 98)],
+            10,
         );
         let ids: Vec<_> = merged.iter().map(|s| s.id.as_deref()).collect();
         assert_eq!(ids, [None, Some("a"), Some("b")]);
@@ -611,7 +653,7 @@ mod tests {
         let mut live = DeckSession::new("claude", Some("a"), "C:\\repos\\api", "t", 1);
         live.live = Some(LiveSession::stub(1));
         live.last_response = Some(LastResponse::Ready("cached".into()));
-        let merged = merge_found(vec![live], vec![found_session("a", 99)]);
+        let merged = merge_found(vec![live], vec![found_session("a", 99)], 10);
         assert_eq!(
             merged[0].last_response,
             Some(LastResponse::Ready("cached".into()))

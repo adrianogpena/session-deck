@@ -386,7 +386,8 @@ impl App {
             }
             AppEvent::Discovered(found) => {
                 self.discovering = false;
-                self.sessions = merge_found(std::mem::take(&mut self.sessions), found);
+                let max_per_project = self.config.ui.max_sessions_listed as usize;
+                self.sessions = merge_found(std::mem::take(&mut self.sessions), found, max_per_project);
                 self.tree = self.store.get_tree();
                 self.rebuild_rows();
                 if let Some(id) = self.select_after_discovery.take() {
