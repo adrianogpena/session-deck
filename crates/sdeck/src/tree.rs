@@ -238,6 +238,8 @@ pub struct TreeOptions<'a> {
     pub listed: Per<'a, bool>,
     /// A status/time filter is on: groups with nothing visible are hidden, even empty folders.
     pub filtering: bool,
+    /// No folders: every project is a top-level row (`sdeck --here`).
+    pub flat: bool,
     /// Projects never moved sort by most-recent activity when true, alphabetically when false.
     pub recent_projects_first: bool,
     /// Sessions sort by activity when true, or keep a manual order when false.
@@ -264,6 +266,7 @@ impl TreeOptions<'_> {
             git_of: Box::new(|_| None),
             listed: Box::new(|_| true),
             filtering: false,
+            flat: false,
             recent_projects_first: false,
             recent_sessions_first: true,
             tags_of: Box::new(|_| Vec::new()),
@@ -619,17 +622,27 @@ pub fn build_tree(sessions: &[DeckSession], tree: &TreePrefs, opts: &TreeOptions
         name: String,
         nodes: Vec<usize>,
     }
-    let folder_items: Vec<FolderItem> = arranged
-        .folders
-        .iter()
-        .map(|f| FolderItem {
-            id: f.folder.id.clone(),
-            name: f.folder.name.clone(),
-            nodes: shown_nodes(&f.projects),
-        })
-        .filter(|f| !f.nodes.is_empty() || !opts.filtering)
-        .collect();
-    let root_nodes = shown_nodes(&arranged.root);
+    let (folder_items, root_nodes): (Vec<FolderItem>, Vec<usize>) = if opts.flat {
+        let every: Vec<String> = arranged
+            .folders
+            .iter()
+            .flat_map(|f| f.projects.iter().cloned())
+            .chain(arranged.root.iter().cloned())
+            .collect();
+        (Vec::new(), shown_nodes(&every))
+    } else {
+        let folders = arranged
+            .folders
+            .iter()
+            .map(|f| FolderItem {
+                id: f.folder.id.clone(),
+                name: f.folder.name.clone(),
+                nodes: shown_nodes(&f.projects),
+            })
+            .filter(|f| !f.nodes.is_empty() || !opts.filtering)
+            .collect();
+        (folders, shown_nodes(&arranged.root))
+    };
 
     let mut b = Builder {
         opts,

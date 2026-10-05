@@ -7,21 +7,31 @@ use sdeck_core::store::deck_store::{Patch, UiPatch};
 use sdeck_core::store::trash::purge_trash;
 
 use super::App;
-use crate::layout::step_sidebar;
+use crate::layout::{step_sidebar, LayoutMode};
 
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 const RESIZE_NOTE: Duration = Duration::from_millis(1500);
 
 impl App {
-    /// `<` / `>`: moves the panel boundary one step, shows the new width in the list header for a
-    /// moment and remembers it.
+    /// `<` / `>`: moves the panel boundary one step, shows the new size in the list header for a
+    /// moment and remembers it. Side by side that's the list's width, stacked its height.
     pub(super) fn resize_sidebar(&mut self, delta: f64, now: Instant) {
-        self.sidebar_pct = step_sidebar(self.sidebar_pct, delta);
-        self.resize_note = Some((format!("{}%", self.sidebar_pct), now + RESIZE_NOTE));
-        let _ = self.store.update_ui(&UiPatch {
-            sidebar_pct: Patch::Set(self.sidebar_pct),
-            ..Default::default()
-        });
+        let pct = if self.layout().mode == LayoutMode::Stacked {
+            self.stacked_list_pct = step_sidebar(self.stacked_list_pct, delta);
+            let _ = self.store.update_ui(&UiPatch {
+                stacked_list_pct: Patch::Set(self.stacked_list_pct),
+                ..Default::default()
+            });
+            self.stacked_list_pct
+        } else {
+            self.sidebar_pct = step_sidebar(self.sidebar_pct, delta);
+            let _ = self.store.update_ui(&UiPatch {
+                sidebar_pct: Patch::Set(self.sidebar_pct),
+                ..Default::default()
+            });
+            self.sidebar_pct
+        };
+        self.resize_note = Some((format!("{pct}%"), now + RESIZE_NOTE));
         self.clear_screen = true;
         self.dirty = true;
         self.resize_all_to_pane();
@@ -48,7 +58,8 @@ impl App {
 mod tests {
     use super::super::test_fixture::fixture;
     use super::*;
-    use crate::layout::SIDEBAR_STEP;
+    use crate::layout::{DEFAULT_STACKED_LIST_PCT, SIDEBAR_STEP};
+    use sdeck_core::store::deck_config::PanelLayout;
     use sdeck_core::store::deck_store::{SIDEBAR_PCT_MAX, SIDEBAR_PCT_MIN};
 
     #[test]
@@ -69,6 +80,21 @@ mod tests {
         );
         assert!(f.app.active_resize_note(Instant::now()).is_some());
         assert!(f.app.active_resize_note(now + Duration::from_secs(5)).is_none());
+    }
+
+    #[test]
+    fn resize_changes_the_height_share_in_the_stacked_layout() {
+        let mut f = fixture();
+        f.app.config.ui.layout = PanelLayout::Stacked;
+        let width = f.app.sidebar_pct;
+        f.key(">");
+        assert_eq!(f.app.stacked_list_pct, DEFAULT_STACKED_LIST_PCT + SIDEBAR_STEP);
+        assert_eq!(f.app.sidebar_pct, width);
+        assert_eq!(
+            f.app.store.get_ui().stacked_list_pct,
+            Some(DEFAULT_STACKED_LIST_PCT + SIDEBAR_STEP)
+        );
+        assert_eq!(f.app.store.get_ui().sidebar_pct, None);
     }
 
     #[test]

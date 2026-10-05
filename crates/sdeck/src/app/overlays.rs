@@ -260,7 +260,12 @@ impl App {
         let usage_turned_on = !self.config.ui.show_usage && next.ui.show_usage;
         let max_sessions_changed = self.config.ui.max_sessions_listed != next.ui.max_sessions_listed;
         let ctl_changed = self.config.ui.ctl != next.ui.ctl;
+        let layout_changed = self.config.ui.layout != next.ui.layout;
         self.config = next;
+        if layout_changed {
+            self.clear_screen = true;
+            self.resize_all_to_pane();
+        }
         let _ = write_deck_config(&self.config, &deck_config_path());
         // A `tools.*.command` edit shouldn't need a restart to take effect.
         self.executables.clear();

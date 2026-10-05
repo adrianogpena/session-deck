@@ -58,7 +58,8 @@ and/or `copilot` on your PATH, or set their location in the [config](#configurat
 ## Quick start
 
 ```bash
-sdeck
+sdeck          # every project
+sdeck --here   # only the project of the current folder
 ```
 
 | Key | What it does |
@@ -123,7 +124,7 @@ the Claude ones.
 ### Light and dark
 
 `:` → Choose theme picks System or a palette (Tokyo Night, Catppuccin, Gruvbox, Nord, Dracula, Rose Pine, Solarized, each dark or light). The layout adapts: panels side by side from 80
-columns, stacked from 50.
+columns, stacked from 50; `ui.layout` fixes it to `side` or `stacked` instead.
 
 ## Configuration
 

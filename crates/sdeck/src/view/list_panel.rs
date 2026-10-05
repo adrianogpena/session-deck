@@ -188,6 +188,8 @@ struct SessionRow<'a> {
     show_checkbox: bool,
 }
 
+const MIN_TITLE_BESIDE_CONTEXT: usize = 10;
+
 fn session_row(t: Theme, width: usize, r: SessionRow, selected: bool) -> Line<'static> {
     let v = r.view;
     let indent = "  ".repeat(r.depth);
@@ -218,12 +220,24 @@ fn session_row(t: Theme, width: usize, r: SessionRow, selected: bool) -> Line<'s
         .map(|tag| format!(" {tag}"))
         .unwrap_or_default();
     let avail = width.saturating_sub(text_width(&left_plain)).max(1);
+    // Right-aligned, so the numbers of the sessions above each other line up. Dropped when it would
+    // leave the title less than `MIN_TITLE_BESIDE_CONTEXT` columns.
+    let context_percent = v
+        .context_percent
+        .filter(|_| avail >= MIN_TITLE_BESIDE_CONTEXT + 5);
+    let context_text = context_percent
+        .map(|p| format!(" {}%", p.round()))
+        .unwrap_or_default();
     let max_title = avail
-        .saturating_sub(text_width(&agent_text) + text_width(&tag_text))
+        .saturating_sub(text_width(&agent_text) + text_width(&tag_text) + text_width(&context_text))
         .max(1);
     // Truncated to fit, but not padded: the agent name sits right after the title.
     let title = fit(&v.title, text_width(&v.title).min(max_title));
-    let used = text_width(&left_plain) + text_width(&title) + text_width(&tag_text) + text_width(&agent_text);
+    let used = text_width(&left_plain)
+        + text_width(&title)
+        + text_width(&tag_text)
+        + text_width(&agent_text)
+        + text_width(&context_text);
     let pad = " ".repeat(width.saturating_sub(used));
     let active = matches!(v.status, SessionStatus::Running | SessionStatus::Waiting);
 
@@ -232,7 +246,7 @@ fn session_row(t: Theme, width: usize, r: SessionRow, selected: bool) -> Line<'s
         return Line::from(vec![
             Span::styled(left_plain, sel),
             Span::styled(title, bold(sel)),
-            Span::styled(format!("{tag_text}{agent_text}{pad}"), sel),
+            Span::styled(format!("{tag_text}{agent_text}{pad}{context_text}"), sel),
         ]);
     }
     let mut spans = Vec::new();
@@ -277,6 +291,10 @@ fn session_row(t: Theme, width: usize, r: SessionRow, selected: bool) -> Line<'s
     spans.push(Span::styled(tag_text, t.fg(Role::TextDim)));
     spans.push(Span::styled(agent_text, t.fg(Role::TextDim)));
     spans.push(Span::raw(pad));
+    if let Some(percent) = context_percent {
+        let role = severity_role(usage_severity(UsageMetric::Context, percent));
+        spans.push(Span::styled(context_text, t.fg(role)));
+    }
     Line::from(spans)
 }
 
@@ -675,6 +693,7 @@ mod tests {
             git: None,
             account_tag: None,
             other_account: false,
+            context_percent: None,
         }
     }
 
@@ -828,6 +847,22 @@ mod tests {
             assert_eq!(rendered[usage_at + 5], "  7d      —");
             assert!(rendered.iter().any(|r| r.contains("Fix the build")));
         }
+    }
+
+    #[test]
+    fn a_session_s_context_percent_sits_at_the_right_edge_colored_by_severity() {
+        let t = Theme::new(ThemeName::Dark);
+        let mut v = view("Fix the build", SessionStatus::Running);
+        v.context_percent = Some(91.6);
+        let row = session(v.clone(), false, None);
+        let line = list_row_line(t, 30, &row, false, false);
+        assert_eq!(text(&line), "  ├─ ● Fix the build       92%");
+        let last = line.spans.last().unwrap();
+        assert_eq!(last.content, " 92%");
+        assert_eq!(last.style, t.fg(Role::Red));
+        assert!(text(&list_row_line(t, 30, &row, true, false)).ends_with(" 92%"));
+        let narrow = list_row_line(t, 16, &row, false, false);
+        assert!(!text(&narrow).contains('%'));
     }
 
     #[test]

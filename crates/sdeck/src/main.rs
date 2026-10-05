@@ -92,6 +92,11 @@ fn main() -> anyhow::Result<()> {
     let config = read_deck_config(&deck_config_path());
     let ctl_on = ctl_enabled(&config);
     app.start_background(discover_accounts(), config);
+    if std::env::args().skip(1).any(|a| a == "--here") {
+        if let Ok(cwd) = std::env::current_dir() {
+            app.scope_to_project(&cwd.to_string_lossy());
+        }
+    }
     // Outlives `app` (dropped last below), so `ctl.json` is only removed once sdeck is done.
     let ctl_server = if ctl_on { app.start_ctl_server() } else { None };
     #[cfg(windows)]

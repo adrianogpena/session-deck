@@ -77,6 +77,8 @@ pub struct UiPrefs {
     pub light_theme: Option<String>,
     /// Sessions panel width, as a percentage of the terminal width.
     pub sidebar_pct: Option<f64>,
+    /// Sessions panel height in the stacked layout, as a percentage of the panel area.
+    pub stacked_list_pct: Option<f64>,
     /// Which agent `n` (new session) starts, and whose info popups are shown. An unrecognized or
     /// removed catalog id falls back to `claude`.
     pub active_agent: Option<String>,
@@ -89,6 +91,7 @@ impl UiPrefs {
             && self.dark_theme.is_none()
             && self.light_theme.is_none()
             && self.sidebar_pct.is_none()
+            && self.stacked_list_pct.is_none()
             && self.active_agent.is_none()
             && self.extra.is_empty()
     }
@@ -179,6 +182,10 @@ fn parse_ui_prefs(ui: &Value) -> Option<UiPrefs> {
             .get("sidebarPct")
             .and_then(Value::as_f64)
             .filter(|p| (SIDEBAR_PCT_MIN..=SIDEBAR_PCT_MAX).contains(p)),
+        stacked_list_pct: obj
+            .get("stackedListPct")
+            .and_then(Value::as_f64)
+            .filter(|p| (SIDEBAR_PCT_MIN..=SIDEBAR_PCT_MAX).contains(p)),
         active_agent: obj
             .get("activeAgent")
             .and_then(Value::as_str)
@@ -187,7 +194,14 @@ fn parse_ui_prefs(ui: &Value) -> Option<UiPrefs> {
             .map(str::to_string),
         extra: extras(
             obj,
-            &["theme", "darkTheme", "lightTheme", "sidebarPct", "activeAgent"],
+            &[
+                "theme",
+                "darkTheme",
+                "lightTheme",
+                "sidebarPct",
+                "stackedListPct",
+                "activeAgent",
+            ],
         ),
     };
     (!prefs.is_empty()).then_some(prefs)
@@ -237,6 +251,9 @@ fn ui_prefs_to_value(ui: &UiPrefs) -> Value {
     }
     if let Some(p) = ui.sidebar_pct {
         obj.insert("sidebarPct".into(), number_value(p));
+    }
+    if let Some(p) = ui.stacked_list_pct {
+        obj.insert("stackedListPct".into(), number_value(p));
     }
     if let Some(a) = &ui.active_agent {
         obj.insert("activeAgent".into(), a.clone().into());
@@ -317,6 +334,7 @@ pub struct UiPatch {
     pub dark_theme: Patch<String>,
     pub light_theme: Patch<String>,
     pub sidebar_pct: Patch<f64>,
+    pub stacked_list_pct: Patch<f64>,
     pub active_agent: Patch<String>,
 }
 
@@ -345,6 +363,8 @@ pub fn apply_ui_patch(state: &DeckStateFile, patch: &UiPatch) -> DeckStateFile {
         dark_theme: merge(&current.dark_theme, &patch.dark_theme).filter(|t| !t.trim().is_empty()),
         light_theme: merge(&current.light_theme, &patch.light_theme).filter(|t| !t.trim().is_empty()),
         sidebar_pct: merge(&current.sidebar_pct, &patch.sidebar_pct)
+            .filter(|p| (SIDEBAR_PCT_MIN..=SIDEBAR_PCT_MAX).contains(p)),
+        stacked_list_pct: merge(&current.stacked_list_pct, &patch.stacked_list_pct)
             .filter(|p| (SIDEBAR_PCT_MIN..=SIDEBAR_PCT_MAX).contains(p)),
         active_agent: merge(&current.active_agent, &patch.active_agent)
             .map(|a| a.trim().to_string())
@@ -863,6 +883,17 @@ mod tests {
                 ..Default::default()
             },
         );
+        assert_eq!(state.ui, None);
+    }
+
+    #[test]
+    fn stacked_list_pct_is_range_checked_and_round_trips() {
+        let state =
+            parse_deck_state(&json!({ "sessions": {}, "ui": { "stackedListPct": 55 } }).to_string()).unwrap();
+        assert_eq!(state.ui.as_ref().and_then(|u| u.stacked_list_pct), Some(55.0));
+        assert_eq!(parse_deck_state(&deck_state_to_json(&state)), Some(state));
+        let state =
+            parse_deck_state(&json!({ "sessions": {}, "ui": { "stackedListPct": 90 } }).to_string()).unwrap();
         assert_eq!(state.ui, None);
     }
 

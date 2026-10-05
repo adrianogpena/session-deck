@@ -94,6 +94,44 @@ impl UsagePosition {
     }
 }
 
+/// How the list and preview panels are arranged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelLayout {
+    /// Side by side from 80 columns, list above preview from 50.
+    Auto,
+    /// Side by side from 50 columns.
+    Side,
+    /// List above preview from 50 columns.
+    Stacked,
+}
+
+impl PanelLayout {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Side => "side",
+            Self::Stacked => "stacked",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "side" => Some(Self::Side),
+            "stacked" => Some(Self::Stacked),
+            _ => None,
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Auto => Self::Side,
+            Self::Side => Self::Stacked,
+            Self::Stacked => Self::Auto,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct UiConfig {
     /// How many of the most recent sessions of each project are loaded from disk. Default: 10.
@@ -118,6 +156,8 @@ pub struct UiConfig {
     pub usage_position: UsagePosition,
     /// One-line usage summary instead of the Model/Cache/Context/5h/7d rows. Default: false.
     pub compact_usage: bool,
+    /// Panel arrangement: auto (by width), side or stacked. Default: auto.
+    pub layout: PanelLayout,
     /// The 5h reset time shows as `20:30` (true) or `8:30 PM` (false). Default: false.
     pub use_24_hour_clock: bool,
     /// Config dir of the account new sessions launch as; unset = the default account.
@@ -213,6 +253,7 @@ impl Default for DeckConfig {
                 show_usage: false,
                 usage_position: UsagePosition::Float,
                 compact_usage: false,
+                layout: PanelLayout::Auto,
                 use_24_hour_clock: false,
                 active_account_config_dir: None,
                 project_search_root: None,
@@ -315,6 +356,7 @@ pub fn parse_deck_config(raw: &str) -> DeckConfig {
                 "showUsage",
                 "usagePosition",
                 "compactUsage",
+                "layout",
                 "use24HourClock",
                 "activeAccountConfigDir",
                 "projectSearchRoot",
@@ -350,6 +392,13 @@ pub fn parse_deck_config(raw: &str) -> DeckConfig {
             .and_then(UsagePosition::parse)
         {
             c.usage_position = p;
+        }
+        if let Some(l) = ui
+            .get("layout")
+            .and_then(Value::as_str)
+            .and_then(PanelLayout::parse)
+        {
+            c.layout = l;
         }
         if let Some(mode) = ui
             .get("restoreSessions")
@@ -480,6 +529,7 @@ pub fn deck_config_to_json(config: &DeckConfig) -> String {
     ui_obj.insert("showUsage".into(), ui.show_usage.into());
     ui_obj.insert("usagePosition".into(), ui.usage_position.as_str().into());
     ui_obj.insert("compactUsage".into(), ui.compact_usage.into());
+    ui_obj.insert("layout".into(), ui.layout.as_str().into());
     ui_obj.insert("use24HourClock".into(), ui.use_24_hour_clock.into());
     if let Some(root) = &ui.project_search_root {
         ui_obj.insert("projectSearchRoot".into(), root.clone().into());
@@ -691,6 +741,17 @@ mod tests {
         assert_eq!(parse_deck_config(&deck_config_to_json(&c)), c);
         let c = parse(json!({ "ui": { "usagePosition": "middle" } }));
         assert_eq!(c.ui.usage_position, UsagePosition::Float);
+    }
+
+    #[test]
+    fn layout_accepts_known_values_and_falls_back_to_auto() {
+        assert_eq!(parse_deck_config("{}").ui.layout, PanelLayout::Auto);
+        let c = parse(json!({ "ui": { "layout": "Stacked" } }));
+        assert_eq!(c.ui.layout, PanelLayout::Stacked);
+        assert_eq!(parse_deck_config(&deck_config_to_json(&c)), c);
+        let c = parse(json!({ "ui": { "layout": "grid" } }));
+        assert_eq!(c.ui.layout, PanelLayout::Auto);
+        assert_eq!(PanelLayout::Stacked.next(), PanelLayout::Auto);
     }
 
     #[test]

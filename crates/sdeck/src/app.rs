@@ -31,7 +31,7 @@ mod test_fixture;
 mod trace;
 mod view_controls;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
@@ -44,6 +44,8 @@ use ratatui::widgets::Block;
 use ratatui::{Frame, Terminal};
 use sdeck_core::agent_catalog::all_agent_ids;
 use sdeck_core::discovery::claude_storage::{clear_session_meta_cache, read_cache_state};
+use sdeck_core::discovery::git_project::resolve_project_root;
+use sdeck_core::discovery::path_utils::normalize_fs_path;
 use sdeck_core::format::{humanize_since, now_ms};
 use sdeck_core::paths::user_home;
 use sdeck_core::status::account::Account;
@@ -71,7 +73,8 @@ use crate::filters::{
 use crate::git_status_tracker::{read_all, GitStatusTracker};
 use crate::keys::{extract_focus_events, parse_mouse_sequence, split_keys};
 use crate::layout::{
-    compute_layout, too_small, Layout, DEFAULT_SIDEBAR_PCT, MIN_COLS, MIN_ROWS, SIDEBAR_STEP,
+    compute_layout, too_small, Layout, PanelPrefs, DEFAULT_SIDEBAR_PCT, DEFAULT_STACKED_LIST_PCT, MIN_COLS,
+    MIN_ROWS, SIDEBAR_STEP,
 };
 use crate::live_session::{looks_like_multiline_paste, Executables};
 use crate::sessions::{
@@ -120,6 +123,8 @@ pub struct App {
     os_probe_running: bool,
     last_theme_poll: Option<Instant>,
     sidebar_pct: f64,
+    /// The sessions panel's share of the height in the stacked layout.
+    stacked_list_pct: f64,
     sidebar_visible: bool,
     message: String,
     message_until: Option<Instant>,
@@ -198,6 +203,8 @@ pub struct App {
     time_filter: TimeFilter,
     /// Set from a tag row at the bottom of the list (Enter): narrows the tree to sessions carrying that tag.
     tag_filter: Option<String>,
+    /// `sdeck --here`: only this project is listed, as (project key, root). `0` clears it.
+    project_scope: Option<(String, String)>,
     /// `^`: show archived sessions (only) instead of the active ones.
     archived_view: bool,
     procs: StatusTracker,
@@ -211,6 +218,8 @@ pub struct App {
     last_session: Option<u64>,
     /// Which session the USAGE rows were last read for, and when.
     usage_synced: Option<(Option<u64>, Instant)>,
+    /// Context % of each running session, by session id, read with the USAGE rows.
+    session_context: HashMap<String, f64>,
     rate_limits: std::cell::RefCell<RateLimitScanner>,
     _usage_watch: Option<PathWatch>,
     previous_session: Option<u64>,
@@ -258,6 +267,7 @@ impl App {
             os_probe_running: false,
             last_theme_poll: None,
             sidebar_pct: ui.sidebar_pct.unwrap_or(DEFAULT_SIDEBAR_PCT),
+            stacked_list_pct: ui.stacked_list_pct.unwrap_or(DEFAULT_STACKED_LIST_PCT),
             sidebar_visible: true,
             message: String::new(),
             message_until: None,
@@ -303,6 +313,7 @@ impl App {
             status_filter: Vec::new(),
             time_filter: TimeFilter::All,
             tag_filter: None,
+            project_scope: None,
             archived_view: false,
             procs: StatusTracker::default(),
             git: GitStatusTracker::default(),
@@ -313,6 +324,7 @@ impl App {
             discover_again: false,
             last_session: None,
             usage_synced: None,
+            session_context: HashMap::new(),
             rate_limits: Default::default(),
             _usage_watch: None,
             previous_session: None,
@@ -387,12 +399,16 @@ impl App {
     }
 
     fn layout(&self) -> Layout {
-        compute_layout(
-            self.term_size.0,
-            self.term_size.1,
-            self.sidebar_pct,
-            self.sidebar_visible,
-        )
+        compute_layout(self.term_size.0, self.term_size.1, self.panel_prefs())
+    }
+
+    fn panel_prefs(&self) -> PanelPrefs {
+        PanelPrefs {
+            arrangement: self.config.ui.layout,
+            sidebar_pct: self.sidebar_pct,
+            stacked_list_pct: self.stacked_list_pct,
+            sidebar_visible: self.sidebar_visible,
+        }
     }
 
     pub fn should_quit(&self) -> bool {
@@ -477,6 +493,7 @@ impl App {
         if !(self.config.ui.show_usage && self.sources_enabled) {
             return;
         }
+        self.refresh_session_context();
         let Some(start) = self
             .rows
             .iter()
@@ -488,6 +505,23 @@ impl App {
         let end = (start + 1 + fresh.len()).min(self.rows.len());
         if self.rows[start + 1..end] != fresh[..] {
             self.rows.splice(start + 1..end, fresh);
+            self.dirty = true;
+        }
+    }
+
+    /// Rereads the context % of every running session (here or in another terminal).
+    fn refresh_session_context(&mut self) {
+        let fresh: HashMap<String, f64> = self
+            .sessions
+            .iter()
+            .filter(|s| s.is_live() || self.procs.is_elsewhere(s))
+            .filter_map(|s| {
+                let id = s.id.as_deref()?;
+                Some((id.to_string(), read_session_usage(id)?.context_percent?))
+            })
+            .collect();
+        if fresh != self.session_context {
+            self.session_context = fresh;
             self.dirty = true;
         }
     }
@@ -650,6 +684,20 @@ impl App {
         self.store.get_hidden_projects()
     }
 
+    /// `sdeck --here`: lists only the git project containing `cwd` (or `cwd` itself outside git).
+    pub fn scope_to_project(&mut self, cwd: &str) {
+        let root = resolve_project_root(cwd).root;
+        self.project_scope = Some((normalize_fs_path(&root), root));
+        self.rebuild_rows();
+    }
+
+    /// Whether `s` belongs to the project `--here` scoped the list to (always, without a scope).
+    fn in_scope(&self, s: &DeckSession) -> bool {
+        self.project_scope
+            .as_ref()
+            .is_none_or(|(key, _)| *key == s.project_key)
+    }
+
     /// The bottom usage section's data. Context tracks whichever session row is selected; 5h/7d are
     /// account-wide, so they come from whichever session's statusLine reported most recently.
     fn usage_section_input(&self) -> UsageSectionInput {
@@ -752,8 +800,9 @@ impl App {
                     .then(|| self.git.get(&s.cwd).cloned())
                     .flatten()
             }),
-            listed: Box::new(move |s| !hidden.contains(&s.project_key)),
+            listed: Box::new(move |s| !hidden.contains(&s.project_key) && self.in_scope(s)),
             filtering: self.filtering(),
+            flat: self.project_scope.is_some(),
             recent_projects_first: self.config.ui.recent_projects_first,
             recent_sessions_first: self.config.ui.recent_sessions_first,
             tags_of: Box::new(|s| self.tags_of(s)),
@@ -898,6 +947,12 @@ impl App {
                 .flatten(),
             account_tag,
             other_account: other.is_some(),
+            context_percent: (self.config.ui.show_usage && (s.is_live() || self.procs.is_elsewhere(s)))
+                .then(|| {
+                    s.id.as_deref()
+                        .and_then(|id| self.session_context.get(id).copied())
+                })
+                .flatten(),
         }
     }
 
@@ -1247,6 +1302,7 @@ impl App {
                 self.status_filter.clear();
                 self.time_filter = TimeFilter::All;
                 self.tag_filter = None;
+                self.project_scope = None;
                 self.rebuild_rows();
             }
             "r" => {
@@ -1420,10 +1476,19 @@ impl App {
             row(1),
         );
 
-        let layout = compute_layout(area.width, area.height, self.sidebar_pct, self.sidebar_visible);
+        let layout = compute_layout(area.width, area.height, self.panel_prefs());
         if let Some(list) = layout.list {
             let mut modes = Vec::new();
             let selected_note = format!("{} selected", self.multi_selected.len());
+            let scope_note = self.project_scope.as_ref().map(|(_, root)| {
+                let name = std::path::Path::new(root)
+                    .file_name()
+                    .map_or_else(|| root.clone(), |n| n.to_string_lossy().into_owned());
+                format!("here: {name}")
+            });
+            if let Some(note) = &scope_note {
+                modes.push(note.as_str());
+            }
             if !self.multi_selected.is_empty() {
                 modes.push(selected_note.as_str());
             }
@@ -1446,7 +1511,14 @@ impl App {
             } else {
                 format!("· {}", modes.join(" · "))
             };
-            let empty = if self.sessions.iter().all(|s| hidden.contains(&s.project_key)) {
+            let empty = if self.project_scope.is_some()
+                && self
+                    .sessions
+                    .iter()
+                    .all(|s| hidden.contains(&s.project_key) || !self.in_scope(s))
+            {
+                "No sessions in this project yet. Press n to start one, 0 to show every project."
+            } else if self.sessions.iter().all(|s| hidden.contains(&s.project_key)) {
                 "No Claude sessions found."
             } else {
                 "Nothing matches the filter. Press 0 to clear it."

@@ -59,6 +59,9 @@ pub struct SessionView {
     /// The session belongs to an account other than the active one (only set when more than one
     /// account exists); its title is dimmed.
     pub other_account: bool,
+    /// How full the context window is, for a running session with `ui.showUsage` on, from its
+    /// statusLine report; shown at the end of its list row.
+    pub context_percent: Option<f64>,
 }
 
 /// Counts shown on a folder or project row.

@@ -1,6 +1,7 @@
 //! Port of `layout.ts`: where the list and preview panels go for a terminal size.
 
 use ratatui::layout::Rect;
+use sdeck_core::store::deck_config::PanelLayout;
 use sdeck_core::store::deck_store::{SIDEBAR_PCT_MAX, SIDEBAR_PCT_MIN};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,11 +28,11 @@ pub const BOTTOM_ROWS: u16 = 1;
 pub const PANEL_HEADER_ROWS: u16 = 2;
 
 pub const DEFAULT_SIDEBAR_PCT: f64 = 35.0;
+pub const DEFAULT_STACKED_LIST_PCT: f64 = 40.0;
 pub const SIDEBAR_STEP: f64 = 5.0;
 
 const SPLIT_MIN_COLS: u16 = 80;
 const STACKED_MIN_COLS: u16 = 50;
-const STACKED_LIST_SHARE: f64 = 0.4;
 const MIN_PANEL_ROWS: u16 = PANEL_HEADER_ROWS + 3;
 
 /// Smallest terminal the UI draws in: `MIN_ROWS` is `TOP_ROWS + BOTTOM_ROWS + MIN_PANEL_ROWS`.
@@ -42,10 +43,30 @@ pub fn too_small(cols: u16, rows: u16) -> bool {
     cols < MIN_COLS || rows < MIN_ROWS
 }
 
-/// Side by side from 80 columns (list takes `sidebar_pct` of the width), list above preview from 50,
-/// list only below that. Hiding the sidebar leaves the preview alone, except in list-only mode where
+/// The panel sizes the user picked: the list's share of the width side by side, and of the height
+/// stacked.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PanelPrefs {
+    pub arrangement: PanelLayout,
+    pub sidebar_pct: f64,
+    pub stacked_list_pct: f64,
+    pub sidebar_visible: bool,
+}
+
+/// Which arrangement applies at `cols` columns, from 50 up (below that only the list shows).
+fn panel_mode(arrangement: PanelLayout, cols: u16) -> LayoutMode {
+    match arrangement {
+        PanelLayout::Auto if cols < SPLIT_MIN_COLS => LayoutMode::Stacked,
+        PanelLayout::Auto | PanelLayout::Side => LayoutMode::Split,
+        PanelLayout::Stacked => LayoutMode::Stacked,
+    }
+}
+
+/// `auto`: side by side from 80 columns (list takes `sidebar_pct` of the width), list above preview
+/// (`stacked_list_pct` of the height) from 50. `side` / `stacked` keep one arrangement from 50 columns.
+/// List only below 50. Hiding the sidebar leaves the preview alone, except in list-only mode where
 /// the list is all there is.
-pub fn compute_layout(cols: u16, rows: u16, sidebar_pct: f64, sidebar_visible: bool) -> Layout {
+pub fn compute_layout(cols: u16, rows: u16, prefs: PanelPrefs) -> Layout {
     let area = Rect::new(
         0,
         TOP_ROWS,
@@ -61,12 +82,8 @@ pub fn compute_layout(cols: u16, rows: u16, sidebar_pct: f64, sidebar_visible: b
             divider_x: None,
         };
     }
-    if !sidebar_visible {
-        let mode = if cols < SPLIT_MIN_COLS {
-            LayoutMode::Stacked
-        } else {
-            LayoutMode::Split
-        };
+    let mode = panel_mode(prefs.arrangement, cols);
+    if !prefs.sidebar_visible {
         return Layout {
             mode,
             list: None,
@@ -74,8 +91,9 @@ pub fn compute_layout(cols: u16, rows: u16, sidebar_pct: f64, sidebar_visible: b
             divider_x: None,
         };
     }
-    if cols < SPLIT_MIN_COLS {
-        let list_height = MIN_PANEL_ROWS.max((f64::from(area.height) * STACKED_LIST_SHARE).floor() as u16);
+    if mode == LayoutMode::Stacked {
+        let share = prefs.stacked_list_pct / 100.0;
+        let list_height = MIN_PANEL_ROWS.max((f64::from(area.height) * share).floor() as u16);
         let preview_height = MIN_PANEL_ROWS.max(area.height.saturating_sub(list_height));
         return Layout {
             mode: LayoutMode::Stacked,
@@ -91,7 +109,7 @@ pub fn compute_layout(cols: u16, rows: u16, sidebar_pct: f64, sidebar_visible: b
             divider_x: None,
         };
     }
-    let list_width = (f64::from(cols) * sidebar_pct / 100.0).round() as u16;
+    let list_width = (f64::from(cols) * prefs.sidebar_pct / 100.0).round() as u16;
     Layout {
         mode: LayoutMode::Split,
         list: Some(Rect {
@@ -123,9 +141,22 @@ pub fn step_sidebar(pct: f64, delta: f64) -> f64 {
 mod tests {
     use super::*;
 
+    fn prefs(arrangement: PanelLayout, sidebar_visible: bool) -> PanelPrefs {
+        PanelPrefs {
+            arrangement,
+            sidebar_pct: 35.0,
+            stacked_list_pct: DEFAULT_STACKED_LIST_PCT,
+            sidebar_visible,
+        }
+    }
+
+    fn auto(sidebar_visible: bool) -> PanelPrefs {
+        prefs(PanelLayout::Auto, sidebar_visible)
+    }
+
     #[test]
     fn splits_side_by_side_at_80_plus_columns_using_the_sidebar_percentage() {
-        let layout = compute_layout(120, 40, 35.0, true);
+        let layout = compute_layout(120, 40, auto(true));
         assert_eq!(layout.mode, LayoutMode::Split);
         assert_eq!(layout.list, Some(Rect::new(0, 2, 42, 37)));
         assert_eq!(layout.divider_x, Some(42));
@@ -135,15 +166,43 @@ mod tests {
 
     #[test]
     fn stacks_the_list_above_the_preview_between_50_and_79_columns() {
-        let layout = compute_layout(70, 40, 35.0, true);
+        let layout = compute_layout(70, 40, auto(true));
         assert_eq!(layout.mode, LayoutMode::Stacked);
         assert_eq!(layout.list, Some(Rect::new(0, 2, 70, 14)));
         assert_eq!(layout.preview, Some(Rect::new(0, 16, 70, 23)));
     }
 
     #[test]
+    fn stacked_keeps_the_list_above_the_preview_on_a_wide_terminal_at_its_height_share() {
+        let layout = compute_layout(
+            200,
+            40,
+            PanelPrefs {
+                stacked_list_pct: 50.0,
+                ..prefs(PanelLayout::Stacked, true)
+            },
+        );
+        assert_eq!(layout.mode, LayoutMode::Stacked);
+        assert_eq!(layout.list, Some(Rect::new(0, 2, 200, 18)));
+        assert_eq!(layout.preview, Some(Rect::new(0, 20, 200, 19)));
+        assert_eq!(layout.divider_x, None);
+    }
+
+    #[test]
+    fn side_keeps_the_panels_side_by_side_down_to_50_columns() {
+        let layout = compute_layout(60, 40, prefs(PanelLayout::Side, true));
+        assert_eq!(layout.mode, LayoutMode::Split);
+        assert_eq!(layout.list, Some(Rect::new(0, 2, 21, 37)));
+        assert_eq!(layout.divider_x, Some(21));
+        assert_eq!(
+            compute_layout(45, 40, prefs(PanelLayout::Side, true)).mode,
+            LayoutMode::List
+        );
+    }
+
+    #[test]
     fn shows_only_the_list_below_50_columns_even_with_the_sidebar_hidden() {
-        let layout = compute_layout(45, 30, 35.0, false);
+        let layout = compute_layout(45, 30, auto(false));
         assert_eq!(layout.mode, LayoutMode::List);
         assert_eq!(layout.preview, None);
         assert_eq!(pty_size_for(&layout), None);
@@ -151,14 +210,17 @@ mod tests {
 
     #[test]
     fn gives_the_preview_the_whole_area_when_the_sidebar_is_hidden() {
-        let layout = compute_layout(120, 40, 35.0, false);
+        let layout = compute_layout(120, 40, auto(false));
         assert_eq!(layout.list, None);
         assert_eq!(layout.preview, Some(Rect::new(0, 2, 120, 37)));
+        let stacked = compute_layout(120, 40, prefs(PanelLayout::Stacked, false));
+        assert_eq!(stacked.mode, LayoutMode::Stacked);
+        assert_eq!(stacked.preview, Some(Rect::new(0, 2, 120, 37)));
     }
 
     #[test]
     fn keeps_minimum_panel_rows_on_a_tiny_terminal() {
-        let layout = compute_layout(120, 3, 35.0, true);
+        let layout = compute_layout(120, 3, auto(true));
         assert_eq!(layout.list.unwrap().height, 5);
     }
 

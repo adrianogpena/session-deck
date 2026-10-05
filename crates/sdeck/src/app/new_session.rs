@@ -16,17 +16,18 @@ use crate::tree::TreeRow;
 
 impl App {
     /// The project the selection belongs to, as (key, root): the project row itself, or a
-    /// session's project.
+    /// session's project. Without one, the project `--here` scoped the list to.
     pub(super) fn selected_project(&self) -> Option<(String, String)> {
-        match self.selected_row()? {
-            TreeRow::Project {
+        let selected = match self.selected_row() {
+            Some(TreeRow::Project {
                 project_key, root, ..
-            } => Some((project_key.clone(), root.clone())),
-            TreeRow::Session { uid, .. } => self
+            }) => Some((project_key.clone(), root.clone())),
+            Some(TreeRow::Session { uid, .. }) => self
                 .session_by_uid(*uid)
                 .map(|s| (s.project_key.clone(), s.project_root.clone())),
             _ => None,
-        }
+        };
+        selected.or_else(|| self.project_scope.clone())
     }
 
     /// A new `agent` session in the selected project: in the selected session's folder (a

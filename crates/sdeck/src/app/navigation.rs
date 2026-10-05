@@ -549,6 +549,82 @@ mod tests {
     }
 
     #[test]
+    fn a_project_scope_lists_only_that_project_at_the_top_level_with_its_own_tags_and_0_clears_it() {
+        let mut f = fixture();
+        for (id, name, projects) in [
+            (
+                "f1",
+                "Work",
+                vec!["c:\\repos\\web".to_string(), "c:\\repos\\api".to_string()],
+            ),
+            ("f2", "Empty", Vec::new()),
+        ] {
+            f.app
+                .tree
+                .folders
+                .push(sdeck_core::store::tree_prefs::FolderPrefs {
+                    id: id.into(),
+                    name: name.into(),
+                    projects,
+                });
+        }
+        for (id, tag) in [("w1", "web-tag"), ("a1", "api-tag")] {
+            f.app
+                .store
+                .update_session(
+                    id,
+                    &sdeck_core::store::deck_store::SessionPatch {
+                        tags: sdeck_core::store::deck_store::Patch::Set(vec![tag.into()]),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        f.app.project_scope = Some(("c:\\repos\\web".into(), "C:\\repos\\web".into()));
+        f.app.rebuild_rows();
+        assert!(!f.app.rows.iter().any(|r| matches!(r, TreeRow::Folder { .. })));
+        assert!(matches!(
+            f.app.rows[0],
+            TreeRow::Project { ref label, depth: 0, .. } if label == "web"
+        ));
+        assert_eq!(
+            f.app
+                .rows
+                .iter()
+                .filter(|r| matches!(r, TreeRow::Project { .. }))
+                .count(),
+            1
+        );
+        let tags: Vec<&str> = f
+            .app
+            .rows
+            .iter()
+            .filter_map(|r| match r {
+                TreeRow::Tag { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tags, vec!["web-tag"]);
+        f.keys("0");
+        assert_eq!(f.app.project_scope, None);
+        assert!(f
+            .app
+            .rows
+            .iter()
+            .any(|r| matches!(r, TreeRow::Folder { name, .. } if name == "Work")));
+    }
+
+    #[test]
+    fn a_project_scope_with_no_sessions_is_the_project_new_sessions_start_in() {
+        let mut f = fixture();
+        let scope = ("c:\\repos\\new".to_string(), "C:\\repos\\new".to_string());
+        f.app.project_scope = Some(scope.clone());
+        f.app.rebuild_rows();
+        assert!(!f.app.rows.iter().any(|r| matches!(r, TreeRow::Session { .. })));
+        assert_eq!(f.app.selected_project(), Some(scope));
+    }
+
+    #[test]
     fn rediscovery_keeps_the_selection_on_the_same_session() {
         let mut f = fixture();
         f.keys("jjj");

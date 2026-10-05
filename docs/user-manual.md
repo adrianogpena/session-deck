@@ -42,6 +42,8 @@ a colored status dot on each session.
 ### Starting it
 
 - **Install**: build with `cargo build --release` and run `target/release/sdeck.exe` from any terminal (put it on your PATH to start it as `sdeck`).
+- **One project only**: `sdeck --here` lists only the project of the current folder (see
+  [Filters](#filters)).
 - **Run from a clone**: `cargo run --release` from the repository root, in a real terminal (Windows Terminal, PowerShell, the VS Code terminal).
 - **Quit `q` or `Ctrl+C`**: closes Session Deck.
   - Every session running inside it is stopped too; they can be resumed later.
@@ -65,10 +67,12 @@ a colored status dot on each session.
 - **Help bar** (bottom line): the most useful keys. It shortens itself on narrow terminals.
 - **Terminal title**: `Session Deck · ◐ 2 need you` when sessions are waiting or finished unseen,
   so you can see it from the taskbar or another tab.
-- **Layout by width**:
+- **Layout by width** (with `ui.layout` `auto`, the default):
   - 80 columns or more: the panels are side by side.
   - 50 to 79 columns: the sessions panel is above the preview.
   - Under 50 columns: the sessions panel only.
+  - `ui.layout` `side` or `stacked` keeps one arrangement from 50 columns up (see
+    [section 4](#4-global-config-sessiondeckconfigjson)).
 
 ### Moving around
 
@@ -245,8 +249,13 @@ repository form one project. Folders let you group projects further, one level d
   - "Waiting" includes finished-not-seen sessions.
   - Folders and projects with nothing matching are hidden.
 - **Time `*`**: cycles through all time → today → last 3 days → last 7 days.
-- **Clear filters `0`**: removes the status, time and tag filters.
+- **Clear filters `0`**: removes the status, time and tag filters, and the `--here` project scope.
 - The panel title shows "· filtered" while a filter is on.
+- **One project only `sdeck --here`**: started with `--here`, sdeck lists only the git project of the
+  folder it was started in (or that folder itself, outside git), as a top-level row: folders aren't
+  shown, even the one the project is in. The `TAGS` section lists only that project's tags. The panel
+  title shows "· here: <name>". With no session there yet, `n` / `N` start one in it. `0` shows every project
+  again.
 
 ### Tags
 
@@ -280,7 +289,8 @@ different projects without moving anything.
 ### View and look
 
 - **Narrow / widen the sessions panel `<` / `>`**: 5% per press, between 15% and 70% of the width.
-  Remembered.
+  Remembered. When the panels are stacked, they change the sessions panel's height instead (40% to
+  start), remembered separately.
 - **Hide / show the sessions panel `b`** (or `Ctrl+K B` while Interacting): gives
   the preview the whole width.
 - **Mouse `m`** (or `Ctrl+K M` while Interacting): sdeck reports the mouse, on by default (not
@@ -422,6 +432,7 @@ it up next time it starts).
     "showUsage": false,
     "usagePosition": "Float",
     "compactUsage": false,
+    "layout": "auto",
     "detachKey": "ctrl+q",
     "ctl": true
   },
@@ -457,12 +468,17 @@ it up next time it starts).
 - **`ui.expandCollapsedOnActiveJump`**: `[`/`]` (jump to the previous/next started session — running,
   waiting or idle) expands a collapsed folder or project to reach one hidden there when `true` — or
   skips it, only ever landing on a session already shown, when `false`. Default: on.
-- **`ui.showUsage`**: shows a Context/5h/7d usage section in the list for the selected Claude session.
-  Default: off.
+- **`ui.showUsage`**: shows a Context/5h/7d usage section in the list for the selected Claude session,
+  and each running Claude session's context % at the right end of its row (green, yellow from 20%,
+  red from 50%). Default: off.
 - **`ui.usagePosition`**: where the usage section sits: `Float` (right after the last row), `Top` or
   `Bottom` (pinned). Default: `Float`.
 - **`ui.compactUsage`**: the usage section is one line (`ctx 42% · 5h 73% · 7d 12%`) instead of the
   Model/Cache/Context/5h/7d rows. Default: `false`.
+- **`ui.layout`**: how the sessions and preview panels are arranged. `auto` picks by width (side by
+  side from 80 columns, stacked from 50); `side` keeps them side by side from 50 columns, for a tall,
+  narrow window; `stacked` keeps the sessions panel above the preview from 50 columns, for a wide,
+  short one. Below 50 columns only the sessions panel shows, whatever the setting. Default: `auto`.
 - **`ui.detachKey`**: the key that detaches from a full attach and stops interacting, written
   `ctrl+<letter>` (any case). `c`, `h`, `i`, `j`, `m` (control bytes with other meanings) and `k` (the
   chord key) are refused and fall back to `ctrl+q`. Default: `ctrl+q`.

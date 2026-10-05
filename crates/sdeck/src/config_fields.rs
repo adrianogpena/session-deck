@@ -7,7 +7,7 @@ use sdeck_core::agent_catalog::all_agent_ids;
 use sdeck_core::discovery::path_utils::expand_input_path;
 use sdeck_core::status::session_status::SessionStatus;
 use sdeck_core::store::deck_config::{
-    DeckConfig, RestoreSessions, ToolConfig, UsagePosition, DEFAULT_DETACH_KEY,
+    DeckConfig, PanelLayout, RestoreSessions, ToolConfig, UsagePosition, DEFAULT_DETACH_KEY,
 };
 
 use crate::keybindings::{self, display_spec, effective_spec, KeyAction, Target, KEY_ACTIONS};
@@ -79,6 +79,7 @@ enum Setting {
     ExpandCollapsedOnActiveJump,
     ShowUsage,
     UsagePosition,
+    Layout,
     CompactUsage,
     Use24HourClock,
     ProjectSearchRoot,
@@ -283,6 +284,12 @@ impl ConfigField {
                 UsagePosition::Float => "Float",
             }
             .into(),
+            Setting::Layout => match c.ui.layout {
+                PanelLayout::Auto => "Auto",
+                PanelLayout::Side => "Side",
+                PanelLayout::Stacked => "Stacked",
+            }
+            .into(),
             Setting::Use24HourClock => if c.ui.use_24_hour_clock {
                 "24-hour"
             } else {
@@ -377,6 +384,7 @@ impl ConfigField {
             Setting::ShowUsage => c.ui.show_usage = !c.ui.show_usage,
             Setting::CompactUsage => c.ui.compact_usage = !c.ui.compact_usage,
             Setting::UsagePosition => c.ui.usage_position = c.ui.usage_position.next(),
+            Setting::Layout => c.ui.layout = c.ui.layout.next(),
             Setting::Use24HourClock => c.ui.use_24_hour_clock = !c.ui.use_24_hour_clock,
             Setting::ProjectSearchRoot => {
                 let root = input.trim();
@@ -495,6 +503,14 @@ fn build_fields() -> Vec<ConfigField> {
             Number,
             Setting::TrashRetentionDays,
             Some("Deleted sessions older than this are purged from ~/.session-deck/trash/ at startup."),
+        ),
+        ui(
+            "layout",
+            Display,
+            "layout",
+            Toggle,
+            Setting::Layout,
+            "How the panels are arranged — Enter cycles: Auto (side by side from 80 columns, stacked from 50), Side (side by side from 50), Stacked (list above preview from 50). < and > resize the list in either.",
         ),
         ui(
             "recentProjectsFirst",

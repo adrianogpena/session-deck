@@ -345,6 +345,7 @@ mod tests {
             git: None,
             account_tag: None,
             other_account: false,
+            context_percent: None,
         }
     }
 
