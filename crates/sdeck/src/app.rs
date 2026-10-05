@@ -637,6 +637,7 @@ impl App {
                 .and_then(|r| r.seven_day_resets_at)
                 .map(|at| format_reset_time(at, use_24, true)),
             rate_limit,
+            compact: self.config.ui.compact_usage,
         }
     }
 
@@ -1184,6 +1185,19 @@ impl App {
                         reset_label: reset_label.clone(),
                         stale: *metric != UsageMetric::Context
                             && updated_at.is_some_and(|at| is_rate_limit_stale(at, now_ms())),
+                    },
+                    TreeRow::UsageCompact { parts } => ListRow::UsageCompact {
+                        parts: parts
+                            .iter()
+                            .map(|p| {
+                                (
+                                    p.metric,
+                                    p.percent,
+                                    p.metric != UsageMetric::Context
+                                        && p.updated_at.is_some_and(|at| is_rate_limit_stale(at, now_ms())),
+                                )
+                            })
+                            .collect(),
                     },
                     TreeRow::UsageModel { label } => ListRow::UsageModel { label: label.clone() },
                     TreeRow::UsageCache { cache } => ListRow::UsageCache {

@@ -375,7 +375,10 @@ it up next time it starts).
     "recentSessionsFirst": true,
     "newSessionFullScreen": true,
     "gitStatus": true,
-    "expandCollapsedOnActiveJump": true
+    "expandCollapsedOnActiveJump": true,
+    "showUsage": false,
+    "usagePosition": "Float",
+    "compactUsage": false
   },
   "tools": {
     "claude": { "command": "claude-nightly", "args": ["--model", "opus"] },
@@ -406,6 +409,12 @@ it up next time it starts).
 - **`ui.expandCollapsedOnActiveJump`**: `[`/`]` (jump to the previous/next started session — running,
   waiting or idle) expands a collapsed folder or project to reach one hidden there when `true` — or
   skips it, only ever landing on a session already shown, when `false`. Default: on.
+- **`ui.showUsage`**: shows a Context/5h/7d usage section in the list for the selected Claude session.
+  Default: off.
+- **`ui.usagePosition`**: where the usage section sits: `Float` (right after the last row), `Top` or
+  `Bottom` (pinned). Default: `Float`.
+- **`ui.compactUsage`**: the usage section is one line (`ctx 42% · 5h 73% · 7d 12%`) instead of the
+  Model/Cache/Context/5h/7d rows. Default: `false`.
 - **`tools.claude` / `tools.copilot`**:
   - **`enabled`**: `false` hides that agent entirely — its sessions aren't discovered, and its `n`/`N`
     new-session key just flashes a message instead of starting one. Default: on.

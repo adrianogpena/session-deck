@@ -30,6 +30,7 @@ enum Setting {
     ExpandCollapsedOnActiveJump,
     ShowUsage,
     UsagePosition,
+    CompactUsage,
     Use24HourClock,
     ToolEnabled,
     ToolCommand,
@@ -146,6 +147,7 @@ impl ConfigField {
             Setting::GitStatus => on_off(c.ui.git_status),
             Setting::ExpandCollapsedOnActiveJump => on_off(c.ui.expand_collapsed_on_active_jump),
             Setting::ShowUsage => on_off(c.ui.show_usage),
+            Setting::CompactUsage => on_off(c.ui.compact_usage),
             Setting::UsagePosition => match c.ui.usage_position {
                 UsagePosition::Top => "Top",
                 UsagePosition::Bottom => "Bottom",
@@ -226,6 +228,7 @@ impl ConfigField {
                 c.ui.expand_collapsed_on_active_jump = !c.ui.expand_collapsed_on_active_jump
             }
             Setting::ShowUsage => c.ui.show_usage = !c.ui.show_usage,
+            Setting::CompactUsage => c.ui.compact_usage = !c.ui.compact_usage,
             Setting::UsagePosition => c.ui.usage_position = c.ui.usage_position.next(),
             Setting::Use24HourClock => c.ui.use_24_hour_clock = !c.ui.use_24_hour_clock,
             Setting::ToolEnabled => {
@@ -314,6 +317,12 @@ fn build_fields() -> Vec<ConfigField> {
             Toggle,
             Setting::UsagePosition,
             "Where the usage section sits — Enter cycles: Float (right after the last row), Top (pinned above the tree), Bottom (pinned to the bottom of the panel).",
+        ),
+        ui(
+            "compactUsage",
+            Toggle,
+            Setting::CompactUsage,
+            "One-line usage summary instead of the Model/Cache/Context/5h/7d rows.",
         ),
         ui(
             "use24HourClock",
@@ -437,11 +446,12 @@ mod tests {
 
     #[test]
     fn toggles_flip_from_their_defaults() {
-        let cases: [(&str, &str, &str); 5] = [
+        let cases: [(&str, &str, &str); 6] = [
             ("ui.recentProjectsFirst", "off", "on"),
             ("ui.recentSessionsFirst", "on", "off"),
             ("ui.gitStatus", "on", "off"),
             ("ui.expandCollapsedOnActiveJump", "on", "off"),
+            ("ui.compactUsage", "off", "on"),
             ("accounts.shareProjects", "on", "off"),
         ];
         for (label, before, after) in cases {

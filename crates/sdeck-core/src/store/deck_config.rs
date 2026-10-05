@@ -81,6 +81,8 @@ pub struct UiConfig {
     pub show_usage: bool,
     /// Where the usage section sits: top, bottom or float. Default: float.
     pub usage_position: UsagePosition,
+    /// One-line usage summary instead of the Model/Cache/Context/5h/7d rows. Default: false.
+    pub compact_usage: bool,
     /// The 5h reset time shows as `20:30` (true) or `8:30 PM` (false). Default: false.
     pub use_24_hour_clock: bool,
     /// Config dir of the account new sessions launch as; unset = the default account.
@@ -135,6 +137,7 @@ impl Default for DeckConfig {
                 expand_collapsed_on_active_jump: true,
                 show_usage: false,
                 usage_position: UsagePosition::Float,
+                compact_usage: false,
                 use_24_hour_clock: false,
                 active_account_config_dir: None,
                 extra: Map::new(),
@@ -227,6 +230,7 @@ pub fn parse_deck_config(raw: &str) -> DeckConfig {
                 "expandCollapsedOnActiveJump",
                 "showUsage",
                 "usagePosition",
+                "compactUsage",
                 "use24HourClock",
                 "activeAccountConfigDir",
             ],
@@ -249,6 +253,7 @@ pub fn parse_deck_config(raw: &str) -> DeckConfig {
             &mut c.expand_collapsed_on_active_jump,
         );
         flag("showUsage", &mut c.show_usage);
+        flag("compactUsage", &mut c.compact_usage);
         flag("use24HourClock", &mut c.use_24_hour_clock);
         if let Some(p) = ui
             .get("usagePosition")
@@ -348,6 +353,7 @@ pub fn deck_config_to_json(config: &DeckConfig) -> String {
     );
     ui_obj.insert("showUsage".into(), ui.show_usage.into());
     ui_obj.insert("usagePosition".into(), ui.usage_position.as_str().into());
+    ui_obj.insert("compactUsage".into(), ui.compact_usage.into());
     ui_obj.insert("use24HourClock".into(), ui.use_24_hour_clock.into());
     if let Some(dir) = &ui.active_account_config_dir {
         ui_obj.insert("activeAccountConfigDir".into(), dir.clone().into());
@@ -419,6 +425,7 @@ mod tests {
         assert!(c.ui.expand_collapsed_on_active_jump);
         assert!(!c.ui.show_usage);
         assert_eq!(c.ui.usage_position, UsagePosition::Float);
+        assert!(!c.ui.compact_usage);
         assert!(!c.ui.use_24_hour_clock);
         assert_eq!(c.tools["claude"], ToolConfig::default());
         assert_eq!(c.tools["copilot"], ToolConfig::default());
@@ -475,6 +482,13 @@ mod tests {
         assert_eq!(parse_deck_config(&deck_config_to_json(&c)), c);
         let c = parse(json!({ "ui": { "usagePosition": "middle" } }));
         assert_eq!(c.ui.usage_position, UsagePosition::Float);
+    }
+
+    #[test]
+    fn compact_usage_round_trips() {
+        let c = parse(json!({ "ui": { "compactUsage": true } }));
+        assert!(c.ui.compact_usage);
+        assert_eq!(parse_deck_config(&deck_config_to_json(&c)), c);
     }
 
     #[test]

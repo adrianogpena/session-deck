@@ -61,6 +61,10 @@ pub enum ListRow {
     UsageCache {
         cache: Option<(bool, String)>,
     },
+    /// `(metric, percent, stale)` of each metric that has data, on one line.
+    UsageCompact {
+        parts: Vec<(UsageMetric, f64, bool)>,
+    },
 }
 
 /// `(glyph, role, bold)` of a session's status dot.
@@ -416,6 +420,53 @@ fn usage_cache_row(t: Theme, width: usize, cache: Option<&(bool, String)>) -> Li
     ])
 }
 
+/// `ctx 42% · 5h 73% · 7d 12%`, or `—` when no metric has data.
+fn usage_compact_row(t: Theme, width: usize, parts: &[(UsageMetric, f64, bool)]) -> Line<'static> {
+    let lead = "  ";
+    let avail = width.saturating_sub(text_width(lead)).max(1);
+    let pieces: Vec<(String, String, Role)> = parts
+        .iter()
+        .map(|&(metric, percent, stale)| {
+            let name = match metric {
+                UsageMetric::Context => "ctx",
+                other => other.label(),
+            };
+            let role = if stale {
+                Role::TextDim
+            } else {
+                severity_role(usage_severity(metric, percent))
+            };
+            (format!("{name} "), format!("{}%", percent.round()), role)
+        })
+        .collect();
+    let plain = if pieces.is_empty() {
+        "—".to_string()
+    } else {
+        pieces
+            .iter()
+            .map(|(name, value, _)| format!("{name}{value}"))
+            .collect::<Vec<_>>()
+            .join(" · ")
+    };
+    if pieces.is_empty() || text_width(&plain) > avail {
+        let fitted = fit(&plain, avail);
+        let pad = " ".repeat(width.saturating_sub(text_width(lead) + text_width(&fitted)));
+        return Line::styled(format!("{lead}{fitted}{pad}"), t.fg(Role::TextDim));
+    }
+    let mut spans = vec![Span::styled(lead, t.fg(Role::TextDim))];
+    for (i, (name, value, role)) in pieces.into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" · ", t.fg(Role::TextDim)));
+        }
+        spans.push(Span::styled(name, t.fg(Role::TextDim)));
+        spans.push(Span::styled(value, t.fg(role)));
+    }
+    spans.push(Span::raw(
+        " ".repeat(width.saturating_sub(text_width(lead) + text_width(&plain))),
+    ));
+    Line::from(spans)
+}
+
 fn list_row_line(
     t: Theme,
     width: usize,
@@ -453,6 +504,7 @@ fn list_row_line(
         } => usage_row(t, width, *metric, *percent, reset_label.as_deref(), *stale),
         ListRow::UsageModel { label } => usage_model_row(t, width, label.as_deref()),
         ListRow::UsageCache { cache } => usage_cache_row(t, width, cache.as_ref()),
+        ListRow::UsageCompact { parts } => usage_compact_row(t, width, parts),
         ListRow::Folder {
             name,
             counts,
@@ -776,6 +828,42 @@ mod tests {
             assert_eq!(rendered[usage_at + 5], "  7d      —");
             assert!(rendered.iter().any(|r| r.contains("Fix the build")));
         }
+    }
+
+    #[test]
+    fn a_compact_usage_block_is_one_line_in_every_position() {
+        let t = Theme::new(ThemeName::Dark);
+        let mut rows = fixture();
+        let at = rows
+            .iter()
+            .position(|r| matches!(r, ListRow::UsageModel { .. }))
+            .unwrap();
+        rows.truncate(at);
+        rows.push(ListRow::UsageCompact {
+            parts: vec![
+                (UsageMetric::Context, 42.0, false),
+                (UsageMetric::FiveHour, 73.0, false),
+                (UsageMetric::SevenDay, 12.0, true),
+            ],
+        });
+        for position in [UsagePosition::Float, UsagePosition::Top, UsagePosition::Bottom] {
+            let lines = render_list_panel(t, 44, 14, &rows, 2, "", "empty", position);
+            let rendered: Vec<String> = lines.iter().map(|l| text(l).trim_end().to_string()).collect();
+            let usage_at = rendered.iter().position(|r| r == "── USAGE").unwrap();
+            assert_eq!(
+                rendered[usage_at + 1],
+                "  ctx 42% · 5h 73% · 7d 12%",
+                "{position:?}"
+            );
+            assert!(lines.iter().all(|l| text(l).chars().count() == 44));
+        }
+        let narrow = text(&list_row_line(t, 14, rows.last().unwrap(), false, false));
+        assert_eq!(narrow.chars().count(), 14);
+        let empty = ListRow::UsageCompact { parts: vec![] };
+        assert_eq!(
+            text(&list_row_line(t, 20, &empty, false, false)).trim_end(),
+            "  —"
+        );
     }
 
     #[test]

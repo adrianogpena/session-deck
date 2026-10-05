@@ -73,6 +73,18 @@ pub enum TreeRow {
     UsageCache {
         cache: Option<UsageCache>,
     },
+    /// `ui.compactUsage`: the one row that replaces the Model/Cache/Context/5h/7d rows. Only the
+    /// metrics that have data are listed.
+    UsageCompact {
+        parts: Vec<CompactUsagePart>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompactUsagePart {
+    pub metric: UsageMetric,
+    pub percent: f64,
+    pub updated_at: Option<i64>,
 }
 
 /// `Cached Session` while the prompt cache is alive, `Fetch Session` once it expired.
@@ -104,6 +116,36 @@ pub fn usage_cache(state: CacheState, now_ms: i64) -> UsageCache {
 /// The rows under the USAGE divider.
 pub fn usage_rows(usage: &UsageSectionInput) -> Vec<TreeRow> {
     let rate = usage.rate_limit.as_ref();
+    if usage.compact {
+        let rate_updated_at = rate.map(|r| r.updated_at);
+        let parts = [
+            (
+                UsageMetric::Context,
+                usage.context_percent,
+                usage.context_updated_at,
+            ),
+            (
+                UsageMetric::FiveHour,
+                rate.and_then(|r| r.five_hour_percent),
+                rate_updated_at,
+            ),
+            (
+                UsageMetric::SevenDay,
+                rate.and_then(|r| r.seven_day_percent),
+                rate_updated_at,
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(metric, percent, updated_at)| {
+            percent.map(|percent| CompactUsagePart {
+                metric,
+                percent,
+                updated_at,
+            })
+        })
+        .collect();
+        return vec![TreeRow::UsageCompact { parts }];
+    }
     let model_label = usage.model.as_ref().map(|model| match &usage.effort {
         Some(effort) => format!("{model} · {effort}"),
         None => model.clone(),
@@ -142,7 +184,11 @@ impl TreeRow {
     pub fn is_unselectable(&self) -> bool {
         matches!(
             self,
-            Self::Divider { .. } | Self::Usage { .. } | Self::UsageModel { .. } | Self::UsageCache { .. }
+            Self::Divider { .. }
+                | Self::Usage { .. }
+                | Self::UsageModel { .. }
+                | Self::UsageCache { .. }
+                | Self::UsageCompact { .. }
         )
     }
 }
@@ -172,6 +218,8 @@ pub struct UsageSectionInput {
     pub rate_limit: Option<RateLimitUsage>,
     pub five_hour_reset_label: Option<String>,
     pub seven_day_reset_label: Option<String>,
+    /// One `ctx · 5h · 7d` row instead of the full block.
+    pub compact: bool,
 }
 
 /// A per-session predicate or lookup the tree is built from.
@@ -1123,6 +1171,7 @@ mod tests {
                 }),
                 five_hour_reset_label: Some("8:30 PM".into()),
                 seven_day_reset_label: Some("Sun 4:21 PM".into()),
+                compact: false,
             }),
             ..opts()
         };
@@ -1179,6 +1228,51 @@ mod tests {
         for r in &tail[3..6] {
             assert!(matches!(r, TreeRow::Usage { percent: None, .. }));
         }
+    }
+
+    #[test]
+    fn a_compact_usage_section_is_one_row_with_only_the_metrics_that_have_data() {
+        let sessions = fixture();
+        let usage = UsageSectionInput {
+            context_percent: Some(42.0),
+            context_updated_at: Some(789),
+            rate_limit: Some(RateLimitUsage {
+                five_hour_percent: Some(73.0),
+                five_hour_resets_at: None,
+                seven_day_percent: None,
+                seven_day_resets_at: None,
+                updated_at: 456,
+            }),
+            compact: true,
+            ..Default::default()
+        };
+        let o = TreeOptions {
+            usage: Some(usage),
+            ..opts()
+        };
+        let rows = build_tree(&sessions, &default_tree_prefs(), &o).rows;
+        assert_eq!(
+            rows[rows.len() - 2..],
+            [
+                TreeRow::Divider {
+                    label: "USAGE".into()
+                },
+                TreeRow::UsageCompact {
+                    parts: vec![
+                        CompactUsagePart {
+                            metric: UsageMetric::Context,
+                            percent: 42.0,
+                            updated_at: Some(789)
+                        },
+                        CompactUsagePart {
+                            metric: UsageMetric::FiveHour,
+                            percent: 73.0,
+                            updated_at: Some(456)
+                        },
+                    ]
+                },
+            ]
+        );
     }
 
     #[test]
