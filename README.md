@@ -33,11 +33,24 @@ irm https://github.com/adrianogpena/session-deck/releases/latest/download/sdeck-
 npm install -g sdeck
 ```
 
-Or build from source (stable Rust toolchain):
+Or build from source:
 
-```bash
-cargo build --release        # target/release/sdeck.exe
-```
+1. Install Rust with [rustup](https://rustup.rs) (the stable toolchain). On Windows it also needs the
+   MSVC C++ build tools, which the rustup installer offers to set up.
+2. Clone the repository and build it:
+
+   ```bash
+   git clone https://github.com/adrianogpena/session-deck.git
+   cd session-deck
+   cargo build --release
+   ```
+
+3. The binary is `target/release/sdeck.exe`. Run it directly, or copy it to a folder on your PATH.
+   To install it into Cargo's bin folder instead (already on your PATH after installing Rust):
+
+   ```bash
+   cargo install --path crates/sdeck
+   ```
 
 Run `sdeck` from a real terminal (Windows Terminal, PowerShell, the VS Code terminal). It needs `claude`
 and/or `copilot` on your PATH, or set their location in the [config](#configuration).
