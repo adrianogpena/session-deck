@@ -73,8 +73,7 @@ use crate::sessions::{
     discover_found, display_title, merge_found, refresh_live_title, DeckSession, SessionStatus, StatusTracker,
 };
 use crate::theme::{
-    extract_background_reply, next_theme_preference, preference_label, theme_label, Role, Theme, ThemeName,
-    OSC11_QUERY,
+    extract_background_reply, next_theme_preference, preference_label, Role, Theme, ThemeName, OSC11_QUERY,
 };
 use crate::tree::{build_tree, usage_cache, usage_rows, BuiltTree, TreeOptions, TreeRow, UsageSectionInput};
 use crate::view::list_panel::{render_list_panel, ListRow};
@@ -830,6 +829,7 @@ impl App {
             status,
             elsewhere: self.procs.is_elsewhere(s),
             agent: s.agent.clone(),
+            show_agent: s.agent != self.active_agent,
             time_label: if active {
                 "now".into()
             } else {
@@ -1235,11 +1235,7 @@ impl App {
         let row = |y: u16| Rect::new(0, y, area.width, 1).intersection(area);
         let hidden = self.hidden_projects();
         let (counts, done, in_view, live) = self.counts(&hidden);
-        let label = theme_label(self.theme_preference, t.name);
-        frame.render_widget(
-            bars::header(t, cols, &counts, done, live, &label, VERSION),
-            row(0),
-        );
+        frame.render_widget(bars::header(t, cols, live), row(0));
         frame.render_widget(
             bars::pills(
                 t,

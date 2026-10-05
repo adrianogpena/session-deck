@@ -321,6 +321,7 @@ mod tests {
             status,
             elsewhere: false,
             agent: "claude".into(),
+            show_agent: false,
             time_label: "5m ago".into(),
             cwd: "~/repos/api".into(),
             id: Some("abc-123".into()),

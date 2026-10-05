@@ -44,6 +44,8 @@ pub struct SessionView {
     /// Open in another terminal rather than here.
     pub elsewhere: bool,
     pub agent: String,
+    /// The agent isn't the active one, so the list row names it.
+    pub show_agent: bool,
     pub time_label: String,
     pub cwd: String,
     pub id: Option<String>,

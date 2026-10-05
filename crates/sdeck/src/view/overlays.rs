@@ -223,7 +223,7 @@ fn popup_width(frame: &Frame, widest: usize) -> Option<(usize, usize)> {
 }
 
 /// `?`: the key reference. `scroll` is clamped here to what the content allows.
-pub fn render_help(frame: &mut Frame, t: Theme, scroll: &Cell<usize>, version: &str) {
+pub fn render_help(frame: &mut Frame, t: Theme, scroll: &Cell<usize>, version: &str, theme: &str) {
     let Some((width, inner)) = popup_width(frame, 66) else {
         return;
     };
@@ -240,7 +240,7 @@ pub fn render_help(frame: &mut Frame, t: Theme, scroll: &Cell<usize>, version: &
     }
     content.push(dim(
         t,
-        &format!("Session Deck v{version} · Esc or ? to close"),
+        &format!("sdeck v{version} · theme {theme} · Esc or ? to close"),
         inner,
     ));
 
@@ -957,7 +957,7 @@ mod tests {
     #[test]
     fn help_scrolls_and_clamps_its_offset() {
         let scroll = Cell::new(1000);
-        let screen = draw(80, 20, |f| render_help(f, dark(), &scroll, "9.9.9"));
+        let screen = draw(80, 20, |f| render_help(f, dark(), &scroll, "9.9.9", "dark"));
         assert!(scroll.get() > 0 && scroll.get() < 1000);
         assert!(screen.iter().any(|l| l.contains("Esc or ? to close")));
         assert!(screen
@@ -965,16 +965,31 @@ mod tests {
             .any(|l| l.contains("▲ more above") || l.contains("Esc or ?")));
 
         scroll.set(0);
-        let screen = draw(80, 20, |f| render_help(f, dark(), &scroll, "9.9.9"));
+        let screen = draw(80, 20, |f| render_help(f, dark(), &scroll, "9.9.9", "dark"));
         assert!(screen.iter().any(|l| l.contains("KEYBOARD SHORTCUTS")));
         assert!(screen.iter().any(|l| l.contains("▼ more below")));
         assert!(screen.iter().all(|l| !l.contains("Esc or ? to close")));
     }
 
     #[test]
+    fn help_shows_the_version_theme_and_filter_keys() {
+        let scroll = Cell::new(0);
+        let screen = draw(80, 120, |f| {
+            render_help(f, dark(), &scroll, "9.9.9", "system (dark)")
+        });
+        let all = screen.join(
+            "
+",
+        );
+        assert!(all.contains("sdeck v9.9.9 · theme system (dark)"), "{all}");
+        assert!(all.contains("Time: all"));
+        assert!(all.contains("Clear filters"));
+    }
+
+    #[test]
     fn help_lists_the_account_switch_key() {
         let scroll = Cell::new(0);
-        let screen = draw(80, 60, |f| render_help(f, dark(), &scroll, "1"));
+        let screen = draw(80, 60, |f| render_help(f, dark(), &scroll, "1", "dark"));
         assert!(screen
             .iter()
             .any(|l| l.contains("F4") && l.contains("Switch account")));

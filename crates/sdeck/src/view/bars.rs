@@ -26,38 +26,12 @@ fn category_glyph(category: StatusCategory) -> (char, Role) {
     }
 }
 
-/// Top row: the status logo, the name, and `N live · <theme> · v<version>` on the right.
-pub fn header(
-    t: Theme,
-    cols: usize,
-    counts: &StatusCounts,
-    done_count: usize,
-    live_count: usize,
-    theme_label: &str,
-    version: &str,
-) -> Line<'static> {
-    let dot = |c: &'static str, active: bool, role: Role| {
-        Span::styled(c, t.fg(if active { role } else { Role::TextDim }))
-    };
-    let sep = |c: &'static str| Span::styled(c, t.fg(Role::Border));
-    let logo = [
-        sep("⟨"),
-        dot("●", counts.get(StatusCategory::Running) > 0, Role::Red),
-        sep("│"),
-        dot("◐", counts.get(StatusCategory::Waiting) > 0, Role::Yellow),
-        sep("│"),
-        dot("●", done_count > 0, Role::Green),
-        sep("│"),
-        dot("○", counts.get(StatusCategory::Idle) > 0, Role::Text),
-        sep("⟩"),
-    ];
-    let logo_width = text_width("⟨●│◐│●│○⟩");
-    let left_width = 1 + logo_width + 1 + text_width("Session Deck");
-    let right = format!("{live_count} live · {theme_label} · v{version} ");
+/// Top row: the name on the left, `N live` on the right.
+pub fn header(t: Theme, cols: usize, live_count: usize) -> Line<'static> {
     let title = bold(t.fg(Role::Accent));
+    let right = format!("{live_count} live ");
+    let left_width = 1 + text_width("Session Deck");
     let mut spans = vec![Span::raw(" ")];
-    spans.extend(logo);
-    spans.push(Span::raw(" "));
     match cols
         .checked_sub(left_width + text_width(&right))
         .filter(|&gap| gap >= 1)
@@ -67,16 +41,13 @@ pub fn header(
             spans.push(blank(gap));
             spans.push(Span::styled(right, t.fg(Role::TextDim)));
         }
-        None => spans.push(Span::styled(
-            fit("Session Deck", cols.saturating_sub(logo_width + 2)),
-            title,
-        )),
+        None => spans.push(Span::styled(fit("Session Deck", cols.saturating_sub(2)), title)),
     }
     Line::from(spans).style(t.bg(Role::Surface))
 }
 
 /// Second row: `All N`, one pill per status category (plus the done pill after waiting), the time
-/// filter, the tag filter if any, and the key hint on the right when it fits.
+/// filter, and the tag filter if any.
 #[allow(clippy::too_many_arguments)] // mirrors TS `renderPills`
 pub fn pills(
     t: Theme,
@@ -135,14 +106,7 @@ pub fn pills(
         extra += 1;
     }
     let plain_width = plain_width + extra;
-    let hint = "! @ # & ~ filter · * time · 0 clear ";
-    match cols
-        .checked_sub(plain_width + text_width(hint))
-        .filter(|&gap| gap >= 2)
-    {
-        Some(gap) => spans.extend([blank(gap), Span::styled(hint, t.fg(Role::TextDim))]),
-        None => spans.push(blank(cols.saturating_sub(plain_width))),
-    }
+    spans.push(blank(cols.saturating_sub(plain_width)));
     Line::from(spans)
 }
 
@@ -266,44 +230,29 @@ mod tests {
     }
 
     #[test]
-    fn header_at_120_and_60_columns() {
-        let line = || header(DARK, 120, &counts(), 1, 3, "system (dark)", "0.1.0");
-        assert_eq!(line().width(), 120);
-        let row = snapshot(line(), 120);
-        assert!(row.starts_with(" ⟨●│◐│●│○⟩ Session Deck "), "{row}");
-        assert!(row.ends_with("3 live · system (dark) · v0.1.0 "), "{row}");
+    fn header_at_120_60_and_30_columns() {
+        let line = header(DARK, 120, 3);
+        assert_eq!(line.width(), 120);
+        let row = snapshot(line, 120);
+        assert!(row.starts_with(" Session Deck "), "{row}");
+        assert!(row.ends_with("3 live "), "{row}");
 
-        let narrow = header(DARK, 30, &counts(), 0, 3, "system (dark)", "0.1.0");
+        let narrow = header(DARK, 30, 3);
         assert_eq!(narrow.width(), 30);
-        assert_eq!(snapshot(narrow, 30), " ⟨●│◐│●│○⟩ Session Deck       ");
-        let mid = header(DARK, 60, &counts(), 0, 3, "dark", "0.1.0");
         assert_eq!(
-            snapshot(mid, 60),
-            format!(" ⟨●│◐│●│○⟩ Session Deck{}3 live · dark · v0.1.0 ", " ".repeat(14))
+            snapshot(narrow, 30),
+            format!(" Session Deck{}3 live ", " ".repeat(10))
         );
-    }
-
-    #[test]
-    fn header_logo_dims_inactive_dots() {
-        let line = header(DARK, 120, &counts(), 0, 0, "dark", "0.1.0");
-        let running = &line.spans[2];
-        let waiting = &line.spans[4];
-        assert_eq!(running.style.fg, Some(DARK.color(Role::Red)));
-        assert_eq!(waiting.style.fg, Some(DARK.color(Role::TextDim)));
+        let tiny = header(DARK, 10, 3);
+        assert_eq!(snapshot(tiny, 10), " Session… ");
     }
 
     #[test]
     fn pills_at_120_and_60_columns() {
         let row = snapshot(pills(DARK, 120, 7, &counts(), 1, &[], TimeFilter::All, None), 120);
         let left = "  All 7  ● 2  ◐ 0  ✓ 1  ○ 5  ✕ 0  ■ 0 │ all time ";
-        let hint = "! @ # & ~ filter · * time · 0 clear ";
-        assert_eq!(
-            row,
-            format!(
-                "{left}{}{hint}",
-                " ".repeat(120 - text_width(left) - text_width(hint))
-            )
-        );
+        assert_eq!(row, format!("{left}{}", " ".repeat(120 - text_width(left))));
+        assert!(!row.contains("filter"));
         let line = pills(
             DARK,
             60,

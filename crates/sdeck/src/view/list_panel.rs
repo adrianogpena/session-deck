@@ -202,7 +202,11 @@ fn session_row(t: Theme, width: usize, r: SessionRow, selected: bool) -> Line<'s
     let elsewhere_mark = if v.elsewhere { "↗ " } else { "" };
     let (glyph, glyph_role, glyph_bold) = status_glyph(v.status);
     let left_plain = format!("{checkbox_plain}{indent}{connector} {glyph} {pin_mark}{elsewhere_mark}");
-    let agent_text = format!(" {}", v.agent);
+    let agent_text = if v.show_agent {
+        format!(" {}", v.agent)
+    } else {
+        String::new()
+    };
     // The other account's tag sits right after the title, before the agent name.
     let tag_text = v
         .account_tag
@@ -611,6 +615,7 @@ mod tests {
             status,
             elsewhere: false,
             agent: "claude".into(),
+            show_agent: false,
             time_label: "now".into(),
             cwd: "~/repos/api".into(),
             id: Some("id".into()),
@@ -644,6 +649,8 @@ mod tests {
         other.account_tag = Some("adrianogpena".into());
         let mut away = view("Open in another terminal", SessionStatus::Idle);
         away.elsewhere = true;
+        away.agent = "copilot".into();
+        away.show_agent = true;
         vec![
             ListRow::Folder {
                 name: "Work".into(),
@@ -734,9 +741,9 @@ mod tests {
             "────────────────────────────────────────────",
             "1▾ Work (3) ●1",
             "   ▾ api (3) ●1 ◐1 ⇡✱",
-            "  ├─ ● ↑ Fix the build claude",
-            "  ├─ ○ ↗ Open in another terminal claude",
-            "  └─ ■ ↓ Other account adrianogpena claude",
+            "  ├─ ● ↑ Fix the build",
+            "  ├─ ○ ↗ Open in another terminal copilot",
+            "  └─ ■ ↓ Other account adrianogpena",
             "2▸ web (1)",
             "── TAGS",
             "  # urgent (2)",

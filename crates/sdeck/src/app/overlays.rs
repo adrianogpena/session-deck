@@ -21,7 +21,7 @@ use crate::agents::{agents_dir, discover_local_agents, LocalAgent};
 use crate::commands::{palette_matches, CommandId, PALETTE_COMMANDS};
 use crate::config_fields::{ConfigFieldKind, CONFIG_FIELDS};
 use crate::skills::{claude_settings_path, discover_local_skills, skills_dir, LocalSkill};
-use crate::theme::Theme;
+use crate::theme::{theme_label, Theme};
 use crate::view::overlays::AccountUsage;
 use crate::view::overlays::{
     render_alerts, render_config, render_help, render_palette, render_search, render_skills, render_trace,
@@ -305,7 +305,13 @@ impl App {
     pub(super) fn draw_overlay(&self, frame: &mut Frame, t: Theme) {
         match &self.overlay {
             None => {}
-            Some(Overlay::Help { scroll }) => render_help(frame, t, scroll, VERSION),
+            Some(Overlay::Help { scroll }) => render_help(
+                frame,
+                t,
+                scroll,
+                VERSION,
+                &theme_label(self.theme_preference, t.name),
+            ),
             Some(Overlay::Config { selected }) => render_config(
                 frame,
                 t,
