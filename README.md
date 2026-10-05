@@ -1,4 +1,6 @@
-# Session Deck
+<p align="center"><img src="docs/images/logo.png" alt="Session Deck logo" width="128"></p>
+
+<h1 align="center">Session Deck</h1>
 
 **One terminal window for all your Claude Code and GitHub Copilot CLI sessions.**
 
