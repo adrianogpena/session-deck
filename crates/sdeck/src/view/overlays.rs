@@ -128,7 +128,7 @@ const HELP_SECTIONS: &[(&str, &[Hint])] = &[
         &[
             ("< >", "Narrow / widen the sessions panel"),
             ("b  Ctrl+K b", "Hide / show the sessions panel"),
-            ("T", "Theme: dark · light · system"),
+            (":  Choose theme", "Pick a palette (Tokyo Night, Catppuccin, Gruvbox, Nord, Dracula, Rose Pine, Solarized), or follow the system"),
             ("m  Ctrl+K m", "Mouse scrolling: off by default (so click-drag selects text), on to scroll the preview with the wheel"),
         ],
     ),

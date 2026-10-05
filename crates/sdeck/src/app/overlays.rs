@@ -297,6 +297,7 @@ impl App {
             CommandId::Rename => self.rename(now),
             CommandId::MoveToFolder => self.open_move_picker(now),
             CommandId::OpenConfig => self.open_config(),
+            CommandId::ChooseTheme => self.open_theme_picker(),
             CommandId::ToggleSidebar => self.toggle_sidebar(),
             CommandId::OpenTrash => self.open_trash_picker(now),
         }
@@ -305,13 +306,9 @@ impl App {
     pub(super) fn draw_overlay(&self, frame: &mut Frame, t: Theme) {
         match &self.overlay {
             None => {}
-            Some(Overlay::Help { scroll }) => render_help(
-                frame,
-                t,
-                scroll,
-                VERSION,
-                &theme_label(self.theme_preference, t.name),
-            ),
+            Some(Overlay::Help { scroll }) => {
+                render_help(frame, t, scroll, VERSION, &theme_label(self.theme_preference, t))
+            }
             Some(Overlay::Config { selected }) => render_config(
                 frame,
                 t,

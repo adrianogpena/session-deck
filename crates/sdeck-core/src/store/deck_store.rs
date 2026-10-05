@@ -72,6 +72,9 @@ impl ThemePreference {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct UiPrefs {
     pub theme: Option<ThemePreference>,
+    /// Palette ids used while the theme is dark / light; an unknown id falls back to the default.
+    pub dark_theme: Option<String>,
+    pub light_theme: Option<String>,
     /// Sessions panel width, as a percentage of the terminal width.
     pub sidebar_pct: Option<f64>,
     /// Which agent `n` (new session) starts, and whose info popups are shown. An unrecognized or
@@ -83,6 +86,8 @@ pub struct UiPrefs {
 impl UiPrefs {
     fn is_empty(&self) -> bool {
         self.theme.is_none()
+            && self.dark_theme.is_none()
+            && self.light_theme.is_none()
             && self.sidebar_pct.is_none()
             && self.active_agent.is_none()
             && self.extra.is_empty()
@@ -168,6 +173,8 @@ fn parse_ui_prefs(ui: &Value) -> Option<UiPrefs> {
             .get("theme")
             .and_then(Value::as_str)
             .and_then(ThemePreference::parse),
+        dark_theme: non_blank_str(obj.get("darkTheme")),
+        light_theme: non_blank_str(obj.get("lightTheme")),
         sidebar_pct: obj
             .get("sidebarPct")
             .and_then(Value::as_f64)
@@ -178,9 +185,19 @@ fn parse_ui_prefs(ui: &Value) -> Option<UiPrefs> {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string),
-        extra: extras(obj, &["theme", "sidebarPct", "activeAgent"]),
+        extra: extras(
+            obj,
+            &["theme", "darkTheme", "lightTheme", "sidebarPct", "activeAgent"],
+        ),
     };
     (!prefs.is_empty()).then_some(prefs)
+}
+
+fn non_blank_str(v: Option<&Value>) -> Option<String> {
+    v.and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 fn dedupe(items: Vec<String>) -> Vec<String> {
@@ -211,6 +228,12 @@ fn ui_prefs_to_value(ui: &UiPrefs) -> Value {
     let mut obj = Map::new();
     if let Some(t) = ui.theme {
         obj.insert("theme".into(), t.as_str().into());
+    }
+    if let Some(t) = &ui.dark_theme {
+        obj.insert("darkTheme".into(), t.clone().into());
+    }
+    if let Some(t) = &ui.light_theme {
+        obj.insert("lightTheme".into(), t.clone().into());
     }
     if let Some(p) = ui.sidebar_pct {
         obj.insert("sidebarPct".into(), number_value(p));
@@ -291,6 +314,8 @@ pub enum Patch<T> {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct UiPatch {
     pub theme: Patch<ThemePreference>,
+    pub dark_theme: Patch<String>,
+    pub light_theme: Patch<String>,
     pub sidebar_pct: Patch<f64>,
     pub active_agent: Patch<String>,
 }
@@ -317,6 +342,8 @@ pub fn apply_ui_patch(state: &DeckStateFile, patch: &UiPatch) -> DeckStateFile {
     let current = state.ui.clone().unwrap_or_default();
     let merged = UiPrefs {
         theme: merge(&current.theme, &patch.theme),
+        dark_theme: merge(&current.dark_theme, &patch.dark_theme).filter(|t| !t.trim().is_empty()),
+        light_theme: merge(&current.light_theme, &patch.light_theme).filter(|t| !t.trim().is_empty()),
         sidebar_pct: merge(&current.sidebar_pct, &patch.sidebar_pct)
             .filter(|p| (SIDEBAR_PCT_MIN..=SIDEBAR_PCT_MAX).contains(p)),
         active_agent: merge(&current.active_agent, &patch.active_agent)
@@ -767,6 +794,26 @@ mod tests {
         let state =
             parse_deck_state(&json!({ "sessions": {}, "ui": { "theme": "neon" } }).to_string()).unwrap();
         assert_eq!(state.ui, None);
+    }
+
+    #[test]
+    fn palette_ids_round_trip_and_blank_ones_are_dropped() {
+        let state = parse_deck_state(
+            &json!({ "sessions": {}, "ui": { "darkTheme": " nord ", "lightTheme": "  " } }).to_string(),
+        )
+        .unwrap();
+        let ui = state.ui.clone().unwrap();
+        assert_eq!(ui.dark_theme.as_deref(), Some("nord"));
+        assert_eq!(ui.light_theme, None);
+        assert!(deck_state_to_json(&state).contains("\"darkTheme\": \"nord\""));
+        let cleared = apply_ui_patch(
+            &state,
+            &UiPatch {
+                dark_theme: Patch::Clear,
+                ..Default::default()
+            },
+        );
+        assert_eq!(cleared.ui, None);
     }
 
     #[test]

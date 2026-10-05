@@ -33,6 +33,8 @@ pub(super) struct TextPrompt {
 
 /// What Enter does with the chosen entry; the ids are the agents the picker lists, in order.
 pub(super) enum PickerAction {
+    /// One entry per picker row, in order; `None` follows the system.
+    SetTheme(Vec<Option<&'static crate::theme::Palette>>),
     SetActiveAgent(Vec<String>),
     NewSession(Vec<String>),
     /// Session ids of the trash entries listed, in order.
@@ -135,7 +137,11 @@ impl App {
             "\x1b[B" | "\x1bOB" | "j" => picker.index = (picker.index + 1).min(picker.items.len() - 1),
             "\r" => {
                 if let Some(picker) = self.picker.take() {
+                    let keeps_open = matches!(picker.action, PickerAction::SetTheme(_));
                     self.pick(picker, now);
+                    if keeps_open {
+                        self.open_theme_picker();
+                    }
                 }
             }
             "\x1b" | "q" | "\x03" => {
@@ -189,6 +195,10 @@ impl App {
 
     fn pick(&mut self, picker: Picker, now: Instant) {
         match picker.action {
+            PickerAction::SetTheme(choices) => match choices[picker.index] {
+                Some(palette) => self.set_palette(palette, now),
+                None => self.set_system_preference(now),
+            },
             PickerAction::SetActiveAgent(ids) => self.set_active_agent(&ids[picker.index], now),
             PickerAction::NewSession(ids) => self.new_session(&ids[picker.index], now),
             PickerAction::RestoreFromTrash(ids) => self.restore_from_trash(&ids[picker.index], now),

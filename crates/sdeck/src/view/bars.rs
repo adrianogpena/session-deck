@@ -210,9 +210,7 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
-    const DARK: Theme = Theme {
-        name: ThemeName::Dark,
-    };
+    const DARK: Theme = Theme::new(ThemeName::Dark);
 
     /// Draws `line` on a one-row TestBackend `cols` wide and returns the row's text.
     fn snapshot(line: Line<'static>, cols: u16) -> String {

@@ -234,6 +234,8 @@ pub fn render_preview_panel(t: Theme, rect: Rect, buf: &mut Buffer, content: Opt
         TermWidget {
             screen,
             show_cursor: content.interacting,
+            default_fg: t.color(Role::Text),
+            default_bg: t.color(Role::Bg),
         }
         .render(body, buf);
         return;
@@ -311,9 +313,7 @@ mod tests {
     use crate::theme::ThemeName;
     use sdeck_core::discovery::git_status::GitStatus;
 
-    const T: Theme = Theme {
-        name: ThemeName::Dark,
-    };
+    const T: Theme = Theme::new(ThemeName::Dark);
 
     fn view(status: SessionStatus) -> SessionView {
         SessionView {

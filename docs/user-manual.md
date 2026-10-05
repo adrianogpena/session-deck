@@ -288,7 +288,11 @@ different projects without moving anything.
   own text selection, letting you copy from the preview. Turn it on to scroll the preview with the
   wheel or a click-drag; turn it back off to select and copy again. Always off while attached
   (`Enter`) — the agent gets the terminal's mouse events there, not sdeck.
-- **Theme `T`**: cycles dark → light → system (Tokyo Night colors). Remembered.
+- **Theme**: open the command palette (`:`) and run **Choose theme**. The list shows **System** and
+  every palette, each marked `(Dark)` or `(Light)`, with a family's two variants on adjacent lines
+  (Tokyo Night, Catppuccin Mocha/Latte, Gruvbox, Nord, Dracula/Alucard, Rose Pine/Dawn, Solarized).
+  Picking a palette remembers it for its side. System uses the remembered palette of whichever side
+  the terminal is on; a side with no pick follows the same family as the other one (Dracula → Alucard).
   - **System** follows your terminal's background color, or Windows' dark/light setting if the
     terminal doesn't report it.
 - **Refresh `r`**: reloads the session list from disk.

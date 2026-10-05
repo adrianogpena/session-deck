@@ -36,6 +36,7 @@ use indexmap::IndexMap;
 use ratatui::backend::Backend;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
+use ratatui::widgets::Block;
 use ratatui::{Frame, Terminal};
 use sdeck_core::agent_catalog::all_agent_ids;
 use sdeck_core::discovery::claude_storage::{clear_session_meta_cache, read_cache_state};
@@ -73,14 +74,15 @@ use crate::sessions::{
     discover_found, display_title, merge_found, refresh_live_title, DeckSession, SessionStatus, StatusTracker,
 };
 use crate::theme::{
-    extract_background_reply, next_theme_preference, preference_label, Role, Theme, ThemeName, OSC11_QUERY,
+    extract_background_reply, resolve_palette, theme_label, Palette, Role, Theme, ThemeName, OSC11_QUERY,
+    PALETTES,
 };
 use crate::tree::{build_tree, usage_cache, usage_rows, BuiltTree, TreeOptions, TreeRow, UsageSectionInput};
 use crate::view::list_panel::{render_list_panel, ListRow};
 use crate::view::overlays::AccountUsage;
 use crate::view::preview_panel::{group_preview_lines, render_preview_panel};
 use crate::view::{bars, overlay, GroupCounts, SessionView};
-use input::{Confirm, Picker, TextPrompt};
+use input::{Confirm, Picker, PickerAction, TextPrompt};
 use overlays::Overlay;
 use quit::QuitConfirm;
 
@@ -101,6 +103,9 @@ pub struct App {
     tx: Sender<AppEvent>,
     os_theme_probe: Option<OsThemeProbe>,
     theme_preference: ThemePreference,
+    /// Saved palette ids for the dark and light themes (see [`resolve_palette`]).
+    dark_palette: Option<String>,
+    light_palette: Option<String>,
     system_theme: ThemeName,
     /// Set once the terminal answers an OSC 11 query; from then on the OS setting isn't consulted.
     terminal_reports_background: bool,
@@ -224,6 +229,8 @@ impl App {
             tx,
             os_theme_probe,
             theme_preference: ui.theme.unwrap_or(ThemePreference::System),
+            dark_palette: ui.dark_theme,
+            light_palette: ui.light_theme,
             system_theme: ThemeName::Dark,
             terminal_reports_background: false,
             query_terminal_background: true,
@@ -859,11 +866,112 @@ impl App {
     // ---------------------------------------------------------------------------------------------
 
     fn theme(&self) -> Theme {
-        Theme::new(match self.theme_preference {
+        let kind = match self.theme_preference {
             ThemePreference::Dark => ThemeName::Dark,
             ThemePreference::Light => ThemeName::Light,
             ThemePreference::System => self.system_theme,
-        })
+        };
+        let (saved, other) = match kind {
+            ThemeName::Dark => (&self.dark_palette, &self.light_palette),
+            ThemeName::Light => (&self.light_palette, &self.dark_palette),
+        };
+        Theme::from_palette(resolve_palette(kind, saved.as_deref(), other.as_deref()))
+    }
+
+    /// Picks `palette` outright: its kind becomes the theme (so `system` no longer overrides it) and
+    /// the palette is remembered for that kind.
+    pub(super) fn set_palette(&mut self, palette: &'static Palette, now: Instant) {
+        let (preference, patch) = match palette.kind {
+            ThemeName::Dark => {
+                self.dark_palette = Some(palette.id.to_string());
+                (
+                    ThemePreference::Dark,
+                    UiPatch {
+                        dark_theme: Patch::Set(palette.id.to_string()),
+                        ..Default::default()
+                    },
+                )
+            }
+            ThemeName::Light => {
+                self.light_palette = Some(palette.id.to_string());
+                (
+                    ThemePreference::Light,
+                    UiPatch {
+                        light_theme: Patch::Set(palette.id.to_string()),
+                        ..Default::default()
+                    },
+                )
+            }
+        };
+        self.theme_preference = preference;
+        let _ = self.store.update_ui(&UiPatch {
+            theme: Patch::Set(preference),
+            ..patch
+        });
+        self.flash(format!("Theme: {}", palette.label), now);
+    }
+
+    /// "System" first, then every palette with the families side by side (dark before light).
+    pub(super) fn open_theme_picker(&mut self) {
+        let mut ordered: Vec<&'static Palette> = Vec::new();
+        for p in PALETTES.iter() {
+            if !ordered.iter().any(|o| o.family == p.family) {
+                ordered.extend(
+                    PALETTES
+                        .iter()
+                        .filter(|q| q.family == p.family && q.kind == ThemeName::Dark),
+                );
+                ordered.extend(
+                    PALETTES
+                        .iter()
+                        .filter(|q| q.family == p.family && q.kind == ThemeName::Light),
+                );
+            }
+        }
+        let system = self.theme_preference == ThemePreference::System;
+        let current = self.theme().palette;
+        let mark = |on: bool| if on { '*' } else { ' ' };
+        let mut items = vec![format!("{} System (follow the terminal)", mark(system))];
+        items.extend(ordered.iter().map(|p| {
+            let kind = match p.kind {
+                ThemeName::Dark => "Dark",
+                ThemeName::Light => "Light",
+            };
+            format!(
+                "{} {} ({kind})",
+                mark(!system && std::ptr::eq(*p, current)),
+                p.label
+            )
+        }));
+        let index = if system {
+            0
+        } else {
+            ordered
+                .iter()
+                .position(|p| std::ptr::eq(*p, current))
+                .map_or(0, |i| i + 1)
+        };
+        let mut choices: Vec<Option<&'static Palette>> = vec![None];
+        choices.extend(ordered.into_iter().map(Some));
+        self.picker = Some(Picker {
+            title: "Theme".into(),
+            items,
+            index,
+            action: PickerAction::SetTheme(choices),
+        });
+        self.dirty = true;
+    }
+
+    /// Follows the terminal's (or OS) dark/light setting, using each side's remembered palette.
+    pub(super) fn set_system_preference(&mut self, now: Instant) {
+        self.theme_preference = ThemePreference::System;
+        let _ = self.store.update_ui(&UiPatch {
+            theme: Patch::Set(ThemePreference::System),
+            ..Default::default()
+        });
+        self.refresh_system_theme(now);
+        let label = theme_label(self.theme_preference, self.theme());
+        self.flash(format!("Theme: {label}"), now);
     }
 
     /// Asks the terminal for its background (answered via input, see `on_input`); falls back to the
@@ -894,16 +1002,6 @@ impl App {
             self.system_theme = theme;
             self.dirty = true;
         }
-    }
-
-    fn cycle_theme(&mut self, now: Instant) {
-        self.theme_preference = next_theme_preference(self.theme_preference);
-        let _ = self.store.update_ui(&UiPatch {
-            theme: Patch::Set(self.theme_preference),
-            ..Default::default()
-        });
-        self.refresh_system_theme(now);
-        self.flash(format!("Theme: {}", preference_label(self.theme_preference)), now);
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -1041,7 +1139,6 @@ impl App {
             "`" => self.select_previous_session(now),
             "[" => self.cycle_active_session(-1, now),
             "]" => self.cycle_active_session(1, now),
-            "T" => self.cycle_theme(now),
             "?" => self.open_help(),
             "C" => self.open_config(),
             "w" => self.open_skills(),
@@ -1234,6 +1331,8 @@ impl App {
     pub fn draw(&self, frame: &mut Frame) {
         let t = self.theme();
         let area = frame.area();
+        // The palette owns the whole screen, so a light one stays readable on a dark terminal.
+        frame.render_widget(Block::new().style(t.fg(Role::Text).bg(t.color(Role::Bg))), area);
         let cols = usize::from(area.width);
         if too_small(area.width, area.height) {
             let message = format!(
@@ -1449,13 +1548,11 @@ mod tests {
         tx.send(AppEvent::Resize(100, 20)).unwrap();
         tx.send(AppEvent::Input("j\x1b[A".into())).unwrap();
         tx.send(AppEvent::Input("q".into())).unwrap();
-        tx.send(AppEvent::Input("T".into())).unwrap();
         run_loop(&mut app, &mut terminal, &rx, &mut out).unwrap();
 
         assert!(app.should_quit());
         assert!(!app.is_focused());
-        // Default is system; one `T` → dark. The `T` queued after `q` is never handled.
-        assert_eq!(store_in(&dir).get_ui().theme, Some(ThemePreference::Dark));
+        assert_eq!(store_in(&dir).get_ui().theme, None);
         let rows = screen(&terminal);
         assert!(rows[0].contains("Session Deck"), "{}", rows[0]);
         assert!(rows[2].starts_with("SESSIONS"), "{}", rows[2]);
@@ -1463,6 +1560,31 @@ mod tests {
         assert!(rows[19].starts_with(" ↑↓ select"), "{}", rows[19]);
         // The initial poll asks the terminal for its background while following the system theme.
         assert_eq!(String::from_utf8(out).unwrap(), OSC11_QUERY);
+    }
+
+    #[test]
+    fn the_palette_background_fills_every_cell_even_on_a_dark_terminal() {
+        use ratatui::style::Color;
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, _rx) = mpsc::channel();
+        let mut app = App::new(store_in(&dir), tx, None);
+        let light = PALETTES.iter().find(|p| p.id == "catppuccin-latte").unwrap();
+        app.set_palette(light, Instant::now());
+        app.set_size(100, 20);
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        terminal.draw(|f| app.draw(f)).unwrap();
+        let bg = Theme::from_palette(light).color(Role::Bg);
+        let buf = terminal.backend().buffer();
+        let stray: Vec<_> = (0..20)
+            .flat_map(|y| (0..100).map(move |x| (x, y)))
+            .filter(|&(x, y)| matches!(buf[(x, y)].bg, Color::Reset))
+            .collect();
+        assert!(
+            stray.is_empty(),
+            "{} cells keep the terminal background",
+            stray.len()
+        );
+        assert_eq!(buf[(50, 10)].bg, bg);
     }
 
     fn draw_at(app: &mut App, cols: u16, rows: u16) -> Vec<String> {
@@ -1538,26 +1660,60 @@ mod tests {
     }
 
     #[test]
-    fn theme_cycling_persists_and_flashes() {
+    fn the_theme_picker_lists_system_and_every_palette_remembers_them_and_persists() {
         let dir = tempfile::tempdir().unwrap();
         let (tx, _rx) = mpsc::channel();
         let mut app = App::new(store_in(&dir), tx, None);
         let now = Instant::now();
-        let mut seen = vec![];
-        for _ in 0..3 {
-            app.handle(AppEvent::Input("T".into()), now);
-            seen.push((store_in(&dir).get_ui().theme.unwrap(), app.message.clone()));
+        app.handle(AppEvent::Input(":".into()), now);
+        for c in "choose theme".chars() {
+            app.handle(AppEvent::Input(c.to_string()), now);
         }
-        assert_eq!(
-            seen,
-            [
-                (ThemePreference::Dark, "Theme: dark".to_string()),
-                (ThemePreference::Light, "Theme: light".to_string()),
-                (ThemePreference::System, "Theme: system".to_string()),
-            ]
-        );
-        app.handle(AppEvent::Tick, now + MESSAGE_DURATION);
-        assert!(app.message.is_empty());
+        app.handle(AppEvent::Input("\r".into()), now);
+        let picker = app.picker.as_ref().expect("theme picker");
+        assert_eq!(picker.items.len(), PALETTES.len() + 1);
+        assert!(picker.items[0].starts_with("* System"), "{:?}", picker.items);
+        assert_eq!(picker.items[1], "  Tokyo Night (Dark)");
+        assert_eq!(picker.items[2], "  Tokyo Night Light (Light)");
+        let nord = picker
+            .items
+            .iter()
+            .position(|i| i.contains("Nord (Dark)"))
+            .unwrap();
+        for _ in 0..nord {
+            app.handle(AppEvent::Input("j".into()), now);
+        }
+        app.handle(AppEvent::Input("\r".into()), now);
+        let picker = app.picker.as_ref().expect("the picker stays open");
+        assert!(picker.items[nord].starts_with("* Nord"), "{:?}", picker.items);
+        assert_eq!(picker.index, nord);
+        app.handle(AppEvent::Input("".into()), now);
+        assert!(app.picker.is_none());
+        assert_eq!(app.theme().palette.id, "nord");
+        assert_eq!(app.message, "Theme: Nord");
+        let ui = store_in(&dir).get_ui();
+        assert_eq!(ui.theme, Some(ThemePreference::Dark));
+        assert_eq!(ui.dark_theme.as_deref(), Some("nord"));
+
+        app.handle(AppEvent::Input(":".into()), now);
+        for c in "choose theme".chars() {
+            app.handle(AppEvent::Input(c.to_string()), now);
+        }
+        app.handle(AppEvent::Input("\r".into()), now);
+        let picker = app.picker.as_ref().unwrap();
+        assert!(picker.items[nord].starts_with("* Nord"), "{:?}", picker.items);
+        assert_eq!(picker.index, nord);
+        for _ in 0..nord {
+            app.handle(AppEvent::Input("k".into()), now);
+        }
+        app.handle(AppEvent::Input("\r".into()), now);
+        assert!(app.picker.is_some());
+        assert_eq!(store_in(&dir).get_ui().theme, Some(ThemePreference::System));
+        assert_eq!(app.message, "Theme: system (Nord)");
+
+        let (tx, _rx) = mpsc::channel();
+        let reopened = App::new(store_in(&dir), tx, None);
+        assert_eq!(reopened.theme().palette.id, "nord");
     }
 
     #[test]

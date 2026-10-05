@@ -8,6 +8,7 @@ pub enum CommandId {
     Rename,
     MoveToFolder,
     OpenConfig,
+    ChooseTheme,
     ToggleSidebar,
     OpenTrash,
 }
@@ -17,7 +18,7 @@ pub struct PaletteCommand {
     pub label: &'static str,
 }
 
-pub const PALETTE_COMMANDS: [PaletteCommand; 7] = [
+pub const PALETTE_COMMANDS: [PaletteCommand; 8] = [
     PaletteCommand {
         id: CommandId::NewSession,
         label: "New session",
@@ -37,6 +38,10 @@ pub const PALETTE_COMMANDS: [PaletteCommand; 7] = [
     PaletteCommand {
         id: CommandId::OpenConfig,
         label: "Open config",
+    },
+    PaletteCommand {
+        id: CommandId::ChooseTheme,
+        label: "Choose theme",
     },
     PaletteCommand {
         id: CommandId::ToggleSidebar,

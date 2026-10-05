@@ -122,7 +122,7 @@ the Claude ones.
 
 ### Light and dark
 
-`T` cycles dark, light and system (Tokyo Night colors). The layout adapts: panels side by side from 80
+`:` → Choose theme picks System or a palette (Tokyo Night, Catppuccin, Gruvbox, Nord, Dracula, Rose Pine, Solarized, each dark or light). The layout adapts: panels side by side from 80
 columns, stacked from 50.
 
 ## Configuration

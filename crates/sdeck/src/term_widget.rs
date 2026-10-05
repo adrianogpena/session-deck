@@ -14,18 +14,24 @@ use ratatui::widgets::Widget;
 pub struct TermWidget<'a> {
     pub screen: &'a vt100::Screen,
     pub show_cursor: bool,
+    /// What the agent's default (unset) foreground and background are drawn as: the theme's, so they
+    /// match the rest of the screen; `Color::Reset` for the terminal's own.
+    pub default_fg: Color,
+    pub default_bg: Color,
 }
 
-fn color(c: vt100::Color) -> Color {
+fn color(c: vt100::Color, default: Color) -> Color {
     match c {
-        vt100::Color::Default => Color::Reset,
+        vt100::Color::Default => default,
         vt100::Color::Idx(i) => Color::Indexed(i),
         vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
     }
 }
 
-fn cell_style(cell: &vt100::Cell) -> Style {
-    let mut style = Style::new().fg(color(cell.fgcolor())).bg(color(cell.bgcolor()));
+fn cell_style(cell: &vt100::Cell, default_fg: Color, default_bg: Color) -> Style {
+    let mut style = Style::new()
+        .fg(color(cell.fgcolor(), default_fg))
+        .bg(color(cell.bgcolor(), default_bg));
     for (on, modifier) in [
         (cell.bold(), Modifier::BOLD),
         (cell.dim(), Modifier::DIM),
@@ -46,7 +52,7 @@ impl Widget for TermWidget<'_> {
         let (rows, cols) = self.screen.size();
         let cursor = (self.show_cursor && self.screen.scrollback() == 0 && !self.screen.hide_cursor())
             .then(|| self.screen.cursor_position());
-        let blank = Style::reset();
+        let blank = Style::new().fg(self.default_fg).bg(self.default_bg);
         for y in 0..area.height {
             let mut col = 0u16;
             if y < rows {
@@ -61,7 +67,7 @@ impl Widget for TermWidget<'_> {
                         continue;
                     }
                     let width = if cell.is_wide() { 2 } else { 1 };
-                    let mut style = cell_style(cell);
+                    let mut style = cell_style(cell, self.default_fg, self.default_bg);
                     if cursor == Some((y, x)) {
                         style = style.add_modifier(Modifier::UNDERLINED);
                     }
@@ -95,6 +101,8 @@ mod tests {
         TermWidget {
             screen: parser.screen(),
             show_cursor,
+            default_fg: Color::Reset,
+            default_bg: Color::Reset,
         }
         .render(buf.area, &mut buf);
         buf
