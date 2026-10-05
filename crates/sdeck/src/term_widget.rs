@@ -14,6 +14,9 @@ use ratatui::widgets::Widget;
 pub struct TermWidget<'a> {
     pub screen: &'a vt100::Screen,
     pub show_cursor: bool,
+    /// Highlighted cells (row, column), first and last in reading order, drawn on `selection_bg`.
+    pub selection: Option<((u16, u16), (u16, u16))>,
+    pub selection_bg: Color,
     /// What the agent's default (unset) foreground and background are drawn as: the theme's, so they
     /// match the rest of the screen; `Color::Reset` for the terminal's own.
     pub default_fg: Color,
@@ -71,6 +74,12 @@ impl Widget for TermWidget<'_> {
                     if cursor == Some((y, x)) {
                         style = style.add_modifier(Modifier::UNDERLINED);
                     }
+                    if self
+                        .selection
+                        .is_some_and(|(first, last)| (y, x) >= first && (y, x) <= last)
+                    {
+                        style = style.bg(self.selection_bg);
+                    }
                     let target = &mut buf[(area.x + col, area.y + y)];
                     if col + width > area.width {
                         target.set_symbol(" ").set_style(style);
@@ -101,6 +110,8 @@ mod tests {
         TermWidget {
             screen: parser.screen(),
             show_cursor,
+            selection: None,
+            selection_bg: Color::Reset,
             default_fg: Color::Reset,
             default_bg: Color::Reset,
         }

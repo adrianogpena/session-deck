@@ -5,7 +5,7 @@
 use std::time::Instant;
 
 use super::App;
-use crate::keys::{parse_mouse_sequence, Wheel};
+use crate::keys::{parse_mouse_sequence, MouseKind, Wheel};
 
 impl App {
     /// `i`: typing goes to the session's PTY, already sized to the preview. Mouse tracking stays as
@@ -24,15 +24,15 @@ impl App {
         self.dirty = true;
     }
 
-    /// `m`, or Ctrl+K M while interacting: sdeck's mouse reporting, off by default (so click-drag
-    /// selects text) and not persisted. On, the wheel scrolls the preview.
+    /// `m`, or Ctrl+K M while interacting: sdeck's mouse reporting, on by default and not persisted.
+    /// On, the wheel scrolls the preview and click-drag copies text; off, the terminal selects.
     pub(super) fn toggle_mouse_tracking(&mut self, now: Instant) {
         self.mouse_tracking = !self.mouse_tracking;
         self.mouse_capture_change = Some(self.mouse_tracking);
         let text = if self.mouse_tracking {
-            "Mouse scrolling on — click-drag no longer selects text (m to turn off)"
+            "Mouse on — wheel scrolls, drag in the preview copies (m for the terminal's selection)"
         } else {
-            "Mouse scrolling off — click-drag selects text again (m to turn on)"
+            "Mouse off — the terminal selects text, the wheel is not used (m to turn on)"
         };
         self.flash(text.into(), now);
     }
@@ -45,15 +45,24 @@ impl App {
         self.resize_all_to_pane();
     }
 
-    /// A wheel notch or click, reported while mouse tracking is on; `false` if `key` isn't one. A
-    /// notch scrolls the preview's scrollback if there is any; agents that keep their own history
-    /// (Claude Code) never produce any, so it sends them PageUp/PageDown instead. Clicks are
-    /// consumed.
-    pub(super) fn on_mouse_sequence(&mut self, key: &str) -> bool {
-        let Some(mouse) = parse_mouse_sequence(key) else {
+    /// A wheel notch, click or drag, reported while mouse tracking is on; `false` if `key` isn't
+    /// one. A notch scrolls the preview's scrollback if there is any; agents that keep their own
+    /// history (Claude Code) never produce any, so it sends them PageUp/PageDown instead. Left
+    /// button events select and copy text (see `selection`); other clicks are consumed. Any key
+    /// that isn't a mouse report drops the highlight.
+    pub(super) fn on_mouse_sequence(&mut self, key: &str, now: Instant) -> bool {
+        let Some(report) = parse_mouse_sequence(key) else {
+            if self.selection.take().is_some() {
+                self.dirty = true;
+            }
             return false;
         };
-        let (Some(wheel), Some(uid)) = (mouse, self.selected_session().map(|s| s.uid)) else {
+        let MouseKind::Wheel(wheel) = report.kind else {
+            self.on_mouse_select(&report, now);
+            return true;
+        };
+        self.selection = None;
+        let Some(uid) = self.selected_session().map(|s| s.uid) else {
             return true;
         };
         if self.preview_max_scroll() > 0 {
@@ -156,8 +165,8 @@ mod tests {
         let uid = f.add(Some("abc"), true);
         f.key("i");
         f.key("\x0bm");
-        assert!(f.app.mouse_tracking);
-        assert_eq!(f.app.mouse_capture_change, Some(true));
+        assert!(!f.app.mouse_tracking);
+        assert_eq!(f.app.mouse_capture_change, Some(false));
         f.key("\x0bb");
         assert!(!f.app.sidebar_visible);
         f.key("\x0bq");
@@ -178,7 +187,7 @@ mod tests {
         f.wait_for_screen(uid, "echo: line19");
         f.key("m");
         assert!(
-            !f.app.mouse_tracking,
+            f.app.mouse_tracking,
             "m is typed into the agent while interacting"
         );
         f.key("\x1b[<64;50;5M");
@@ -190,11 +199,13 @@ mod tests {
     #[test]
     fn m_toggles_mouse_scrolling_from_the_list() {
         let mut f = fixture();
-        f.key("m");
         assert!(f.app.mouse_tracking);
-        assert!(f.app.message.starts_with("Mouse scrolling on"));
         f.key("m");
         assert!(!f.app.mouse_tracking);
+        assert!(f.app.message.starts_with("Mouse off"));
         assert_eq!(f.app.mouse_capture_change, Some(false));
+        f.key("m");
+        assert!(f.app.mouse_tracking);
+        assert_eq!(f.app.mouse_capture_change, Some(true));
     }
 }

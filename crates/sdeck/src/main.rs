@@ -3,7 +3,9 @@ use std::sync::mpsc;
 
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::cursor::{Hide, Show};
-use ratatui::crossterm::event::{DisableFocusChange, DisableMouseCapture, EnableFocusChange};
+use ratatui::crossterm::event::{
+    DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture,
+};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -41,7 +43,14 @@ impl TerminalGuard {
     fn enter() -> std::io::Result<Self> {
         enable_raw_mode()?;
         let guard = TerminalGuard;
-        execute!(stdout(), EnterAlternateScreen, Hide, EnableFocusChange)?;
+        // Mouse reporting starts on, like `App`'s `mouse_tracking`.
+        execute!(
+            stdout(),
+            EnterAlternateScreen,
+            Hide,
+            EnableFocusChange,
+            EnableMouseCapture
+        )?;
         Ok(guard)
     }
 }

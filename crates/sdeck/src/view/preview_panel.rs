@@ -5,7 +5,7 @@ use std::borrow::Cow;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 use sdeck_core::status::claude_transcript_tailer::{TailedTurn, TurnRole};
@@ -43,6 +43,20 @@ pub struct PreviewContent<'a> {
     pub live_turns: Option<&'a [TailedTurn]>,
     /// Lines scrolled back from the live bottom.
     pub scroll_offset: usize,
+    /// Cells of `screen` highlighted by click-drag, first and last in reading order.
+    pub selection: Option<((u16, u16), (u16, u16))>,
+}
+
+/// A muted grey for highlighted text: the theme's text color mixed a quarter of the way into its
+/// background, so it reads as a soft block in light and dark themes alike.
+fn selection_color(t: Theme) -> Color {
+    match (t.color(Role::Bg), t.color(Role::Text)) {
+        (Color::Rgb(br, bg, bb), Color::Rgb(tr, tg, tb)) => {
+            let mix = |b: u8, f: u8| (u16::from(b) * 3 / 4 + u16::from(f) / 4) as u8;
+            Color::Rgb(mix(br, tr), mix(bg, tg), mix(bb, tb))
+        }
+        _ => Color::DarkGray,
+    }
 }
 
 fn bold(style: Style) -> Style {
@@ -234,6 +248,8 @@ pub fn render_preview_panel(t: Theme, rect: Rect, buf: &mut Buffer, content: Opt
         TermWidget {
             screen,
             show_cursor: content.interacting,
+            selection: content.selection,
+            selection_bg: selection_color(t),
             default_fg: t.color(Role::Text),
             default_bg: t.color(Role::Bg),
         }
@@ -341,6 +357,7 @@ mod tests {
             last_response: None,
             live_turns: None,
             scroll_offset: 0,
+            selection: None,
         }
     }
 

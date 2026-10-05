@@ -232,11 +232,13 @@ impl App {
         if let Some(live) = s.live.as_mut() {
             live.feed(data, is_attached, now);
         }
+        let uid = s.uid;
         if is_attached {
             self.pending_output.extend_from_slice(data);
-        } else if Some(s.uid) == selected {
+        } else if Some(uid) == selected {
             self.dirty = true;
         }
+        self.drop_stale_selection(uid);
     }
 
     pub(super) fn on_pty_exit(&mut self, live_id: u64, code: u32) {

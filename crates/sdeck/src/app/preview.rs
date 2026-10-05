@@ -20,6 +20,7 @@ impl App {
         if current != self.scrolled_session {
             self.scrolled_session = current;
             self.preview_scroll = 0;
+            self.selection = None;
         }
         self.sync_live_preview(current);
         if let Some(uid) = current {
@@ -165,6 +166,7 @@ impl App {
                 .is_elsewhere(s)
                 .then_some(self.live_preview_turns.as_slice()),
             scroll_offset: self.preview_scroll,
+            selection: self.selection_range(),
         })
     }
 

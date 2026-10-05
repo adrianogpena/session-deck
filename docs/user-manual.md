@@ -283,11 +283,14 @@ different projects without moving anything.
   Remembered.
 - **Hide / show the sessions panel `b`** (or `Ctrl+K B` while Interacting): gives
   the preview the whole width.
-- **Mouse scrolling `m`** (or `Ctrl+K M` while Interacting): toggles real mouse
-  reporting. Off by default (not remembered across restarts), so click-drag still does your terminal's
-  own text selection, letting you copy from the preview. Turn it on to scroll the preview with the
-  wheel or a click-drag; turn it back off to select and copy again. Always off while attached
-  (`Enter`) — the agent gets the terminal's mouse events there, not sdeck.
+- **Mouse `m`** (or `Ctrl+K M` while Interacting): sdeck reports the mouse, on by default (not
+  remembered across restarts). The wheel scrolls the preview. Drag over the preview to select text:
+  it's highlighted and copied to the clipboard on release (through the terminal's OSC 52 support).
+  Double-click copies a word, triple-click a line. Any key or wheel notch clears the highlight.
+  Selection stays inside the preview and covers what's on screen, so scroll first for older lines.
+  Turn it off with `m` to get your terminal's own click-drag selection instead (the wheel then does
+  nothing). Always off while attached (`Enter`): the agent gets the terminal's mouse events there,
+  not sdeck.
 - **Theme**: open the command palette (`:`) and run **Choose theme**. The list shows **System** and
   every palette, each marked `(Dark)` or `(Light)`, with a family's two variants on adjacent lines
   (Tokyo Night, Catppuccin Mocha/Latte, Gruvbox, Nord, Dracula/Alucard, Rose Pine/Dawn, Solarized).

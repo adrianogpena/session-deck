@@ -16,7 +16,7 @@ pub(crate) enum ChordAction {
     SwitchMode,
     /// `q`: leave and stop the session, like `x` from the list.
     StopSession,
-    /// `m` (interacting only): sdeck's mouse scrolling.
+    /// `m` (interacting only): sdeck's mouse reporting.
     ToggleMouse,
     /// `b` (interacting only): the sessions panel.
     ToggleSidebar,

@@ -103,15 +103,46 @@ pub enum Wheel {
     Down,
 }
 
-/// Whether `data` is one SGR mouse report (`ESC [ < Cb ; Cx ; Cy (M|m)`): `Some(None)` for a plain
-/// click/release, `Some(Some(dir))` for a wheel notch.
-pub fn parse_mouse_sequence(data: &str) -> Option<Option<Wheel>> {
-    static MOUSE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\x1b\[<(\d+);(\d+);(\d+)[Mm]$").unwrap());
-    let cb: u32 = MOUSE.captures(data)?[1].parse().ok()?;
-    if cb & 0x40 == 0 {
-        return Some(None);
-    }
-    Some(Some(if cb & 1 == 0 { Wheel::Up } else { Wheel::Down }))
+/// What one SGR mouse report says happened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseKind {
+    Wheel(Wheel),
+    LeftDown,
+    LeftDrag,
+    LeftUp,
+    /// Any other button, or a modified click.
+    Other,
+}
+
+/// One SGR mouse report with the 0-based cell it happened at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MouseReport {
+    pub kind: MouseKind,
+    pub col: u16,
+    pub row: u16,
+}
+
+/// The report in `data` if it is one SGR mouse report (`ESC [ < Cb ; Cx ; Cy (M|m)`).
+pub fn parse_mouse_sequence(data: &str) -> Option<MouseReport> {
+    static MOUSE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\x1b\[<(\d+);(\d+);(\d+)([Mm])$").unwrap());
+    let caps = MOUSE.captures(data)?;
+    let cb: u32 = caps[1].parse().ok()?;
+    let col: u16 = caps[2].parse::<u16>().ok()?.saturating_sub(1);
+    let row: u16 = caps[3].parse::<u16>().ok()?.saturating_sub(1);
+    let release = &caps[4] == "m";
+    let kind = if cb & 0x40 != 0 {
+        MouseKind::Wheel(if cb & 1 == 0 { Wheel::Up } else { Wheel::Down })
+    } else if cb & 0x1c != 0 || cb & 3 != 0 {
+        MouseKind::Other
+    } else if release {
+        MouseKind::LeftUp
+    } else if cb & 0x20 != 0 {
+        MouseKind::LeftDrag
+    } else {
+        MouseKind::LeftDown
+    };
+    Some(MouseReport { kind, col, row })
 }
 
 /// One input chunk as individual keys. CSI (`ESC [ … final`) and SS3 (`ESC O x`) sequences stay whole.
@@ -217,8 +248,8 @@ fn encode_key(key: &KeyEvent) -> Option<String> {
     })
 }
 
-/// SGR encoding (`ESC [ < Cb ; Cx ; Cy M|m`, 1-based) of a click or wheel notch; motion isn't reported
-/// (mode 1000 doesn't either).
+/// SGR encoding (`ESC [ < Cb ; Cx ; Cy M|m`, 1-based) of a click, drag or wheel notch; motion with no
+/// button down isn't reported.
 fn encode_mouse(ev: &MouseEvent) -> Option<String> {
     let button = |b: MouseButton| match b {
         MouseButton::Left => 0,
@@ -228,6 +259,7 @@ fn encode_mouse(ev: &MouseEvent) -> Option<String> {
     let (cb, release) = match ev.kind {
         MouseEventKind::Down(b) => (button(b), false),
         MouseEventKind::Up(b) => (button(b), true),
+        MouseEventKind::Drag(b) => (button(b) + 32, false),
         MouseEventKind::ScrollUp => (64, false),
         MouseEventKind::ScrollDown => (65, false),
         _ => return None,
@@ -347,13 +379,44 @@ mod tests {
     }
 
     #[test]
-    fn parse_mouse_sequence_recognizes_wheel_direction_and_plain_clicks() {
-        assert_eq!(parse_mouse_sequence("\x1b[<64;10;5M"), Some(Some(Wheel::Up)));
-        assert_eq!(parse_mouse_sequence("\x1b[<65;10;5M"), Some(Some(Wheel::Down)));
-        assert_eq!(parse_mouse_sequence("\x1b[<68;10;5M"), Some(Some(Wheel::Up)));
-        assert_eq!(parse_mouse_sequence("\x1b[<69;10;5M"), Some(Some(Wheel::Down)));
-        assert_eq!(parse_mouse_sequence("\x1b[<0;10;5M"), Some(None));
-        assert_eq!(parse_mouse_sequence("\x1b[<0;10;5m"), Some(None));
+    fn parse_mouse_sequence_recognizes_wheel_direction_buttons_and_cells() {
+        let report = |kind, col, row| Some(MouseReport { kind, col, row });
+        assert_eq!(
+            parse_mouse_sequence("\x1b[<64;10;5M"),
+            report(MouseKind::Wheel(Wheel::Up), 9, 4)
+        );
+        assert_eq!(
+            parse_mouse_sequence("\x1b[<65;10;5M"),
+            report(MouseKind::Wheel(Wheel::Down), 9, 4)
+        );
+        assert_eq!(
+            parse_mouse_sequence("\x1b[<68;10;5M"),
+            report(MouseKind::Wheel(Wheel::Up), 9, 4)
+        );
+        assert_eq!(
+            parse_mouse_sequence("\x1b[<69;10;5M"),
+            report(MouseKind::Wheel(Wheel::Down), 9, 4)
+        );
+        assert_eq!(
+            parse_mouse_sequence("\x1b[<0;10;5M"),
+            report(MouseKind::LeftDown, 9, 4)
+        );
+        assert_eq!(
+            parse_mouse_sequence("\x1b[<32;11;6M"),
+            report(MouseKind::LeftDrag, 10, 5)
+        );
+        assert_eq!(
+            parse_mouse_sequence("\x1b[<0;10;5m"),
+            report(MouseKind::LeftUp, 9, 4)
+        );
+        assert_eq!(
+            parse_mouse_sequence("\x1b[<2;10;5M"),
+            report(MouseKind::Other, 9, 4)
+        );
+        assert_eq!(
+            parse_mouse_sequence("\x1b[<4;10;5M"),
+            report(MouseKind::Other, 9, 4)
+        );
         assert_eq!(parse_mouse_sequence("\x1b[A"), None);
         assert_eq!(parse_mouse_sequence("n"), None);
     }
@@ -443,9 +506,15 @@ mod tests {
         };
         let up = encode_event(&wheel(MouseEventKind::ScrollUp, KeyModifiers::NONE)).unwrap();
         assert_eq!(up, "\x1b[<64;10;5M");
-        assert_eq!(parse_mouse_sequence(&up), Some(Some(Wheel::Up)));
+        assert_eq!(
+            parse_mouse_sequence(&up).map(|r| r.kind),
+            Some(MouseKind::Wheel(Wheel::Up))
+        );
         let down = encode_event(&wheel(MouseEventKind::ScrollDown, KeyModifiers::SHIFT)).unwrap();
-        assert_eq!(parse_mouse_sequence(&down), Some(Some(Wheel::Down)));
+        assert_eq!(
+            parse_mouse_sequence(&down).map(|r| r.kind),
+            Some(MouseKind::Wheel(Wheel::Down))
+        );
         let click = encode_event(&wheel(MouseEventKind::Up(MouseButton::Left), KeyModifiers::NONE)).unwrap();
         assert_eq!(click, "\x1b[<0;10;5m");
         assert_eq!(

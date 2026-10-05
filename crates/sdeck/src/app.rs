@@ -23,6 +23,7 @@ mod quit;
 mod reorder;
 mod restore;
 mod search;
+mod selection;
 mod session_text;
 mod tags;
 #[cfg(test)]
@@ -68,7 +69,7 @@ use crate::filters::{
     StatusCounts, TimeFilter,
 };
 use crate::git_status_tracker::{read_all, GitStatusTracker};
-use crate::keys::{extract_focus_events, split_keys};
+use crate::keys::{extract_focus_events, parse_mouse_sequence, split_keys};
 use crate::layout::{
     compute_layout, too_small, Layout, DEFAULT_SIDEBAR_PCT, MIN_COLS, MIN_ROWS, SIDEBAR_STEP,
 };
@@ -171,8 +172,12 @@ pub struct App {
     select_after_discovery: Option<String>,
     /// The agent `n` starts (`F3`, persisted).
     active_agent: String,
-    /// `m`: sdeck's mouse scrolling. Off by default (and always while attached), not persisted.
+    /// `m`: sdeck's mouse reporting (wheel scrolling, click-drag copy). On by default, always off
+    /// while attached, not persisted.
     mouse_tracking: bool,
+    /// The text highlighted by click-drag in the preview, and the last click (for double/triple).
+    selection: Option<selection::Selection>,
+    last_click: Option<selection::Click>,
 
     /// Settings from `~/.session-deck/config.json`.
     config: DeckConfig,
@@ -271,7 +276,9 @@ impl App {
             attached: None,
             interacting: None,
             chord_pending: false,
-            mouse_tracking: false,
+            mouse_tracking: true,
+            selection: None,
+            last_click: None,
             prompt: None,
             picker: None,
             overlay: None,
@@ -1087,9 +1094,18 @@ impl App {
         if let Some(uid) = self.interacting {
             // With mouse tracking on, a wheel notch scrolls the preview rather than reaching the
             // agent as a plain ↑/↓ (which it would take as prompt-history recall).
-            if !self.on_mouse_sequence(key) {
+            if !self.on_mouse_sequence(key, now) {
                 self.on_live_input(uid, key, now);
             }
+            return;
+        }
+        let modal_open = self.quit_confirm.is_some()
+            || self.restore_confirm.is_some()
+            || self.prompt.is_some()
+            || self.overlay.is_some()
+            || self.picker.is_some()
+            || self.confirm.is_some();
+        if modal_open && parse_mouse_sequence(key).is_some() {
             return;
         }
         if self.quit_confirm.is_some() {
@@ -1129,7 +1145,7 @@ impl App {
             self.select_hotkey(digit - b'0');
             return;
         }
-        if self.on_mouse_sequence(key) || self.on_page_key(key) {
+        if self.on_mouse_sequence(key, now) || self.on_page_key(key) {
             return;
         }
         match key {
