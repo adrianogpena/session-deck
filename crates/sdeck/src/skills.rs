@@ -5,15 +5,15 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use sdeck_core::paths::claude_dir;
 use serde_json::Value;
 
-use crate::frontmatter::parse_name_and_description;
+use crate::frontmatter::{frontmatter_flag, parse_name_and_description};
 
 /// The four states Claude Code's `skillOverrides` setting can put a skill in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkillState {
-    /// Visible to the model and auto-triggerable (the default with no override).
+    /// Visible to the model and auto-triggerable (the default with no override and no
+    /// `disable-model-invocation: true` in the skill's frontmatter).
     On,
     /// Name visible, no description: no context cost, but it can't fire on its own.
     NameOnly,
@@ -53,12 +53,12 @@ pub struct LocalSkill {
     pub state: SkillState,
 }
 
-pub fn skills_dir() -> PathBuf {
-    claude_dir().join("skills")
+pub fn skills_dir(config_dir: &Path) -> PathBuf {
+    config_dir.join("skills")
 }
 
-pub fn claude_settings_path() -> PathBuf {
-    claude_dir().join("settings.json")
+pub fn claude_settings_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("settings.json")
 }
 
 /// `skillOverrides` from `~/.claude/settings.json`: empty if the file is missing, unreadable, or
@@ -92,7 +92,12 @@ pub fn discover_local_skills(skills_dir: &Path, settings_path: &Path) -> Vec<Loc
             let name = meta
                 .name
                 .unwrap_or_else(|| entry.file_name().to_string_lossy().into_owned());
-            let state = overrides.get(&name).copied().unwrap_or(SkillState::On);
+            let default_state = if frontmatter_flag(&text, "disable-model-invocation") {
+                SkillState::UserInvocableOnly
+            } else {
+                SkillState::On
+            };
+            let state = overrides.get(&name).copied().unwrap_or(default_state);
             Some(LocalSkill {
                 name,
                 description: meta.description.unwrap_or_default(),
@@ -174,6 +179,36 @@ mod tests {
                     description: "Review a plan.".into(),
                     state: SkillState::On,
                 },
+            ]
+        );
+    }
+
+    #[test]
+    fn disable_model_invocation_in_frontmatter_means_user_invocable_only_unless_overridden() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("skills");
+        skill(
+            &dir,
+            "batch-plan",
+            "---\nname: batch-plan\ndescription: Plan.\ndisable-model-invocation: true\n---\n",
+        );
+        skill(
+            &dir,
+            "forced-on",
+            "---\nname: forced-on\ndescription: X.\ndisable-model-invocation: true\n---\n",
+        );
+        let settings = tmp.path().join("settings.json");
+        fs::write(&settings, r#"{"skillOverrides":{"forced-on":"on"}}"#).unwrap();
+
+        let states: Vec<_> = discover_local_skills(&dir, &settings)
+            .into_iter()
+            .map(|s| (s.name, s.state))
+            .collect();
+        assert_eq!(
+            states,
+            vec![
+                ("batch-plan".to_string(), SkillState::UserInvocableOnly),
+                ("forced-on".to_string(), SkillState::On),
             ]
         );
     }

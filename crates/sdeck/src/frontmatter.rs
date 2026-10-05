@@ -61,9 +61,26 @@ pub fn parse_name_and_description(text: &str) -> NameAndDescription {
     }
 }
 
+/// Whether a frontmatter boolean `key` is `true` (false when the block or key is missing).
+pub fn frontmatter_flag(text: &str, key: &str) -> bool {
+    BLOCK
+        .captures(text)
+        .and_then(|c| c.get(1))
+        .and_then(|body| extract_frontmatter_field(body.as_str(), key))
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_boolean_flag_is_true_only_when_set_to_true() {
+        assert!(frontmatter_flag("---\nname: x\nflag: true\n---\n", "flag"));
+        assert!(!frontmatter_flag("---\nflag: false\n---\n", "flag"));
+        assert!(!frontmatter_flag("---\nname: x\n---\n", "flag"));
+        assert!(!frontmatter_flag("# Heading", "flag"));
+    }
 
     #[test]
     fn plain_scalars_are_read_and_quotes_stripped() {

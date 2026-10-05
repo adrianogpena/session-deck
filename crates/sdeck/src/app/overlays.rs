@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use ratatui::Frame;
 use sdeck_core::format::now_ms;
+use sdeck_core::paths::claude_dir;
 use sdeck_core::status::account::discover_accounts;
 use sdeck_core::status::alert_log::{read_alerts, AlertEntry, ALERT_LOG_CAP};
 use sdeck_core::store::deck_config::{deck_config_path, write_deck_config};
@@ -91,16 +92,19 @@ impl App {
     /// Agent; the popup itself says so otherwise.
     pub(super) fn open_skills(&mut self) {
         let claude = self.active_agent == "claude";
+        let config_dir = self
+            .active_account()
+            .map_or_else(claude_dir, |a| a.config_dir.clone());
         self.overlay = Some(Overlay::Skills {
             tab: SkillsTab::Skills,
             scroll: Cell::new(0),
             skills: if claude {
-                discover_local_skills(&skills_dir(), &claude_settings_path())
+                discover_local_skills(&skills_dir(&config_dir), &claude_settings_path(&config_dir))
             } else {
                 Vec::new()
             },
             agents: if claude {
-                discover_local_agents(&agents_dir())
+                discover_local_agents(&agents_dir(&config_dir))
             } else {
                 Vec::new()
             },

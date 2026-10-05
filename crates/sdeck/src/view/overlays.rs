@@ -506,7 +506,11 @@ fn skills_lines(t: Theme, inner: usize, skills: &[LocalSkill], agent_id: &str) -
     }
     let mut content = Vec::new();
     if skills.is_empty() {
-        content.push(dim(t, "No local skills found under ~/.claude/skills.", inner));
+        content.push(dim(
+            t,
+            "No local skills found in the active account's skills folder.",
+            inner,
+        ));
     }
     for state in SkillState::ALL {
         let group: Vec<&LocalSkill> = skills.iter().filter(|s| s.state == state).collect();
@@ -528,7 +532,11 @@ fn agents_lines(t: Theme, inner: usize, agents: &[LocalAgent], agent_id: &str) -
         return vec![dim(t, NOT_CLAUDE, inner)];
     }
     if agents.is_empty() {
-        return vec![dim(t, "No local agents found under ~/.claude/agents.", inner)];
+        return vec![dim(
+            t,
+            "No local agents found in the active account's agents folder.",
+            inner,
+        )];
     }
     agents
         .iter()

@@ -1,9 +1,7 @@
-//! Local Claude Code subagents (`~/.claude/agents`), port of `agents.ts`.
+//! Local Claude Code subagents (`<config dir>/agents`), port of `agents.ts`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
-
-use sdeck_core::paths::claude_dir;
 
 use crate::frontmatter::parse_name_and_description;
 
@@ -13,8 +11,8 @@ pub struct LocalAgent {
     pub description: String,
 }
 
-pub fn agents_dir() -> PathBuf {
-    claude_dir().join("agents")
+pub fn agents_dir(config_dir: &Path) -> PathBuf {
+    config_dir.join("agents")
 }
 
 /// Every personal subagent directly under `agents_dir` (a real directory or a symlink), identified

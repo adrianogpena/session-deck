@@ -298,12 +298,13 @@ different projects without moving anything.
   (`ui.notifications`) or opens a text prompt pre-filled with its current value (everything else) —
   submitting saves straight to the file. `Esc`, `C` or `q` close it.
 - **Skills / agents `w`**: read-only, two tabs (`← →` to switch):
-  - **Skills**: every personal skill directly under `~/.claude/skills` (Claude Code's own skills
+  - **Skills**: every personal skill directly under `skills/` of the active account's config folder (`~/.claude` for the default account) (Claude Code's own skills
     directory — not `sdeck`'s), grouped by its effective state: `on` (visible + auto-triggerable),
     `name-only` (name visible, no description), `user-invocable-only` (fully hidden from context,
     still in `/`), or `off` (removed entirely, even from `/`). That state is `skillOverrides[name]`
-    from Claude Code's `~/.claude/settings.json`, or `on` when there's no override.
-  - **Agents**: every personal subagent directly under `~/.claude/agents`, identified by
+    from Claude Code's `settings.json` in that same folder. With no override it's `user-invocable-only` when
+    the skill's frontmatter has `disable-model-invocation: true`, otherwise `on`.
+  - **Agents**: every personal subagent directly under `agents/` of that folder, identified by
     name/description from the one `*.agent.md` file inside each subagent's folder. Sorted
     alphabetically — subagents have no `skillOverrides`-style visibility state to group by.
 
