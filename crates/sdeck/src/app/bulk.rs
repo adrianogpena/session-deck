@@ -41,7 +41,7 @@ impl App {
         let mut stopped = 0;
         for &uid in &targets {
             if self.session_by_uid(uid).is_some_and(|s| s.live.is_some()) {
-                self.kill(uid);
+                self.stop_and_acknowledge(uid);
                 stopped += 1;
             }
         }

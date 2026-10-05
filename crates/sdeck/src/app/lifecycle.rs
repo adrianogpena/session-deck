@@ -174,6 +174,14 @@ impl App {
         }
     }
 
+    /// `x`: stops a running session and marks its finished "done"/"error" as read.
+    pub(super) fn stop_and_acknowledge(&mut self, uid: u64) {
+        if let Some(id) = self.session_by_uid(uid).and_then(|s| s.id.clone()) {
+            let _ = acknowledge_session_status(&self.store, &id);
+        }
+        self.kill(uid);
+    }
+
     /// `x`: stops the selected session.
     pub(super) fn stop_selected(&mut self, now: Instant) {
         if let Some(uid) = self
@@ -181,7 +189,7 @@ impl App {
             .filter(|s| s.live.is_some())
             .map(|s| s.uid)
         {
-            self.kill(uid);
+            self.stop_and_acknowledge(uid);
             self.flash("Session stopped".into(), now);
         }
     }
