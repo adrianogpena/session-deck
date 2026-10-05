@@ -5,12 +5,13 @@ use std::time::Instant;
 
 use sdeck_core::paths;
 use sdeck_core::status::account::{
-    account_dir_for_name, create_account_dir, discover_accounts, Account, SHAREABLE,
+    account_dir_for_name, create_account_dir, delete_account_dir, discover_accounts, linked_entries,
+    set_account_links, Account, SHAREABLE,
 };
 use sdeck_core::status::statusline::{enable_statusline_for_all, statusline_command, StatusLineOutcome};
 use sdeck_core::store::deck_config::{deck_config_path, write_deck_config};
 
-use super::input::{Picker, PickerAction};
+use super::input::{Confirm, ConfirmAction, Picker, PickerAction};
 use super::App;
 
 fn label(account: &Account) -> String {
@@ -71,6 +72,7 @@ impl App {
             })
             .collect();
         items.push("+ Add account…".into());
+        items.push("≡ Manage accounts…".into());
         let index = self
             .accounts
             .iter()
@@ -83,6 +85,108 @@ impl App {
             action: PickerAction::SwitchAccount(self.accounts.clone()),
         });
         self.dirty = true;
+    }
+
+    pub(super) fn open_manage_accounts(&mut self) {
+        let items = self
+            .accounts
+            .iter()
+            .map(|a| {
+                let name = a
+                    .config_dir
+                    .file_name()
+                    .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                format!("{name} · {}", a.email.as_deref().unwrap_or("not logged in"))
+            })
+            .collect();
+        self.picker = Some(Picker {
+            title: "Manage accounts · Esc goes back".into(),
+            items,
+            index: 0,
+            action: PickerAction::ManageAccounts(self.accounts.clone()),
+        });
+        self.dirty = true;
+    }
+
+    pub(super) fn open_account_actions(&mut self, account: Account, now: Instant) {
+        if account.is_default {
+            return self.flash("The default account can't be changed or deleted".into(), now);
+        }
+        self.picker = Some(Picker {
+            title: format!("{} · Esc goes back", account.config_dir.display()),
+            items: vec!["Edit shared entries…".into(), "Delete account…".into()],
+            index: 0,
+            action: PickerAction::AccountActions(account),
+        });
+        self.dirty = true;
+    }
+
+    pub(super) fn open_edit_account_links(&mut self, account: &Account, _now: Instant) {
+        let source = self
+            .accounts
+            .iter()
+            .find(|a| a.is_default)
+            .map_or_else(paths::claude_dir, |a| a.config_dir.clone());
+        let checked = linked_entries(&account.config_dir);
+        self.picker = Some(Picker {
+            title: format!(
+                "Share with {} · Space checks, Enter applies, Esc goes back",
+                account.config_dir.display()
+            ),
+            items: SHAREABLE
+                .iter()
+                .zip(&checked)
+                .map(|((_, label, _), on)| format!("[{}] {label}", if *on { 'x' } else { ' ' }))
+                .collect(),
+            index: 0,
+            action: PickerAction::EditAccountLinks {
+                dir: account.config_dir.clone(),
+                source,
+                checked,
+            },
+        });
+        self.dirty = true;
+    }
+
+    pub(super) fn apply_account_links(&mut self, dir: &Path, source: &Path, checked: &[bool], now: Instant) {
+        match set_account_links(dir, source, checked) {
+            Ok((linked, unlinked, skipped)) => {
+                let mut message = format!("{}: {linked} linked, {unlinked} unlinked", dir.display());
+                if skipped > 0 {
+                    message.push_str(&format!(", {skipped} skipped (exists or missing in default)"));
+                }
+                self.flash(message, now);
+            }
+            Err(message) => self.flash(message, now),
+        }
+    }
+
+    pub(super) fn ask_delete_account(&mut self, account: &Account, now: Instant) {
+        if account.is_default {
+            return self.flash("The default account can't be changed or deleted".into(), now);
+        }
+        self.confirm = Some(Confirm {
+            question: format!(
+                "Delete {} and everything in it (sessions, login)? Linked entries stay in the default account. (y/n)",
+                account.config_dir.display()
+            ),
+            action: ConfirmAction::DeleteAccount(account.config_dir.clone()),
+        });
+        self.dirty = true;
+    }
+
+    pub(super) fn delete_account(&mut self, dir: &Path, now: Instant) {
+        if let Err(message) = delete_account_dir(dir) {
+            return self.flash(message, now);
+        }
+        self.accounts.retain(|a| a.config_dir != dir);
+        let active = self.config.ui.active_account_config_dir.as_deref();
+        if active.is_some_and(|a| Path::new(a) == dir) {
+            self.config.ui.active_account_config_dir = None;
+            let _ = write_deck_config(&self.config, &deck_config_path());
+        }
+        self.rebuild_rows();
+        self.flash(format!("Deleted {}", dir.display()), now);
     }
 
     /// Enter on the folder-name prompt: asks which of the default account's entries to share.
@@ -257,8 +361,9 @@ mod tests {
         f.key("\x1bOS");
         let picker = f.app.picker.as_ref().expect("picker");
         assert_eq!(picker.title, "Switch account");
-        assert_eq!(picker.items.len(), 2);
+        assert_eq!(picker.items.len(), 3);
         assert_eq!(picker.items[1], "+ Add account…");
+        assert_eq!(picker.items[2], "≡ Manage accounts…");
         assert_eq!(f.app.config.ui.active_account_config_dir, None);
     }
 

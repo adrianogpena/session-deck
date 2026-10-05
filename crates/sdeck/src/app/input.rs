@@ -51,10 +51,21 @@ pub(super) enum PickerAction {
         source: PathBuf,
         checked: Vec<bool>,
     },
+    /// The accounts listed, in order; Enter opens `AccountActions` for the chosen one.
+    ManageAccounts(Vec<Account>),
+    /// "Edit shared entries…", "Delete account…".
+    AccountActions(Account),
+    /// Space checks entries (`SHAREABLE` order); Enter makes `dir`'s symlinks to `source` match.
+    EditAccountLinks {
+        dir: PathBuf,
+        source: PathBuf,
+        checked: Vec<bool>,
+    },
 }
 
 /// What `y` does.
 pub(super) enum ConfirmAction {
+    DeleteAccount(PathBuf),
     RemoveProject(String),
     DeleteFolder(String),
     RemoveTag(String),
@@ -127,9 +138,16 @@ impl App {
                     self.pick(picker, now);
                 }
             }
-            "\x1b" | "q" | "\x03" => self.picker = None,
+            "\x1b" | "q" | "\x03" => {
+                let back = self.picker.take().map(|p| p.action);
+                if key != "\x03" {
+                    self.go_back_from(back, now);
+                }
+            }
             " " => {
-                if let PickerAction::ShareWithAccount { checked, .. } = &mut picker.action {
+                if let PickerAction::ShareWithAccount { checked, .. }
+                | PickerAction::EditAccountLinks { checked, .. } = &mut picker.action
+                {
                     let on = !checked[picker.index];
                     checked[picker.index] = on;
                     let label = &picker.items[picker.index][4..];
@@ -141,10 +159,25 @@ impl App {
         self.dirty = true;
     }
 
+    /// Esc in an account submenu returns to the menu it came from.
+    fn go_back_from(&mut self, action: Option<PickerAction>, now: Instant) {
+        match action {
+            Some(PickerAction::ManageAccounts(_)) => self.open_account_picker(),
+            Some(PickerAction::AccountActions(_)) => self.open_manage_accounts(),
+            Some(PickerAction::EditAccountLinks { dir, .. }) => {
+                if let Some(account) = self.accounts.iter().find(|a| a.config_dir == dir).cloned() {
+                    self.open_account_actions(account, now);
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn on_confirm_key(&mut self, key: &str, now: Instant) {
         if let Some(Confirm { action, .. }) = self.confirm.take() {
             if key == "y" || key == "Y" {
                 match action {
+                    ConfirmAction::DeleteAccount(dir) => self.delete_account(&dir, now),
                     ConfirmAction::RemoveProject(key) => self.remove_project_now(&key, now),
                     ConfirmAction::DeleteFolder(id) => self.change_tree(|t| delete_folder(&t, &id)),
                     ConfirmAction::RemoveTag(name) => self.remove_tag_everywhere(&name, now),
@@ -166,12 +199,23 @@ impl App {
             } => self.move_to_folder(picker.index, project_keys, &folder_ids, bulk),
             PickerAction::SwitchAccount(accounts) => match accounts.get(picker.index) {
                 Some(account) => self.switch_account(account, now),
-                None => self.open_prompt(
+                None if picker.index == accounts.len() => self.open_prompt(
                     "New account folder (e.g. claude-personal)".into(),
                     String::new(),
                     PromptAction::NewAccountDir,
                 ),
+                None => self.open_manage_accounts(),
             },
+            PickerAction::ManageAccounts(accounts) => {
+                self.open_account_actions(accounts[picker.index].clone(), now)
+            }
+            PickerAction::AccountActions(account) => match picker.index {
+                0 => self.open_edit_account_links(&account, now),
+                _ => self.ask_delete_account(&account, now),
+            },
+            PickerAction::EditAccountLinks { dir, source, checked } => {
+                self.apply_account_links(&dir, &source, &checked, now)
+            }
             PickerAction::ShareWithAccount { dir, source, checked } => {
                 self.create_account(&dir, &source, &checked, now)
             }

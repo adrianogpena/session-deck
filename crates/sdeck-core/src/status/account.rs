@@ -134,6 +134,70 @@ pub fn create_account_dir(dir: &Path, source: &Path, entries: &[&str]) -> Result
     Ok(linked)
 }
 
+fn is_symlink(path: &Path) -> bool {
+    path.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink())
+}
+
+fn remove_link(path: &Path) -> std::io::Result<()> {
+    fs::remove_file(path).or_else(|_| fs::remove_dir(path))
+}
+
+/// For each `SHAREABLE` entry, whether it is a symlink in `dir`.
+pub fn linked_entries(dir: &Path) -> Vec<bool> {
+    SHAREABLE
+        .iter()
+        .map(|(entry, _, _)| is_symlink(&dir.join(entry)))
+        .collect()
+}
+
+/// Makes `dir`'s symlinks match `wanted` (`SHAREABLE` order): links missing ones to `source`, removes
+/// unwanted ones. Real files and dirs are never touched. Returns (linked, unlinked, skipped).
+pub fn set_account_links(
+    dir: &Path,
+    source: &Path,
+    wanted: &[bool],
+) -> Result<(usize, usize, usize), String> {
+    let (mut linked, mut unlinked, mut skipped) = (0, 0, 0);
+    for ((entry, _, _), want) in SHAREABLE.iter().zip(wanted) {
+        let (from, to) = (source.join(entry), dir.join(entry));
+        match (*want, is_symlink(&to)) {
+            (true, false) if from.exists() && to.symlink_metadata().is_err() => {
+                link(&from, &to).map_err(|e| format!("Could not link {entry}: {e}"))?;
+                linked += 1;
+            }
+            (true, false) => skipped += 1,
+            (false, true) => {
+                remove_link(&to).map_err(|e| format!("Could not unlink {entry}: {e}"))?;
+                unlinked += 1;
+            }
+            _ => {}
+        }
+    }
+    Ok((linked, unlinked, skipped))
+}
+
+/// Deletes a non-default account's config dir. Symlinks are removed first so the shared targets
+/// are never followed.
+pub fn delete_account_dir(dir: &Path) -> Result<(), String> {
+    let name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if dir == paths::claude_dir()
+        || !name.starts_with(".claude-")
+        || dir.parent() != Some(paths::user_home().as_path())
+    {
+        return Err("Only ~/.claude-<name> accounts can be deleted".into());
+    }
+    for (entry, _, _) in SHAREABLE {
+        let path = dir.join(entry);
+        if is_symlink(&path) {
+            remove_link(&path).map_err(|e| format!("Could not unlink {entry}: {e}"))?;
+        }
+    }
+    fs::remove_dir_all(dir).map_err(|e| format!("Could not delete {}: {e}", dir.display()))
+}
+
 /// The discovered account whose config dir is `path`.
 pub fn account_for_config_dir(path: &Path) -> Option<Account> {
     discover_accounts().into_iter().find(|a| a.config_dir == path)
@@ -234,6 +298,40 @@ mod tests {
             }
             Err(e) => assert!(dir.is_dir(), "{e}"),
         }
+    }
+
+    #[test]
+    fn links_can_be_added_and_removed_without_touching_real_entries() {
+        let (_g, home) = fixture();
+        let source = home.path().join(".claude");
+        fs::create_dir_all(source.join("skills")).unwrap();
+        fs::create_dir_all(source.join("agents")).unwrap();
+        let dir = home.path().join(".claude-personal");
+        fs::create_dir_all(dir.join("agents")).unwrap();
+        let mut wanted = vec![false; SHAREABLE.len()];
+        wanted[0] = true;
+        wanted[1] = true;
+        match set_account_links(&dir, &source, &wanted) {
+            Ok(result) => {
+                assert_eq!(result, (1, 0, 1));
+                assert!(linked_entries(&dir)[0]);
+                assert!(!linked_entries(&dir)[1]);
+                wanted[0] = false;
+                assert_eq!(set_account_links(&dir, &source, &wanted).unwrap(), (0, 1, 1));
+                assert!(!dir.join("skills").exists());
+            }
+            Err(e) => assert!(!e.is_empty()),
+        }
+        assert!(source.join("skills").is_dir());
+    }
+
+    #[test]
+    fn only_dot_claude_dash_accounts_can_be_deleted() {
+        let (_g, home) = fixture();
+        assert!(delete_account_dir(&home.path().join(".claude")).is_err());
+        assert!(delete_account_dir(&home.path().join("other")).is_err());
+        delete_account_dir(&home.path().join(".claude-personal")).unwrap();
+        assert!(!home.path().join(".claude-personal").exists());
     }
 
     #[test]
