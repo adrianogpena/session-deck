@@ -216,6 +216,7 @@ impl App {
             return;
         };
         let usage_turned_on = !self.config.ui.show_usage && next.ui.show_usage;
+        let max_sessions_changed = self.config.ui.max_sessions_listed != next.ui.max_sessions_listed;
         self.config = next;
         let _ = write_deck_config(&self.config, &deck_config_path());
         // A `tools.*.command` edit shouldn't need a restart to take effect.
@@ -228,6 +229,9 @@ impl App {
         if self.sources_enabled {
             // Turning `ui.gitStatus` on shows markers now, not after the next poll.
             self.poll_git_status();
+            if max_sessions_changed {
+                self.spawn_discovery();
+            }
         }
         let mut message = format!("{} updated", field.label);
         if usage_turned_on {
@@ -388,7 +392,7 @@ mod tests {
         // ui.maxSessionsListed opens a prompt over the still-open popup.
         f.key("k");
         f.key("\r");
-        assert_eq!(f.app.prompt.as_ref().unwrap().value, "30");
+        assert_eq!(f.app.prompt.as_ref().unwrap().value, "10");
         f.key("\x15");
         f.key("12\r");
         assert_eq!(f.app.config.ui.max_sessions_listed, 12);

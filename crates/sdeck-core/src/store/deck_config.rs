@@ -61,7 +61,7 @@ impl UsagePosition {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct UiConfig {
-    /// How many of the most recent sessions are loaded from disk. Default: 30.
+    /// How many of the most recent sessions of each project are loaded from disk. Default: 10.
     pub max_sessions_listed: u64,
     /// Desktop notifications for waiting/finished/error sessions. Default: on.
     pub notifications: bool,
@@ -118,7 +118,7 @@ pub struct DeckConfig {
     pub extra: Map<String, Value>,
 }
 
-const DEFAULT_MAX_SESSIONS_LISTED: u64 = 30;
+const DEFAULT_MAX_SESSIONS_LISTED: u64 = 10;
 const DEFAULT_NOTIFY_STATUSES: [SessionStatus; 3] =
     [SessionStatus::Waiting, SessionStatus::Done, SessionStatus::Error];
 const DEFAULT_TRASH_RETENTION_DAYS: u64 = 30;
@@ -412,7 +412,7 @@ mod tests {
     #[test]
     fn returns_every_default_when_the_file_is_empty() {
         let c = parse_deck_config("{}");
-        assert_eq!(c.ui.max_sessions_listed, 30);
+        assert_eq!(c.ui.max_sessions_listed, 10);
         assert!(c.ui.notifications);
         assert_eq!(
             c.ui.notify_statuses,
@@ -524,7 +524,7 @@ mod tests {
     #[test]
     fn malformed_json_falls_back_to_defaults() {
         let c = parse_deck_config("{ not json");
-        assert_eq!(c.ui.max_sessions_listed, 30);
+        assert_eq!(c.ui.max_sessions_listed, 10);
         assert!(c.ui.notifications);
     }
 
@@ -534,7 +534,7 @@ mod tests {
             "ui": { "maxSessionsListed": 0, "notifications": false },
             "tools": { "claude": { "command": "  claude-nightly  ", "args": ["--model", "opus", 42] } }
         }));
-        assert_eq!(c.ui.max_sessions_listed, 30);
+        assert_eq!(c.ui.max_sessions_listed, 10);
         assert!(!c.ui.notifications);
         assert_eq!(c.tools["claude"].command.as_deref(), Some("claude-nightly"));
         assert_eq!(c.tools["claude"].args, None);
@@ -583,7 +583,7 @@ mod tests {
     fn read_returns_defaults_for_a_missing_file_and_parses_a_real_one() {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("missing.json");
-        assert_eq!(read_deck_config(&missing).ui.max_sessions_listed, 30);
+        assert_eq!(read_deck_config(&missing).ui.max_sessions_listed, 10);
         let file = dir.path().join("config.json");
         std::fs::write(&file, r#"{"ui":{"maxSessionsListed":50}}"#).unwrap();
         assert_eq!(read_deck_config(&file).ui.max_sessions_listed, 50);

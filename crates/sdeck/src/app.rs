@@ -506,8 +506,9 @@ impl App {
         }
         self.discovering = true;
         let (tx, accounts, config) = (self.tx.clone(), self.accounts.clone(), self.config.clone());
+        let hidden = self.hidden_projects();
         std::thread::spawn(move || {
-            let _ = tx.send(AppEvent::Discovered(discover_found(&accounts, &config)));
+            let _ = tx.send(AppEvent::Discovered(discover_found(&accounts, &config, &hidden)));
         });
     }
 

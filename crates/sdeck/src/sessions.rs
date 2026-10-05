@@ -1,7 +1,7 @@
 //! Port of `sessions.ts`: the session model, discovery (Claude + Copilot, merged with the live
 //! ones), and the status tracker that turns pid files and status files into what the UI shows.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -147,15 +147,21 @@ pub fn display_title(s: &DeckSession, store: &DeckStore) -> String {
         .unwrap_or_else(|| s.title.clone())
 }
 
-/// The most recent Claude and Copilot sessions (archived ones included, for the archived view), read
-/// from disk. Blocking: runs on a background thread. `merge_found` folds the result into the live list.
-pub fn discover_found(accounts: &[Account], config: &DeckConfig) -> Vec<FoundSession> {
-    let max_sessions = config.ui.max_sessions_listed as usize;
+/// The most recent Claude and Copilot sessions of each project (archived ones included, for the
+/// archived view), read from disk; `ui.maxSessionsListed` caps each project, and `hidden` projects
+/// are skipped. Blocking: runs on a background thread. `merge_found` folds the result into the live list.
+pub fn discover_found(accounts: &[Account], config: &DeckConfig, hidden: &[String]) -> Vec<FoundSession> {
+    let max_per_project = config.ui.max_sessions_listed as usize;
+    let hidden: HashSet<&str> = hidden.iter().map(String::as_str).collect();
+    let project_key = |cwd: &str| {
+        let key = normalize_fs_path(&resolve_project_root(cwd).root);
+        (!hidden.contains(key.as_str())).then_some(key)
+    };
     let enabled = |agent: &str| config.tools.get(agent).and_then(|t| t.enabled).unwrap_or(true);
     let mut found: Vec<FoundSession> = Vec::new();
     if enabled("claude") {
         found.extend(
-            discover_claude_sessions(accounts, max_sessions)
+            discover_claude_sessions(accounts, max_per_project, project_key)
                 .into_iter()
                 .map(|s| FoundSession {
                     agent: "claude".into(),
@@ -171,7 +177,7 @@ pub fn discover_found(accounts: &[Account], config: &DeckConfig) -> Vec<FoundSes
         );
     }
     if enabled("copilot") {
-        found.extend(discover_copilot_found(max_sessions));
+        found.extend(discover_copilot_found(max_per_project, project_key));
     }
     // A project is the git root of the session's cwd (cached per cwd by `resolve_project_root`).
     let roots = map_with_concurrency(&found, GIT_RESOLVE_CONCURRENCY, |s, _| {
@@ -181,15 +187,46 @@ pub fn discover_found(accounts: &[Account], config: &DeckConfig) -> Vec<FoundSes
         s.project_key = normalize_fs_path(&root.root);
         s.project_root = root.root;
     }
+    cap_per_project(found, max_per_project)
+}
+
+/// Keeps each project's `max_per_project` most recent sessions across every agent, in the order given.
+fn cap_per_project(found: Vec<FoundSession>, max_per_project: usize) -> Vec<FoundSession> {
+    let mut by_recency: Vec<usize> = (0..found.len()).collect();
+    by_recency.sort_by_key(|&i| std::cmp::Reverse(found[i].mtime_ms));
+    let mut per_project: HashMap<&str, usize> = HashMap::new();
+    let mut keep = vec![false; found.len()];
+    for i in by_recency {
+        let count = per_project.entry(found[i].project_key.as_str()).or_insert(0);
+        if *count < max_per_project {
+            *count += 1;
+            keep[i] = true;
+        }
+    }
+    let mut keep = keep.into_iter();
     found
+        .into_iter()
+        .filter(|_| keep.next().unwrap_or(false))
+        .collect()
 }
 
 /// Copilot's own session list, most recent first; sessions without a summary never got a turn.
-fn discover_copilot_found(max_sessions: usize) -> Vec<FoundSession> {
+fn discover_copilot_found(
+    max_per_project: usize,
+    project_key: impl Fn(&str) -> Option<String>,
+) -> Vec<FoundSession> {
+    let mut per_project: HashMap<String, usize> = HashMap::new();
     list_copilot_sessions()
         .into_iter()
         .filter(|r| r.summary.as_deref().is_some_and(|s| !s.is_empty()))
-        .take(max_sessions)
+        .filter(|r| {
+            let Some(key) = project_key(&r.cwd) else {
+                return false;
+            };
+            let count = per_project.entry(key).or_insert(0);
+            *count += 1;
+            *count <= max_per_project
+        })
         .map(|r| FoundSession {
             agent: "copilot".into(),
             id: r.id,
@@ -509,7 +546,7 @@ mod tests {
         let accounts = sdeck_core::status::account::discover_accounts();
         let mut config = DeckConfig::default();
         config.tools.get_mut("copilot").unwrap().enabled = Some(false);
-        let found = discover_found(&accounts, &config);
+        let found = discover_found(&accounts, &config, &[]);
         let ids: Vec<_> = found.iter().map(|f| f.id.as_str()).collect();
         assert_eq!(ids, ["id-me", "id-work"]);
         assert_eq!(
@@ -521,6 +558,20 @@ mod tests {
     }
 
     #[test]
+    fn the_cap_counts_every_agent_of_a_project_together() {
+        let mut copilot = found_session("co1", 90);
+        copilot.agent = "copilot".into();
+        let found = vec![
+            found_session("cl1", 100),
+            found_session("cl2", 80),
+            found_session("cl3", 60),
+            copilot,
+        ];
+        let ids: Vec<_> = cap_per_project(found, 3).into_iter().map(|f| f.id).collect();
+        assert_eq!(ids, ["cl1", "cl2", "co1"]);
+    }
+
+    #[test]
     fn a_disabled_claude_tool_lists_no_claude_sessions() {
         let (_g, home) = fixture();
         write_transcript(home.path(), ".claude", "p1", "id-work", "work prompt", 100);
@@ -528,7 +579,7 @@ mod tests {
         let mut config = DeckConfig::default();
         config.tools.get_mut("copilot").unwrap().enabled = Some(false);
         config.tools.get_mut("claude").unwrap().enabled = Some(false);
-        assert!(discover_found(&accounts, &config).is_empty());
+        assert!(discover_found(&accounts, &config, &[]).is_empty());
     }
 
     #[test]

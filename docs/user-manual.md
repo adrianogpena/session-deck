@@ -372,7 +372,7 @@ it up next time it starts).
 ```jsonc
 {
   "ui": {
-    "maxSessionsListed": 30,
+    "maxSessionsListed": 10,
     "notifications": true,
     "notifyStatuses": ["waiting", "done", "error"],
     "recentProjectsFirst": false,
@@ -395,7 +395,7 @@ it up next time it starts).
 ```
 
 - **`ui.maxSessionsListed`**: how many of the most recent Claude and Copilot sessions the terminal UI
-  loads from disk. Default: 30.
+  loads from disk for each project. Removed projects are never loaded. Default: 10.
 - **`ui.notifications`**: turns desktop notifications off entirely. Default: on.
 - **`ui.notifyStatuses`**: which statuses `notifications` fires for, space-separated: `running`,
   `waiting`, `done`, `error`. Default: `waiting done error` (not `running`).

@@ -19,7 +19,9 @@ fn main() {
     }
     let max = read_deck_config(&deck_config_path()).ui.max_sessions_listed;
     let now = now_ms();
-    for s in discover_claude_sessions(&accounts, max as usize) {
+    for s in discover_claude_sessions(&accounts, max as usize, |cwd| {
+        Some(resolve_project_root(cwd).root)
+    }) {
         let root = resolve_project_root(&s.cwd);
         let git = read_git_status(&s.cwd)
             .map(|g| {

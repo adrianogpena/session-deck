@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -463,10 +463,14 @@ fn to_session(c: &Candidate) -> Option<ClaudeSession> {
     })
 }
 
-/// The most recent sessions across every account, newest first, capped at `max_sessions`. A
-/// project folder whose sessions all fall outside the cap would vanish from the tree with no way
-/// to start a new session there, so its single most recent session is kept regardless of the cap.
-pub fn discover_claude_sessions(accounts: &[Account], max_sessions: usize) -> Vec<ClaudeSession> {
+/// The most recent sessions of every project across every account, newest first, at most
+/// `max_per_project` per project. `project_key` maps a session's cwd to its project key, or `None`
+/// for a project to ignore (such sessions are skipped, and their files never read past the first).
+pub fn discover_claude_sessions(
+    accounts: &[Account],
+    max_per_project: usize,
+    project_key: impl Fn(&str) -> Option<String>,
+) -> Vec<ClaudeSession> {
     let mut candidates: Vec<Candidate> = Vec::new();
     for account in accounts {
         for dir_name in list_project_dir_names(account) {
@@ -487,27 +491,29 @@ pub fn discover_claude_sessions(accounts: &[Account], max_sessions: usize) -> Ve
     }
     candidates.sort_by_key(|c| std::cmp::Reverse(c.mtime_ms));
 
-    let dir_key = |c: &Candidate| (c.account.config_dir.clone(), c.dir_name.clone());
     let mut found: Vec<ClaudeSession> = Vec::new();
-    let mut dirs_seen = HashSet::new();
+    let mut per_project: HashMap<String, usize> = HashMap::new();
+    // A project folder holds one cwd, so its project is known after its first valid session.
+    let mut dir_project: HashMap<(PathBuf, String), Option<String>> = HashMap::new();
     for c in &candidates {
-        if found.len() >= max_sessions {
-            break;
+        let dir = (c.account.config_dir.clone(), c.dir_name.clone());
+        match dir_project.get(&dir) {
+            Some(None) => continue,
+            Some(Some(key)) if per_project.get(key).copied().unwrap_or(0) >= max_per_project => continue,
+            _ => {}
         }
-        if let Some(session) = to_session(c) {
-            found.push(session);
-            dirs_seen.insert(dir_key(c));
-        }
-    }
-    for c in &candidates {
-        let key = dir_key(c);
-        if dirs_seen.contains(&key) {
+        let Some(session) = to_session(c) else {
             continue;
-        }
-        // Candidates are in global mtime-desc order, so the first valid one is the most recent.
-        if let Some(session) = to_session(c) {
+        };
+        let key = project_key(&session.cwd);
+        dir_project.insert(dir, key.clone());
+        let Some(key) = key else {
+            continue;
+        };
+        let count = per_project.entry(key).or_insert(0);
+        if *count < max_per_project {
+            *count += 1;
             found.push(session);
-            dirs_seen.insert(key);
         }
     }
     found
@@ -738,7 +744,7 @@ mod tests {
         );
         put(&accounts[1], "C--proj", "new", &transcript("C:\\proj", "two"), 10);
         put(&accounts[1], "C--empty", "blank", "{\"type\":\"summary\"}\n", 5);
-        let found = discover_claude_sessions(&accounts, 30);
+        let found = discover_claude_sessions(&accounts, 30, |cwd| Some(cwd.to_string()));
         let ids: Vec<_> = found.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, ["new", "old"]);
         assert_eq!(found[0].account.email.as_deref(), Some("me@x.com"));
@@ -747,17 +753,31 @@ mod tests {
     }
 
     #[test]
-    fn cap_keeps_each_project_folders_newest_session() {
+    fn cap_applies_to_each_project_separately() {
         let (_g, _home, accounts) = two_accounts();
-        put(&accounts[0], "C--a", "a1", &transcript("C:\\a", "p"), 10);
-        put(&accounts[0], "C--a", "a2", &transcript("C:\\a", "p"), 20);
-        put(&accounts[0], "C--b", "b1", &transcript("C:\\b", "p"), 30);
-        put(&accounts[0], "C--b", "b2", &transcript("C:\\b", "p"), 40);
-        let ids: Vec<_> = discover_claude_sessions(&accounts, 1)
+        put(&accounts[0], "C--a", "a1", &transcript("C:/a", "p"), 10);
+        put(&accounts[0], "C--a", "a2", &transcript("C:/a", "p"), 20);
+        put(&accounts[0], "C--a", "a3", &transcript("C:/a", "p"), 25);
+        put(&accounts[0], "C--b", "b1", &transcript("C:/b", "p"), 30);
+        put(&accounts[0], "C--b", "b2", &transcript("C:/b", "p"), 40);
+        let ids: Vec<_> = discover_claude_sessions(&accounts, 2, |cwd| Some(cwd.to_string()))
             .into_iter()
             .map(|s| s.id)
             .collect();
-        assert_eq!(ids, ["a1", "b1"]);
+        assert_eq!(ids, ["a1", "a2", "b1", "b2"]);
+    }
+
+    #[test]
+    fn projects_without_a_key_are_ignored() {
+        let (_g, _home, accounts) = two_accounts();
+        put(&accounts[0], "C--a", "a1", &transcript("C:/a", "p"), 10);
+        put(&accounts[0], "C--b", "b1", &transcript("C:/b", "p"), 20);
+        let ids: Vec<_> =
+            discover_claude_sessions(&accounts, 5, |cwd| (cwd != "C:/a").then(|| cwd.to_string()))
+                .into_iter()
+                .map(|s| s.id)
+                .collect();
+        assert_eq!(ids, ["b1"]);
     }
 
     #[test]
