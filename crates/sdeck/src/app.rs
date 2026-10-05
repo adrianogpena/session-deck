@@ -52,7 +52,7 @@ use sdeck_core::status::session_usage::{
     RateLimitScanner,
 };
 use sdeck_core::status::usage_display::{format_reset_time, UsageMetric};
-use sdeck_core::status::waiting_notifier::{ToastSender, WaitingNotifier};
+use sdeck_core::status::waiting_notifier::{StatusTransitions, ToastSender, WaitingNotifier};
 use sdeck_core::status::watch::{watch_path, PathWatch};
 use sdeck_core::store::deck_config::DeckConfig;
 use sdeck_core::store::deck_store::{DeckStore, Patch, ThemePreference, UiPatch, WatchHandle};
@@ -208,6 +208,10 @@ pub struct App {
     _claude_watcher: Option<ClaudeProcessWatcher>,
     /// Toasts for sessions that need you; `None` until enabled (tests inject a fake sender).
     notifier: Option<WaitingNotifier<Box<dyn ToastSender>>>,
+    /// Status changes of watched sessions, tracked even with notifications off.
+    transitions: StatusTransitions,
+    /// A failed hook spawn was already flashed, so a broken hook line doesn't flash on every change.
+    hook_failure_flashed: bool,
     /// Last terminal title written, so it's only rewritten when it changes.
     last_title: String,
     /// Lines the preview is scrolled back from the live bottom, for `scrolled_session`; reset when
@@ -295,6 +299,8 @@ impl App {
             copilot_watcher: CopilotStatusWatcher::new(|_| {}),
             _claude_watcher: None,
             notifier: None,
+            transitions: StatusTransitions::default(),
+            hook_failure_flashed: false,
             last_title: String::new(),
             preview_scroll: 0,
             scrolled_session: None,
@@ -555,7 +561,8 @@ impl App {
             self.send_pending_prompt(uid, now);
         }
         self.rebuild_rows();
-        self.notify_changes();
+        let transitions = self.notify_changes();
+        self.run_hooks(&transitions);
         self.update_title();
         self.dirty = true;
     }

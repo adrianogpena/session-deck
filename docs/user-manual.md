@@ -337,6 +337,25 @@ A notification appears when a session starts waiting for you, finishes a turn, o
 - Clicking the notification selects that session in Session Deck.
 - It covers sessions running in other terminals too.
 
+### Hooks
+
+To run your own command when a session changes status, set `hooks.onWaiting`, `hooks.onDone`,
+`hooks.onError` or `hooks.onRunning` in the config (see section 4). A hook runs once per
+transition, even with the terminal focused, with notifications off, or while attached. It is
+started in the background (`cmd /C` on Windows, `sh -c` elsewhere) in the session's project folder,
+with its output discarded, and Session Deck doesn't wait for it. A session already in a status
+when Session Deck sees it first is not a transition.
+
+| Variable | Value |
+|---|---|
+| `SDECK_SESSION_ID` | the session's id |
+| `SDECK_STATUS` | `running`, `waiting`, `done` or `error` |
+| `SDECK_LABEL` | the session's title |
+| `SDECK_PROJECT` | the project's name (empty if unknown) |
+| `SDECK_CWD` | the project's folder |
+
+If a hook can't be started, a message is flashed once.
+
 ---
 
 ## 3. Multiple Claude accounts
@@ -391,6 +410,9 @@ it up next time it starts).
   },
   "trash": {
     "retentionDays": 30
+  },
+  "hooks": {
+    "onWaiting": "echo %SDECK_STATUS% %SDECK_LABEL% >> %TEMP%\\sdeck-hook.txt"
   }
 }
 ```
@@ -430,6 +452,9 @@ it up next time it starts).
     PATH, or a full path). Skips the default `where.exe` lookup on Windows.
   - **`args`**: extra arguments appended after the ones Session Deck builds itself (`--resume <id>`,
     etc).
+- **`hooks.onWaiting` / `onDone` / `onError` / `onRunning`**: a shell command line run when a
+  session changes to that status; empty or absent = off. Runs once per transition and gets the
+  `SDECK_*` variables (see **Hooks** under Desktop notifications). Default: none.
 - **`trash.retentionDays`**: how many days a deleted session stays restorable in
   `~/.session-deck/trash/` before being purged at startup. Default: 30.
 

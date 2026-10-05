@@ -8,10 +8,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use sdeck_core::agent_catalog::{agent_display_name, is_builtin_agent};
+use sdeck_core::status::hooks::{hook_key, run_hook};
 use sdeck_core::status::session_status::{
     acknowledge_session_status, clear_session_status, write_session_status, SessionStatus as CoreStatus,
 };
-use sdeck_core::status::waiting_notifier::{CheckOptions, OnActivated, WatchedSession};
+use sdeck_core::status::waiting_notifier::{CheckOptions, OnActivated, Transition, WatchedSession};
 use sdeck_core::store::tree_prefs::{prepend_session, TreePrefs};
 
 use super::new_session::id_change;
@@ -364,10 +365,8 @@ impl App {
 
     /// Toasts for watched sessions (live here or elsewhere, every account's, shown in the tree or
     /// not) that need you; a click selects the session here.
-    pub(super) fn notify_changes(&mut self) {
-        if !self.config.ui.notifications {
-            return;
-        }
+    /// Returns the status transitions found, whether or not notifications are on.
+    pub(super) fn notify_changes(&mut self) -> Vec<Transition> {
         let watched_sessions: Vec<&DeckSession> = self
             .sessions
             .iter()
@@ -381,10 +380,15 @@ impl App {
                 session_id: s.id.clone().unwrap_or_default(),
                 label: display_title(s, &self.store),
                 project: labels.get(&s.project_root).cloned(),
+                project_root: s.project_root.clone(),
             })
             .collect();
-        let Some(notifier) = self.notifier.as_mut() else {
-            return;
+        let transitions = self.transitions.update(&self.store, &watched);
+        if !self.config.ui.notifications {
+            return transitions;
+        }
+        let Some(notifier) = self.notifier.as_ref() else {
+            return transitions;
         };
         let tx = self.tx.clone();
         let on_activated: OnActivated = Arc::new(move |id: &str| {
@@ -403,7 +407,23 @@ impl App {
             skip: &skip,
             focused: self.focused,
         };
-        notifier.check(&self.store, &watched, &options, &on_activated);
+        notifier.notify(&transitions, &options, &on_activated);
+        transitions
+    }
+
+    /// Runs the configured hook of each transition's status, regardless of focus or notifications.
+    pub(super) fn run_hooks(&mut self, transitions: &[Transition]) {
+        for t in transitions {
+            let Some(line) = self.config.hooks.get(hook_key(t.status)) else {
+                continue;
+            };
+            if let Err(err) = run_hook(line, t) {
+                if !self.hook_failure_flashed {
+                    self.hook_failure_flashed = true;
+                    self.flash(format!("Hook failed to start: {err}"), Instant::now());
+                }
+            }
+        }
     }
 
     /// A toast was clicked: select its session (the terminal can't be brought to the front).
@@ -662,6 +682,32 @@ mod tests {
 
         f.app.handle(AppEvent::ToastClicked("n1".into()), Instant::now());
         assert_eq!(f.app.selected_session().map(|s| s.uid), Some(uid));
+    }
+
+    #[test]
+    fn transitions_are_returned_with_notifications_off() {
+        let mut f = fixture();
+        let uid = f.add(Some("n2"), true);
+        f.key("s");
+        f.wait_for_screen(uid, "> ");
+        f.app.config.ui.notifications = false;
+        f.app.notifier = None;
+        fs::create_dir_all(session_status_dir()).unwrap();
+        let status = |s: &str, at: i64| {
+            fs::write(
+                session_status_dir().join("n2.json"),
+                format!(r#"{{"status":"{s}","updatedAt":{at}}}"#),
+            )
+            .unwrap();
+        };
+        status("running", 1);
+        assert!(f.app.notify_changes().is_empty());
+        status("waiting", 2);
+        let found = f.app.notify_changes();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].session_id, "n2");
+        assert_eq!(found[0].status, CoreStatus::Waiting);
+        assert!(f.toasts.lock().unwrap().is_empty());
     }
 
     #[test]

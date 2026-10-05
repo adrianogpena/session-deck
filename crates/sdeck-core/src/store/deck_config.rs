@@ -117,6 +117,9 @@ pub struct DeckConfig {
     pub tools: IndexMap<String, ToolConfig>,
     pub trash: TrashConfig,
     pub accounts: AccountsConfig,
+    /// Shell command lines run on a status change, keyed `onWaiting | onDone | onError | onRunning`.
+    /// An empty line is off; other keys are kept so a write never drops them.
+    pub hooks: IndexMap<String, String>,
     pub extra: Map<String, Value>,
 }
 
@@ -180,6 +183,7 @@ impl Default for DeckConfig {
                 show_owner: false,
                 extra: Map::new(),
             },
+            hooks: IndexMap::new(),
             extra: Map::new(),
         }
     }
@@ -237,7 +241,7 @@ pub fn parse_deck_config(raw: &str) -> DeckConfig {
     let Ok(Value::Object(root)) = serde_json::from_str::<Value>(raw) else {
         return config;
     };
-    config.extra = extras(&root, &["ui", "tools", "trash", "accounts"]);
+    config.extra = extras(&root, &["ui", "tools", "trash", "accounts", "hooks"]);
 
     if let Some(ui) = root.get("ui").and_then(Value::as_object) {
         let c = &mut config.ui;
@@ -344,6 +348,15 @@ pub fn parse_deck_config(raw: &str) -> DeckConfig {
             config.accounts.show_owner = b;
         }
     }
+    if let Some(hooks) = root.get("hooks").and_then(Value::as_object) {
+        config.hooks = hooks
+            .iter()
+            .filter_map(|(key, line)| {
+                let line = line.as_str()?.trim();
+                (!line.is_empty()).then(|| (key.clone(), line.to_string()))
+            })
+            .collect();
+    }
     config
 }
 
@@ -409,11 +422,20 @@ pub fn deck_config_to_json(config: &DeckConfig) -> String {
     accounts.insert("showOwner".into(), config.accounts.show_owner.into());
     accounts.extend(config.accounts.extra.clone());
 
+    let hooks: Map<String, Value> = config
+        .hooks
+        .iter()
+        .map(|(k, v)| (k.clone(), Value::from(v.as_str())))
+        .collect();
+
     let mut root = Map::new();
     root.insert("ui".into(), Value::Object(ui_obj));
     root.insert("tools".into(), Value::Object(tools));
     root.insert("trash".into(), Value::Object(trash));
     root.insert("accounts".into(), Value::Object(accounts));
+    if !hooks.is_empty() {
+        root.insert("hooks".into(), Value::Object(hooks));
+    }
     root.extend(config.extra.clone());
     format!(
         "{}\n",
@@ -500,6 +522,19 @@ mod tests {
         }
         assert_eq!(parse_detach_letter("ctrl+h"), None);
         assert_eq!(parse_detach_letter("ctrl+m"), None);
+    }
+
+    #[test]
+    fn hooks_parse_trimmed_skip_empty_keep_unknown_and_round_trip() {
+        assert!(parse_deck_config("{}").hooks.is_empty());
+        let c = parse(json!({ "hooks": {
+            "onWaiting": "  echo hi  ", "onDone": "", "onError": 5, "onBogus": "x", "onRunning": "run"
+        } }));
+        assert_eq!(c.hooks.len(), 3);
+        assert_eq!(c.hooks["onBogus"], "x");
+        assert_eq!(c.hooks["onWaiting"], "echo hi");
+        assert_eq!(c.hooks["onRunning"], "run");
+        assert_eq!(parse_deck_config(&deck_config_to_json(&c)), c);
     }
 
     #[test]

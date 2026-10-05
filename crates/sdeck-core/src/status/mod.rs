@@ -3,6 +3,7 @@ pub mod alert_log;
 pub mod claude_process_watcher;
 pub mod claude_transcript_tailer;
 pub mod copilot_status_watcher;
+pub mod hooks;
 pub mod process;
 pub mod session_status;
 pub mod session_usage;

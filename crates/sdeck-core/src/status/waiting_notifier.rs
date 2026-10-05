@@ -10,6 +10,8 @@ pub struct WatchedSession {
     pub label: String,
     /// Shown as the toast's title. Falls back to "Session Deck" when `None`.
     pub project: Option<String>,
+    /// The session's project root, the working directory of its hooks.
+    pub project_root: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,32 +54,32 @@ fn message(status: SessionStatus, label: &str) -> String {
     format!("{prefix}: {label}")
 }
 
-/// Fires a desktop toast when a watched session transitions into one of the notified statuses: not
-/// repeatedly, and not on first sight (opening onto an already-waiting session stays silent).
-/// [`claim_notification`] keeps two front ends from both notifying the same event.
-pub struct WaitingNotifier<S: ToastSender> {
-    last_status: HashMap<String, Option<SessionStatus>>,
-    sender: S,
+/// A watched session's status changed since the last [`StatusTransitions::update`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Transition {
+    pub session_id: String,
+    pub status: SessionStatus,
+    pub label: String,
+    pub project: Option<String>,
+    pub project_root: String,
+    /// The status record's `updated_at`.
+    pub at: i64,
 }
 
-impl<S: ToastSender> WaitingNotifier<S> {
-    pub fn new(sender: S) -> Self {
-        WaitingNotifier {
-            last_status: HashMap::new(),
-            sender,
-        }
-    }
+/// Finds status transitions of watched sessions: not repeatedly, and not on first sight (opening
+/// onto an already-waiting session is no transition). A session that leaves the watched list and
+/// returns counts as first sight again.
+#[derive(Default)]
+pub struct StatusTransitions {
+    last_status: HashMap<String, Option<SessionStatus>>,
+}
 
-    pub fn check(
-        &mut self,
-        store: &DeckStore,
-        sessions: &[WatchedSession],
-        options: &CheckOptions<'_>,
-        on_activated: &OnActivated,
-    ) {
+impl StatusTransitions {
+    pub fn update(&mut self, store: &DeckStore, sessions: &[WatchedSession]) -> Vec<Transition> {
         self.last_status
             .retain(|id, _| sessions.iter().any(|s| &s.session_id == id));
 
+        let mut transitions = Vec::new();
         for session in sessions {
             let id = session.session_id.as_str();
             let record = read_effective_session_status(store, id);
@@ -90,28 +92,68 @@ impl<S: ToastSender> WaitingNotifier<S> {
             if previous.is_none_or(|prev| prev == current) {
                 continue;
             }
-            // Logged whether or not a toast fires: a history of what happened, not just of what you
-            // were interrupted for.
-            append_alert(&AlertEntry {
+            transitions.push(Transition {
                 session_id: id.to_string(),
                 status: record.status,
                 label: session.label.clone(),
                 project: session.project.clone(),
+                project_root: session.project_root.clone(),
                 at: record.updated_at,
             });
-            if !options.statuses.contains(&record.status)
+        }
+        transitions
+    }
+}
+
+/// Fires a desktop toast when a watched session transitions into one of the notified statuses.
+/// [`claim_notification`] keeps two front ends from both notifying the same event.
+pub struct WaitingNotifier<S: ToastSender> {
+    transitions: StatusTransitions,
+    sender: S,
+}
+
+impl<S: ToastSender> WaitingNotifier<S> {
+    pub fn new(sender: S) -> Self {
+        WaitingNotifier {
+            transitions: StatusTransitions::default(),
+            sender,
+        }
+    }
+
+    /// Finds the transitions itself; [`Self::notify`] is for a caller that tracks them.
+    pub fn check(
+        &mut self,
+        store: &DeckStore,
+        sessions: &[WatchedSession],
+        options: &CheckOptions<'_>,
+        on_activated: &OnActivated,
+    ) {
+        let transitions = self.transitions.update(store, sessions);
+        self.notify(&transitions, options, on_activated);
+    }
+
+    pub fn notify(&self, transitions: &[Transition], options: &CheckOptions<'_>, on_activated: &OnActivated) {
+        for t in transitions {
+            let id = t.session_id.as_str();
+            // Logged whether or not a toast fires: a history of what happened, not just of what you
+            // were interrupted for.
+            append_alert(&AlertEntry {
+                session_id: t.session_id.clone(),
+                status: t.status,
+                label: t.label.clone(),
+                project: t.project.clone(),
+                at: t.at,
+            });
+            if !options.statuses.contains(&t.status)
                 || (options.skip)(id)
                 || options.focused
-                || !claim_notification(id, record.updated_at)
+                || !claim_notification(id, t.at)
             {
                 continue;
             }
             let toast = Toast {
-                title: session
-                    .project
-                    .clone()
-                    .unwrap_or_else(|| "Session Deck".to_string()),
-                message: message(record.status, &session.label),
+                title: t.project.clone().unwrap_or_else(|| "Session Deck".to_string()),
+                message: message(t.status, &t.label),
             };
             let (callback, id) = (Arc::clone(on_activated), id.to_string());
             self.sender.send(toast, Box::new(move || callback(&id)));
@@ -265,6 +307,7 @@ mod tests {
             session_id: id.to_string(),
             label: format!("label {id}"),
             project: project.map(str::to_string),
+            project_root: String::new(),
         }
     }
 
@@ -372,6 +415,24 @@ mod tests {
         assert!(claim_notification("s5", at), "another front end claims it first");
         f.check(&sessions);
         assert!(f.toasts().is_empty());
+    }
+
+    #[test]
+    fn transitions_are_found_without_a_notifier() {
+        let f = fixture();
+        let mut transitions = StatusTransitions::default();
+        let sessions = [watched("s7", Some("deck"))];
+        set("s7", SessionStatus::Running);
+        assert!(transitions.update(&f.store, &sessions).is_empty());
+        set("s7", SessionStatus::Waiting);
+        let found = transitions.update(&f.store, &sessions);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].session_id, "s7");
+        assert_eq!(found[0].status, SessionStatus::Waiting);
+        assert_eq!(found[0].label, "label s7");
+        assert_eq!(found[0].project.as_deref(), Some("deck"));
+        assert!(transitions.update(&f.store, &sessions).is_empty());
+        assert!(read_alerts(10).is_empty());
     }
 
     #[test]
