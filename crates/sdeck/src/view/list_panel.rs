@@ -489,6 +489,9 @@ fn list_row_line(
     }
 }
 
+/// Fewest tree rows a pinned usage block may leave; below that the block scrolls with the rows instead.
+const MIN_TREE_ROWS: usize = 3;
+
 /// Lines for the sessions panel: `height` lines, `width` columns each. With `usage_position` `Top` or
 /// `Bottom`, the trailing USAGE block is pinned there and only the rows before it scroll.
 #[allow(clippy::too_many_arguments)]
@@ -503,11 +506,20 @@ pub fn render_list_panel(
     usage_position: UsagePosition,
 ) -> Vec<Line<'static>> {
     let mut lines = panel_header(t, width, "SESSIONS", note).to_vec();
+    let usage_start = rows
+        .iter()
+        .rposition(|r| matches!(r, ListRow::Divider { label } if label == "USAGE"));
+    let pinned_rows = usage_start.map_or(0, |at| rows.len() - at + 1);
+    let usage_position = if usage_position != UsagePosition::Float
+        && height.saturating_sub(lines.len() + pinned_rows) < MIN_TREE_ROWS
+    {
+        UsagePosition::Float
+    } else {
+        usage_position
+    };
     let split = match usage_position {
         UsagePosition::Float => None,
-        _ => rows
-            .iter()
-            .rposition(|r| matches!(r, ListRow::Divider { label } if label == "USAGE")),
+        _ => usage_start,
     };
     let (tree, block) = rows.split_at(split.unwrap_or(rows.len()));
     let block_lines = |lines: &mut Vec<Line<'static>>| {
@@ -738,6 +750,20 @@ mod tests {
             assert_eq!(rendered[usage_at + 1], "  Model   Opus 5.5 · high");
             assert_eq!(rendered[usage_at + 5], "  7d      —");
             assert!(rendered.iter().any(|r| r.contains("Fix the build")));
+        }
+    }
+
+    #[test]
+    fn a_pinned_usage_block_that_would_starve_the_tree_scrolls_with_the_rows_instead() {
+        let t = Theme::new(ThemeName::Dark);
+        for position in [UsagePosition::Top, UsagePosition::Bottom] {
+            let lines = render_list_panel(t, 60, 8, &fixture(), 2, "", "empty", position);
+            assert_eq!(lines.len(), 8);
+            assert!(
+                lines.iter().any(|l| text(l).contains("Fix the build")),
+                "{position:?}"
+            );
+            assert!(lines.iter().all(|l| text(l).chars().count() == 60));
         }
     }
 

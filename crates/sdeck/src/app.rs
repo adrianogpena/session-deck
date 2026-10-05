@@ -57,6 +57,7 @@ use sdeck_core::store::deck_config::DeckConfig;
 use sdeck_core::store::deck_store::{DeckStore, Patch, ThemePreference, UiPatch, WatchHandle};
 use sdeck_core::store::tree_prefs::{freeze_session_order, GroupView, SessionSort, TreePrefs};
 
+use crate::ansi::fit;
 use crate::event::AppEvent;
 use crate::filters::{
     filter_key_category, matches_status_filter, toggle_status_filter, within_time_filter, StatusCategory,
@@ -64,7 +65,9 @@ use crate::filters::{
 };
 use crate::git_status_tracker::{read_all, GitStatusTracker};
 use crate::keys::{extract_focus_events, split_keys};
-use crate::layout::{compute_layout, Layout, DEFAULT_SIDEBAR_PCT, SIDEBAR_STEP};
+use crate::layout::{
+    compute_layout, too_small, Layout, DEFAULT_SIDEBAR_PCT, MIN_COLS, MIN_ROWS, SIDEBAR_STEP,
+};
 use crate::live_session::{looks_like_multiline_paste, Executables};
 use crate::sessions::{
     discover_found, display_title, merge_found, refresh_live_title, DeckSession, SessionStatus, StatusTracker,
@@ -330,13 +333,16 @@ impl App {
 
     pub fn set_size(&mut self, cols: u16, rows: u16) {
         self.term_size = (cols, rows);
+        self.dirty = true;
+        if too_small(cols, rows) {
+            return;
+        }
         if let Some(uid) = self.attached {
             if let Some(live) = self.session_mut(uid).and_then(|s| s.live.as_mut()) {
                 live.resize(cols, rows);
             }
         }
         self.resize_all_to_pane();
-        self.dirty = true;
     }
 
     /// Queues `text` for the real terminal.
@@ -1215,6 +1221,17 @@ impl App {
         let t = self.theme();
         let area = frame.area();
         let cols = usize::from(area.width);
+        if too_small(area.width, area.height) {
+            let message = format!(
+                "terminal too small — need {MIN_COLS}×{MIN_ROWS} (now {}×{})",
+                area.width, area.height
+            );
+            frame.render_widget(
+                Line::styled(fit(&message, cols), t.fg(Role::Yellow)),
+                Rect::new(0, 0, area.width, 1).intersection(area),
+            );
+            return;
+        }
         let row = |y: u16| Rect::new(0, y, area.width, 1).intersection(area);
         let hidden = self.hidden_projects();
         let (counts, done, in_view, live) = self.counts(&hidden);
@@ -1436,6 +1453,62 @@ mod tests {
         assert!(rows[19].starts_with(" ↑↓ select"), "{}", rows[19]);
         // The initial poll asks the terminal for its background while following the system theme.
         assert_eq!(String::from_utf8(out).unwrap(), OSC11_QUERY);
+    }
+
+    fn draw_at(app: &mut App, cols: u16, rows: u16) -> Vec<String> {
+        app.set_size(cols, rows);
+        let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+        terminal.draw(|f| app.draw(f)).unwrap();
+        screen(&terminal)
+    }
+
+    #[test]
+    fn too_small_draws_only_the_message_and_quit_still_works() {
+        let mut f = crate::app::test_fixture::fixture();
+        f.add(Some("s1"), true);
+        let rows = draw_at(&mut f.app, 25, 6);
+        assert!(rows[0].starts_with("terminal too small"), "{}", rows[0]);
+        assert!(rows.iter().all(|r| !r.contains("SESSIONS")));
+        assert!(rows[1..].iter().all(|r| r.trim().is_empty()));
+        f.key("\x03");
+        assert!(f.app.should_quit());
+    }
+
+    #[test]
+    fn floor_80x24() {
+        let mut f = crate::app::test_fixture::fixture();
+        let rows = draw_at(&mut f.app, 80, 24);
+        assert!(
+            rows[2].contains("SESSIONS") && rows[2].contains("PREVIEW"),
+            "{}",
+            rows[2]
+        );
+        let divider = f.app.layout().divider_x.unwrap();
+        assert!(rows[5..23]
+            .iter()
+            .all(|r| r.chars().nth(usize::from(divider)) == Some('│')));
+        assert!(rows[23].starts_with(" ↑↓ select"), "{}", rows[23]);
+    }
+
+    #[test]
+    fn floor_60x24() {
+        let mut f = crate::app::test_fixture::fixture();
+        f.add(Some("s1"), true);
+        let rows = draw_at(&mut f.app, 60, 24);
+        assert!(rows[2].starts_with("SESSIONS"), "{}", rows[2]);
+        assert!(rows[4..10].iter().any(|r| r.contains("a session")), "{rows:#?}");
+        assert!(rows[10].contains("a session"), "{}", rows[10]);
+        assert!(rows[11].starts_with('─'), "{}", rows[11]);
+    }
+
+    #[test]
+    fn floor_minimum() {
+        let mut f = crate::app::test_fixture::fixture();
+        f.add(Some("s1"), true);
+        let rows = draw_at(&mut f.app, 30, 8);
+        assert_eq!(rows.len(), 8);
+        assert!(rows.iter().any(|r| r.starts_with("SESSIONS")));
+        assert!(rows.iter().all(|r| !r.starts_with("terminal too small")));
     }
 
     #[test]

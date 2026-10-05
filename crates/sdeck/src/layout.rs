@@ -34,6 +34,14 @@ const STACKED_MIN_COLS: u16 = 50;
 const STACKED_LIST_SHARE: f64 = 0.4;
 const MIN_PANEL_ROWS: u16 = PANEL_HEADER_ROWS + 3;
 
+/// Smallest terminal the UI draws in: `MIN_ROWS` is `TOP_ROWS + BOTTOM_ROWS + MIN_PANEL_ROWS`.
+pub const MIN_COLS: u16 = 30;
+pub const MIN_ROWS: u16 = 8;
+
+pub fn too_small(cols: u16, rows: u16) -> bool {
+    cols < MIN_COLS || rows < MIN_ROWS
+}
+
 /// Side by side from 80 columns (list takes `sidebar_pct` of the width), list above preview from 50,
 /// list only below that. Hiding the sidebar leaves the preview alone, except in list-only mode where
 /// the list is all there is.
@@ -152,6 +160,18 @@ mod tests {
     fn keeps_minimum_panel_rows_on_a_tiny_terminal() {
         let layout = compute_layout(120, 3, 35.0, true);
         assert_eq!(layout.list.unwrap().height, 5);
+    }
+
+    #[test]
+    fn min_rows_is_the_chrome_plus_the_smallest_panel() {
+        assert_eq!(MIN_ROWS, TOP_ROWS + BOTTOM_ROWS + MIN_PANEL_ROWS);
+    }
+
+    #[test]
+    fn too_small_below_30_columns_or_8_rows() {
+        assert!(too_small(29, 24));
+        assert!(too_small(30, 7));
+        assert!(!too_small(30, 8));
     }
 
     #[test]

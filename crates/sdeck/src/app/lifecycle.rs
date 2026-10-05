@@ -18,7 +18,7 @@ use super::new_session::id_change;
 use super::App;
 use crate::event::AppEvent;
 use crate::filters::StatusCategory;
-use crate::layout::pty_size_for;
+use crate::layout::{pty_size_for, too_small};
 use crate::live_session::{agent_args, agent_env, LiveSession, SpawnRequest};
 use crate::sessions::{display_title, DeckSession, SessionStatus};
 use crate::tree::{project_labels, TreeRow};
@@ -268,6 +268,9 @@ impl App {
 
     /// Fits every background agent (all but the attached one) to the preview's body.
     pub(super) fn resize_all_to_pane(&mut self) {
+        if too_small(self.term_size.0, self.term_size.1) {
+            return;
+        }
         let Some((cols, rows)) = self.pty_size() else {
             return;
         };
