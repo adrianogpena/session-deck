@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/sdeck-core", "crates/sdeck", "crates/fake-agent", "crates/sdeck-demo"]
 
 [workspace.package]
-version = "0.10.0"
+version = "0.11.0"
 edition = "2021"
 
 [profile.release]
