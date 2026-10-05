@@ -794,7 +794,8 @@ fn draw_list_popup(
     let inner = width - 4;
     let edge = |line: Line<'static>| {
         let mut spans = vec![Span::styled(" ", surface(t))];
-        spans.extend(line.spans);
+        let style = line.style;
+        spans.extend(line.spans.into_iter().map(|s| s.patch_style(style)));
         spans.push(Span::styled(" ", surface(t)));
         Line::from(spans)
     };
