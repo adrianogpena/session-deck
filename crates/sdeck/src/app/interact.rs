@@ -108,6 +108,36 @@ mod tests {
     }
 
     #[test]
+    fn a_configured_detach_key_replaces_ctrl_q_in_the_banner_and_the_matcher() {
+        let mut f = fixture();
+        let uid = f.add(Some("abc"), true);
+        f.app.set_size(100, 14);
+        let index = crate::config_fields::CONFIG_FIELDS
+            .iter()
+            .position(|c| c.label == "ui.detachKey")
+            .unwrap();
+        f.app.apply_config_field(index, "nope", std::time::Instant::now());
+        assert_eq!(f.app.config.ui.detach_key, "ctrl+q");
+        f.app
+            .apply_config_field(index, "Ctrl+E", std::time::Instant::now());
+        assert_eq!(f.app.config.ui.detach_key, "ctrl+e");
+
+        f.app.message.clear();
+        f.key("i");
+        assert_eq!(f.app.interacting, Some(uid));
+        let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
+        terminal.draw(|frame| f.app.draw(frame)).unwrap();
+        let buf = terminal.backend().buffer();
+        let bottom: String = (0..100).map(|x| buf[(x, 13)].symbol()).collect();
+        assert!(bottom.contains("Interacting · Ctrl+E to stop"), "{bottom}");
+
+        f.key("");
+        assert_eq!(f.app.interacting, Some(uid));
+        f.key("");
+        assert_eq!(f.app.interacting, None);
+    }
+
+    #[test]
     fn interact_ctrl_k_with_an_unknown_key_forwards_both() {
         let mut f = fixture();
         let uid = f.add(Some("abc"), true);

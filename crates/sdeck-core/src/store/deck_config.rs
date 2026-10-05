@@ -87,6 +87,8 @@ pub struct UiConfig {
     pub use_24_hour_clock: bool,
     /// Config dir of the account new sessions launch as; unset = the default account.
     pub active_account_config_dir: Option<String>,
+    /// Key that detaches from a full attach or stops interacting, as `ctrl+<letter>`. Default: `ctrl+q`.
+    pub detach_key: String,
     pub extra: Map<String, Value>,
 }
 
@@ -122,6 +124,27 @@ const DEFAULT_MAX_SESSIONS_LISTED: u64 = 10;
 const DEFAULT_NOTIFY_STATUSES: [SessionStatus; 3] =
     [SessionStatus::Waiting, SessionStatus::Done, SessionStatus::Error];
 const DEFAULT_TRASH_RETENTION_DAYS: u64 = 30;
+pub const DEFAULT_DETACH_KEY: &str = "ctrl+q";
+
+/// The letter of a `ctrl+<a-z>` detach key (case-insensitive). `c h i j m` are control bytes with
+/// other meanings (Ctrl+C, Backspace, Tab, Enter) and `k` is the chord key, so they are refused.
+pub fn parse_detach_letter(s: &str) -> Option<char> {
+    let lower = s.trim().to_ascii_lowercase();
+    let letter = lower.strip_prefix("ctrl+")?;
+    let mut chars = letter.chars();
+    let c = chars.next()?;
+    if chars.next().is_some() || !c.is_ascii_lowercase() || "chijmk".contains(c) {
+        return None;
+    }
+    Some(c)
+}
+
+impl UiConfig {
+    /// The configured detach letter; `q` if the stored value is not valid.
+    pub fn detach_letter(&self) -> char {
+        parse_detach_letter(&self.detach_key).unwrap_or('q')
+    }
+}
 
 impl Default for DeckConfig {
     fn default() -> Self {
@@ -140,6 +163,7 @@ impl Default for DeckConfig {
                 compact_usage: false,
                 use_24_hour_clock: false,
                 active_account_config_dir: None,
+                detach_key: DEFAULT_DETACH_KEY.to_string(),
                 extra: Map::new(),
             },
             tools: all_agent_ids()
@@ -233,6 +257,7 @@ pub fn parse_deck_config(raw: &str) -> DeckConfig {
                 "compactUsage",
                 "use24HourClock",
                 "activeAccountConfigDir",
+                "detachKey",
             ],
         );
         if let Some(n) = ui.get("maxSessionsListed").and_then(positive_int) {
@@ -270,6 +295,13 @@ pub fn parse_deck_config(raw: &str) -> DeckConfig {
             if parsed.len() == items.len() {
                 c.notify_statuses = parsed;
             }
+        }
+        if let Some(l) = ui
+            .get("detachKey")
+            .and_then(Value::as_str)
+            .and_then(parse_detach_letter)
+        {
+            c.detach_key = format!("ctrl+{l}");
         }
         if let Some(s) = ui.get("activeAccountConfigDir").and_then(Value::as_str) {
             if !s.trim().is_empty() {
@@ -355,6 +387,7 @@ pub fn deck_config_to_json(config: &DeckConfig) -> String {
     ui_obj.insert("usagePosition".into(), ui.usage_position.as_str().into());
     ui_obj.insert("compactUsage".into(), ui.compact_usage.into());
     ui_obj.insert("use24HourClock".into(), ui.use_24_hour_clock.into());
+    ui_obj.insert("detachKey".into(), ui.detach_key.clone().into());
     if let Some(dir) = &ui.active_account_config_dir {
         ui_obj.insert("activeAccountConfigDir".into(), dir.clone().into());
     }
@@ -450,6 +483,23 @@ mod tests {
             Some("C:\\Users\\me\\.claude-work")
         );
         assert_eq!(parse_deck_config(&deck_config_to_json(&c)), c);
+    }
+
+    #[test]
+    fn detach_key_parses_ctrl_letters_and_falls_back_for_the_rest() {
+        assert_eq!(parse_deck_config("{}").ui.detach_key, "ctrl+q");
+        for (raw, want) in [("ctrl+e", "ctrl+e"), ("Ctrl+E", "ctrl+e")] {
+            let c = parse(json!({ "ui": { "detachKey": raw } }));
+            assert_eq!(c.ui.detach_key, want);
+            assert_eq!(c.ui.detach_letter(), 'e');
+            assert_eq!(parse_deck_config(&deck_config_to_json(&c)), c);
+        }
+        for raw in ["ctrl+c", "ctrl+k", "alt+q", "", "ctrl+qq", "ctrl+1"] {
+            let c = parse(json!({ "ui": { "detachKey": raw } }));
+            assert_eq!(c.ui.detach_key, "ctrl+q", "{raw}");
+        }
+        assert_eq!(parse_detach_letter("ctrl+h"), None);
+        assert_eq!(parse_detach_letter("ctrl+m"), None);
     }
 
     #[test]

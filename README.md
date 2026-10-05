@@ -14,7 +14,7 @@ for me?". Session Deck answers that at a glance:
 
 - Sessions are grouped by project (by git root, so worktrees land together) and by folder.
 - A status dot on every session: running, waiting for you, finished, error, stopped.
-- Attach to a session full-screen, detach with `Ctrl+Q`, and it keeps working.
+- Attach to a session full-screen, detach with `Ctrl+Q` (configurable with `ui.detachKey`), and it keeps working.
 - Session Deck lists and resumes every past session, from all your logged-in Claude accounts.
 
 [Install](#install) · [Quick start](#quick-start) · [Features](#features) · [Configuration](#configuration) · [User manual](docs/user-manual.md) · [Development](#development)
@@ -65,7 +65,7 @@ sdeck
 |---|---|
 | `↑` `↓` / `j` `k` | Move through folders, projects and sessions |
 | `Enter` | Attach to the selected session (a stopped one is resumed first) |
-| `Ctrl+Q` | Detach; the session keeps running |
+| `Ctrl+Q` | Detach; the session keeps running (`ui.detachKey` changes the key) |
 | `n` / `N` | Start a new Claude / Copilot session in the selected project |
 | `i` | Interact: type into the session while the list stays visible |
 | `/` | Search the prompts and replies of every session |

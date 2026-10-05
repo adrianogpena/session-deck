@@ -9,15 +9,7 @@ use ratatui::crossterm::event::{
 };
 use regex::Regex;
 
-/// Ctrl+Q, in every encoding the real terminal may use while attached: plain (0x11), kitty CSI-u, and
-/// Windows Terminal's win32-input-mode (`ESC[Vk;Sc;Uc;Kd;Cs;Rc_`, Vk 81 = Q, key-down, a Ctrl bit set
-/// in Cs, no Alt). ConPTY itself asks for win32-input-mode (`ESC[?9001h`), and that request reaches
-/// the real terminal while attached, so after that plain 0x11 never arrives. Also xterm's
-/// modifyOtherKeys (`ESC[27;<mod>;113~`), which WezTerm sends once an agent turns it on (not in TS).
-static DETACH_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\x11|\x1b\[113;5u|\x1b\[81;\d*;\d*;1;(\d+);\d*_|\x1b\[27;(\d+);113~").unwrap()
-});
-/// Same encodings as [`DETACH_PATTERN`], for Ctrl+K (0x0b, Vk 75 = K, code point 107 = k).
+/// Same encodings as [`detach_pattern`], for Ctrl+K (0x0b, Vk 75 = K, code point 107 = k).
 static CHORD_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\x0b|\x1b\[107;5u|\x1b\[75;\d*;\d*;1;(\d+);\d*_|\x1b\[27;(\d+);107~").unwrap()
 });
@@ -60,9 +52,26 @@ fn match_ctrl_key(data: &str, pattern: &Regex) -> Option<(usize, usize)> {
     })
 }
 
-/// Byte index where the detach key starts in `data`.
-pub fn find_detach_key(data: &str) -> Option<usize> {
-    match_ctrl_key(data, &DETACH_PATTERN).map(|(start, _)| start)
+/// Ctrl+`letter`, in every encoding the real terminal may use while attached: plain control byte,
+/// kitty CSI-u, and Windows Terminal's win32-input-mode (`ESC[Vk;Sc;Uc;Kd;Cs;Rc_`, Vk = uppercase code
+/// point, key-down, a Ctrl bit set in Cs, no Alt). ConPTY itself asks for win32-input-mode
+/// (`ESC[?9001h`), and that request reaches the real terminal while attached, so after that the plain
+/// byte never arrives. Also xterm's modifyOtherKeys (`ESC[27;<mod>;<code>~`), which WezTerm sends once
+/// an agent turns it on (not in TS).
+fn detach_pattern(letter: char) -> Regex {
+    let letter = letter.to_ascii_lowercase();
+    let byte = letter as u8 - b'a' + 1;
+    let code = letter as u32;
+    let vk = letter.to_ascii_uppercase() as u32;
+    Regex::new(&format!(
+        r"\x{byte:02x}|\x1b\[{code};5u|\x1b\[{vk};\d*;\d*;1;(\d+);\d*_|\x1b\[27;(\d+);{code}~"
+    ))
+    .expect("detach pattern is valid")
+}
+
+/// Byte index where the Ctrl+`letter` detach key starts in `data`.
+pub fn find_detach_key(data: &str, letter: char) -> Option<usize> {
+    match_ctrl_key(data, &detach_pattern(letter)).map(|(start, _)| start)
 }
 
 /// Where the Ctrl+K chord's prefix starts and ends in `data` (byte indices). `end` matters because a
@@ -279,15 +288,29 @@ mod tests {
 
     #[test]
     fn find_detach_key_recognizes_ctrl_q_in_every_encoding_and_only_ctrl_q() {
-        assert_eq!(find_detach_key("\x11"), Some(0));
-        assert_eq!(find_detach_key("\x1b[113;5u"), Some(0));
-        assert_eq!(find_detach_key("ab\x1b[81;16;17;1;8;1_"), Some(2));
-        assert_eq!(find_detach_key("\x1b[81;16;113;1;0;1_"), None);
-        assert_eq!(find_detach_key("\x1b[81;16;17;0;8;1_"), None);
-        assert_eq!(find_detach_key("\x1b[81;16;0;1;10;1_"), None);
-        assert_eq!(find_detach_key("x\x1b[27;5;113~"), Some(1));
-        assert_eq!(find_detach_key("\x1b[27;7;113~"), None);
-        assert_eq!(find_detach_key("\x1b[27;2;113~"), None);
+        assert_eq!(find_detach_key("\x11", 'q'), Some(0));
+        assert_eq!(find_detach_key("\x1b[113;5u", 'q'), Some(0));
+        assert_eq!(find_detach_key("ab\x1b[81;16;17;1;8;1_", 'q'), Some(2));
+        assert_eq!(find_detach_key("\x1b[81;16;113;1;0;1_", 'q'), None);
+        assert_eq!(find_detach_key("\x1b[81;16;17;0;8;1_", 'q'), None);
+        assert_eq!(find_detach_key("\x1b[81;16;0;1;10;1_", 'q'), None);
+        assert_eq!(find_detach_key("x\x1b[27;5;113~", 'q'), Some(1));
+        assert_eq!(find_detach_key("\x1b[27;7;113~", 'q'), None);
+        assert_eq!(find_detach_key("\x1b[27;2;113~", 'q'), None);
+    }
+
+    #[test]
+    fn find_detach_key_matches_only_the_configured_letter_in_every_encoding() {
+        let q = ["\x11", "\x1b[113;5u", "\x1b[81;16;17;1;8;1_", "\x1b[27;5;113~"];
+        let e = ["\x05", "\x1b[101;5u", "\x1b[69;18;5;1;8;1_", "\x1b[27;5;101~"];
+        for seq in q {
+            assert_eq!(find_detach_key(seq, 'q'), Some(0), "{seq:?}");
+            assert_eq!(find_detach_key(seq, 'e'), None, "{seq:?}");
+        }
+        for seq in e {
+            assert_eq!(find_detach_key(seq, 'e'), Some(0), "{seq:?}");
+            assert_eq!(find_detach_key(seq, 'q'), None, "{seq:?}");
+        }
     }
 
     #[test]

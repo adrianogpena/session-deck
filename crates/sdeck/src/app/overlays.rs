@@ -310,9 +310,14 @@ impl App {
     pub(super) fn draw_overlay(&self, frame: &mut Frame, t: Theme) {
         match &self.overlay {
             None => {}
-            Some(Overlay::Help { scroll }) => {
-                render_help(frame, t, scroll, VERSION, &theme_label(self.theme_preference, t))
-            }
+            Some(Overlay::Help { scroll }) => render_help(
+                frame,
+                t,
+                scroll,
+                VERSION,
+                &theme_label(self.theme_preference, t),
+                &self.detach_label(),
+            ),
             Some(Overlay::Config { selected }) => render_config(
                 frame,
                 t,

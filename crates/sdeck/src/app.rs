@@ -1442,8 +1442,11 @@ impl App {
         } else if !self.message.is_empty() {
             frame.render_widget(bars::message_bar(t, cols, &self.message), bottom);
         } else if self.interacting.is_some() {
-            let text = "Interacting · Ctrl+Q to stop · Ctrl+K T to attach";
-            frame.render_widget(bars::message_bar(t, cols, text), bottom);
+            let text = format!(
+                "Interacting · {} to stop · Ctrl+K T to attach",
+                self.detach_label()
+            );
+            frame.render_widget(bars::message_bar(t, cols, &text), bottom);
         } else {
             frame.render_widget(bars::help_bar(t, cols), bottom);
         }

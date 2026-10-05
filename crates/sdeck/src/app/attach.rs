@@ -1,4 +1,4 @@
-//! Full-screen attach: sdeck stops drawing and the agent owns the real terminal until Ctrl+Q. Port
+//! Full-screen attach: sdeck stops drawing and the agent owns the real terminal until the detach key (Ctrl+Q by default). Port
 //! of `App.attach`, `teardownAttached`, `detach`, `switchToInteracting` and `switchToAttach`.
 
 use std::time::Instant;
@@ -44,7 +44,7 @@ impl App {
         self.dirty = true;
     }
 
-    /// Ctrl+Q while attached (or the agent exited, with `note`). Whatever finished while attached
+    /// The detach key while attached (or the agent exited, with `note`). Whatever finished while attached
     /// counts as seen.
     pub(super) fn detach(&mut self, note: Option<String>) {
         let seen = self.attached;

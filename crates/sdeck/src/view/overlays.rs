@@ -223,7 +223,14 @@ fn popup_width(frame: &Frame, widest: usize) -> Option<(usize, usize)> {
 }
 
 /// `?`: the key reference. `scroll` is clamped here to what the content allows.
-pub fn render_help(frame: &mut Frame, t: Theme, scroll: &Cell<usize>, version: &str, theme: &str) {
+pub fn render_help(
+    frame: &mut Frame,
+    t: Theme,
+    scroll: &Cell<usize>,
+    version: &str,
+    theme: &str,
+    detach_key: &str,
+) {
     let Some((width, inner)) = popup_width(frame, 66) else {
         return;
     };
@@ -231,6 +238,7 @@ pub fn render_help(frame: &mut Frame, t: Theme, scroll: &Cell<usize>, version: &
     for (title, keys) in HELP_SECTIONS {
         content.push(Line::styled(fit(title, inner), bold(text(t, Role::Cyan))));
         for (key, label) in *keys {
+            let key = if *key == "Ctrl+Q" { detach_key } else { key };
             content.push(Line::from(vec![
                 Span::styled(fit(key, KEY_COLUMN), bold(text(t, Role::Purple))),
                 Span::styled(fit(label, inner.saturating_sub(KEY_COLUMN)), text(t, Role::Text)),
@@ -958,7 +966,9 @@ mod tests {
     #[test]
     fn help_scrolls_and_clamps_its_offset() {
         let scroll = Cell::new(1000);
-        let screen = draw(80, 20, |f| render_help(f, dark(), &scroll, "9.9.9", "dark"));
+        let screen = draw(80, 20, |f| {
+            render_help(f, dark(), &scroll, "9.9.9", "dark", "Ctrl+Q")
+        });
         assert!(scroll.get() > 0 && scroll.get() < 1000);
         assert!(screen.iter().any(|l| l.contains("Esc or ? to close")));
         assert!(screen
@@ -966,7 +976,9 @@ mod tests {
             .any(|l| l.contains("▲ more above") || l.contains("Esc or ?")));
 
         scroll.set(0);
-        let screen = draw(80, 20, |f| render_help(f, dark(), &scroll, "9.9.9", "dark"));
+        let screen = draw(80, 20, |f| {
+            render_help(f, dark(), &scroll, "9.9.9", "dark", "Ctrl+Q")
+        });
         assert!(screen.iter().any(|l| l.contains("KEYBOARD SHORTCUTS")));
         assert!(screen.iter().any(|l| l.contains("▼ more below")));
         assert!(screen.iter().all(|l| !l.contains("Esc or ? to close")));
@@ -976,7 +988,7 @@ mod tests {
     fn help_shows_the_version_theme_and_filter_keys() {
         let scroll = Cell::new(0);
         let screen = draw(80, 120, |f| {
-            render_help(f, dark(), &scroll, "9.9.9", "system (dark)")
+            render_help(f, dark(), &scroll, "9.9.9", "system (dark)", "Ctrl+Q")
         });
         let all = screen.join(
             "
@@ -990,7 +1002,7 @@ mod tests {
     #[test]
     fn help_lists_the_account_switch_key() {
         let scroll = Cell::new(0);
-        let screen = draw(80, 60, |f| render_help(f, dark(), &scroll, "1", "dark"));
+        let screen = draw(80, 60, |f| render_help(f, dark(), &scroll, "1", "dark", "Ctrl+Q"));
         assert!(screen
             .iter()
             .any(|l| l.contains("F4") && l.contains("Switch account")));

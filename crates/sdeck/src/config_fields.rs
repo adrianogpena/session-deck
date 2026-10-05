@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 
 use sdeck_core::agent_catalog::all_agent_ids;
 use sdeck_core::status::session_status::SessionStatus;
-use sdeck_core::store::deck_config::{DeckConfig, ToolConfig, UsagePosition};
+use sdeck_core::store::deck_config::{parse_detach_letter, DeckConfig, ToolConfig, UsagePosition};
 
 /// `Toggle` applies immediately on Enter; the others open a text prompt first, pre-filled with
 /// [`ConfigField::edit_value`].
@@ -32,6 +32,7 @@ enum Setting {
     UsagePosition,
     CompactUsage,
     Use24HourClock,
+    DetachKey,
     ToolEnabled,
     ToolCommand,
     ToolArgs,
@@ -160,6 +161,7 @@ impl ConfigField {
                 "12-hour"
             }
             .into(),
+            Setting::DetachKey => c.ui.detach_key.clone(),
             Setting::ToolEnabled => on_off(self.tool_of(c).and_then(|t| t.enabled) != Some(false)),
             Setting::ToolCommand => self
                 .tool_of(c)
@@ -231,6 +233,9 @@ impl ConfigField {
             Setting::CompactUsage => c.ui.compact_usage = !c.ui.compact_usage,
             Setting::UsagePosition => c.ui.usage_position = c.ui.usage_position.next(),
             Setting::Use24HourClock => c.ui.use_24_hour_clock = !c.ui.use_24_hour_clock,
+            Setting::DetachKey => {
+                c.ui.detach_key = format!("ctrl+{}", parse_detach_letter(input)?);
+            }
             Setting::ToolEnabled => {
                 let tool = c.tools.entry(self.agent.clone()).or_default();
                 tool.enabled = Some(tool.enabled == Some(false));
@@ -329,6 +334,12 @@ fn build_fields() -> Vec<ConfigField> {
             Toggle,
             Setting::Use24HourClock,
             "The 5h usage row's reset time shows as 20:30 instead of 8:30 PM.",
+        ),
+        ui(
+            "detachKey",
+            Text,
+            Setting::DetachKey,
+            "Key that detaches from a full-screen session or stops interacting: ctrl+<letter>, not c h i j k m.",
         ),
     ];
     for agent in all_agent_ids() {

@@ -101,7 +101,7 @@ a colored status dot on each session.
   - On a folder or project row, `Enter` collapses or expands it instead.
   - A session running in another terminal can't be attached here; close it there first.
   - Attaching marks the session as seen.
-- **Detach `Ctrl+Q` (while attached)**: back to Session Deck. The session keeps running in the
+- **Detach `Ctrl+Q` (while attached)**: (the default; see `ui.detachKey`) back to Session Deck. The session keeps running in the
   background.
   - Whatever finished while you were attached is marked as seen.
 - **Detach and stop `Ctrl+K` then `q` (while attached)**: back to Session Deck, and stops the
@@ -114,7 +114,7 @@ a colored status dot on each session.
   you type goes straight to the selected session, live, without leaving the list. Useful for sending
   a longer or multi-step reply while still keeping an eye on your other sessions.
   - A stopped session is started first.
-  - `Ctrl+Q` stops interacting, the same key that detaches from a full attach; `Ctrl+K` then `q` also
+  - `Ctrl+Q` (or your `ui.detachKey`) stops interacting, the same key that detaches from a full attach; `Ctrl+K` then `q` also
     stops the session's agent.
   - Marks the session as seen, same as attaching.
 - **Start in background `s`**: starts a stopped session without attaching. Its screen shows in the
@@ -382,7 +382,8 @@ it up next time it starts).
     "expandCollapsedOnActiveJump": true,
     "showUsage": false,
     "usagePosition": "Float",
-    "compactUsage": false
+    "compactUsage": false,
+    "detachKey": "ctrl+q"
   },
   "tools": {
     "claude": { "command": "claude-nightly", "args": ["--model", "opus"] },
@@ -419,6 +420,9 @@ it up next time it starts).
   `Bottom` (pinned). Default: `Float`.
 - **`ui.compactUsage`**: the usage section is one line (`ctx 42% · 5h 73% · 7d 12%`) instead of the
   Model/Cache/Context/5h/7d rows. Default: `false`.
+- **`ui.detachKey`**: the key that detaches from a full attach and stops interacting, written
+  `ctrl+<letter>` (any case). `c`, `h`, `i`, `j`, `m` (control bytes with other meanings) and `k` (the
+  chord key) are refused and fall back to `ctrl+q`. Default: `ctrl+q`.
 - **`tools.claude` / `tools.copilot`**:
   - **`enabled`**: `false` hides that agent entirely — its sessions aren't discovered, and its `n`/`N`
     new-session key just flashes a message instead of starting one. Default: on.

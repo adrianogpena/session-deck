@@ -1,4 +1,4 @@
-//! Input while attached or interacting: forwarded to the agent, except Ctrl+Q (leave) and the
+//! Input while attached or interacting: forwarded to the agent, except the detach key (leave) and the
 //! Ctrl+K chord. Port of `App.resolveChord`, the `is*Chord` helpers and `onLiveInput`.
 
 use std::time::Instant;
@@ -59,7 +59,7 @@ impl App {
 
     /// Input for the attached or interacting session `uid`. A chord's resolving key usually arrives
     /// in the same chunk as Ctrl+K, but may come in the next one (`chord_pending`). Keys before
-    /// Ctrl+Q are forwarded, the rest of that chunk is dropped. Unlike TS, keys after an unresolved
+    /// the detach key are forwarded, the rest of that chunk is dropped. Unlike TS, keys after an unresolved
     /// Ctrl+K in the same chunk are forwarded too (TS dropped them as win32-input-mode key-ups,
     /// which crossterm never delivers).
     pub(super) fn on_live_input(&mut self, uid: u64, data: &str, now: Instant) {
@@ -72,7 +72,7 @@ impl App {
             self.write_live(uid, b"\x0b"); // not a chord after all: the withheld Ctrl+K goes on
         }
         let chord = find_chord_key(data);
-        let detach = find_detach_key(data);
+        let detach = find_detach_key(data, self.config.ui.detach_letter());
         let idx = match (chord, detach) {
             (Some((c, _)), Some(d)) => c.min(d),
             (Some((c, _)), None) => c,
@@ -101,7 +101,12 @@ impl App {
         }
     }
 
-    /// Ctrl+Q: detach, or stop interacting.
+    /// The detach key as shown to the user, e.g. `Ctrl+E`.
+    pub(super) fn detach_label(&self) -> String {
+        format!("Ctrl+{}", self.config.ui.detach_letter().to_ascii_uppercase())
+    }
+
+    /// The detach key: detach, or stop interacting.
     fn leave_live(&mut self, uid: u64) {
         if self.attached == Some(uid) {
             self.detach(None);
