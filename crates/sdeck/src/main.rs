@@ -63,6 +63,10 @@ fn main() -> anyhow::Result<()> {
         println!("{}", run_statusline_hook(&payload));
         return Ok(());
     }
+    if std::env::args().nth(1).as_deref() == Some("ctl") {
+        let args: Vec<String> = std::env::args().skip(2).collect();
+        std::process::exit(sdeck::ctl_client::run(&args));
+    }
     if !std::io::stdin().is_terminal() {
         eprintln!("sdeck needs an interactive terminal.");
         std::process::exit(1);

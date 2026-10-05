@@ -356,6 +356,23 @@ when Session Deck sees it first is not a transition.
 
 If a hook can't be started, a message is flashed once.
 
+### Controlling sdeck from scripts
+
+While sdeck is open (and `ui.ctl` is not `false`), `sdeck ctl` reads it from another terminal. It is
+read-only: it can't start, type into or stop a session. Add `--json` to any command for the raw result.
+
+| Command | Does |
+|---|---|
+| `sdeck ctl list` | Every session that has an id: id, status, agent, project, title. |
+| `sdeck ctl status <id>` | One session: status, agent, title, project, whether it is live here, cwd, last update. |
+| `sdeck ctl screen <id> [--rows N]` | The visible text of a session running in this sdeck (last N rows with `--rows`). |
+| `sdeck ctl wait <id> --status <s>[,<s>] [--timeout S]` | Blocks until the session has one of the statuses (`running`, `waiting`, `done`, `idle`, `starting`, `error`, `exited`, `stopped`); no timeout waits forever. |
+| `sdeck ctl ping` | Version and pid of the running sdeck. |
+
+`<id>` is the agent's session id or any unique prefix of it. Exit codes: `0` ok · `1` error (bad
+arguments, unknown or ambiguous id, session not running for `screen`) · `2` sdeck not running (or
+`ui.ctl` is off) · `3` `wait` timed out.
+
 ---
 
 ## 3. Multiple Claude accounts

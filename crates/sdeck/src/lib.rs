@@ -6,6 +6,7 @@ pub mod ansi;
 pub mod app;
 pub mod commands;
 pub mod config_fields;
+pub mod ctl_client;
 pub mod event;
 pub mod filters;
 pub mod frontmatter;
