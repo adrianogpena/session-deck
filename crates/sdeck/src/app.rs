@@ -1116,6 +1116,10 @@ impl App {
             self.on_confirm_key(key, now);
             return;
         }
+        let Some(key) = crate::keybindings::translate(&self.config, key) else {
+            return;
+        };
+        let key = key.as_ref();
         if let Some(category) = filter_key_category(key) {
             toggle_status_filter(&mut self.status_filter, category);
             self.rebuild_rows();
@@ -1176,7 +1180,7 @@ impl App {
             "`" => self.select_previous_session(now),
             "[" => self.cycle_active_session(-1, now),
             "]" => self.cycle_active_session(1, now),
-            "?" => self.open_help(),
+            "?" => self.open_keybindings(),
             "C" => self.open_config(),
             "w" => self.open_skills(),
             "v" => self.open_trace(now),
@@ -1491,8 +1495,12 @@ impl App {
             frame.render_widget(bars::message_bar(t, cols, &self.message), bottom);
         } else if self.interacting.is_some() {
             let text = format!(
-                "Interacting · {} to stop · Ctrl+K T to attach",
-                self.detach_label()
+                "Interacting · {} to stop · {} {} to attach",
+                self.detach_label(),
+                self.chord_prefix_label(),
+                crate::keybindings::ChordKeys::from_config(&self.config)
+                    .switch_mode
+                    .to_ascii_uppercase()
             );
             frame.render_widget(bars::message_bar(t, cols, &text), bottom);
         } else {

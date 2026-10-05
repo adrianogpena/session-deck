@@ -9,10 +9,6 @@ use ratatui::crossterm::event::{
 };
 use regex::Regex;
 
-/// Same encodings as [`detach_pattern`], for Ctrl+K (0x0b, Vk 75 = K, code point 107 = k).
-static CHORD_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\x0b|\x1b\[107;5u|\x1b\[75;\d*;\d*;1;(\d+);\d*_|\x1b\[27;(\d+);107~").unwrap()
-});
 const CTRL_PRESSED: u32 = 0x04 | 0x08;
 const ALT_PRESSED: u32 = 0x01 | 0x02;
 /// Bits of an xterm modifier parameter minus 1 (see [`modifier_param`]).
@@ -74,11 +70,11 @@ pub fn find_detach_key(data: &str, letter: char) -> Option<usize> {
     match_ctrl_key(data, &detach_pattern(letter)).map(|(start, _)| start)
 }
 
-/// Where the Ctrl+K chord's prefix starts and ends in `data` (byte indices). `end` matters because a
-/// chord typed quickly can arrive with its resolving key already in the same chunk, right after the
-/// match.
-pub fn find_chord_key(data: &str) -> Option<(usize, usize)> {
-    match_ctrl_key(data, &CHORD_PATTERN)
+/// Where the chord prefix (Ctrl+`letter`, Ctrl+K by default) starts and ends in `data` (byte
+/// indices). `end` matters because a chord typed quickly can arrive with its resolving key already in
+/// the same chunk, right after the match.
+pub fn find_chord_key(data: &str, letter: char) -> Option<(usize, usize)> {
+    match_ctrl_key(data, &detach_pattern(letter))
 }
 
 /// Byte index where an unmodified, key-down press of `ch` (a single ASCII letter) starts in `data`:
@@ -315,19 +311,19 @@ mod tests {
 
     #[test]
     fn find_chord_key_recognizes_ctrl_k_in_every_encoding_and_only_ctrl_k() {
-        assert_eq!(find_chord_key("\x0b"), Some((0, 1)));
-        assert_eq!(find_chord_key("\x1b[107;5u"), Some((0, 8)));
-        assert_eq!(find_chord_key("ab\x1b[75;16;17;1;8;1_"), Some((2, 19)));
-        assert_eq!(find_chord_key("\x1b[75;16;107;1;0;1_"), None);
-        assert_eq!(find_chord_key("\x1b[75;16;17;0;8;1_"), None);
-        assert_eq!(find_chord_key("\x1b[75;16;0;1;10;1_"), None);
-        assert_eq!(find_chord_key("\x1b[27;5;107~"), Some((0, 11)));
-        assert_eq!(find_chord_key("\x1b[27;3;107~"), None);
+        assert_eq!(find_chord_key("\x0b", 'k'), Some((0, 1)));
+        assert_eq!(find_chord_key("\x1b[107;5u", 'k'), Some((0, 8)));
+        assert_eq!(find_chord_key("ab\x1b[75;16;17;1;8;1_", 'k'), Some((2, 19)));
+        assert_eq!(find_chord_key("\x1b[75;16;107;1;0;1_", 'k'), None);
+        assert_eq!(find_chord_key("\x1b[75;16;17;0;8;1_", 'k'), None);
+        assert_eq!(find_chord_key("\x1b[75;16;0;1;10;1_", 'k'), None);
+        assert_eq!(find_chord_key("\x1b[27;5;107~", 'k'), Some((0, 11)));
+        assert_eq!(find_chord_key("\x1b[27;3;107~", 'k'), None);
     }
 
     #[test]
     fn find_chord_key_exposes_where_its_match_ends() {
-        let (_, end) = find_chord_key("\x0bN").unwrap();
+        let (_, end) = find_chord_key("\x0bN", 'k').unwrap();
         assert_eq!(end, 1);
         assert_eq!(find_plain_key(&"\x0bN"[end..], 'N'), Some(0));
     }

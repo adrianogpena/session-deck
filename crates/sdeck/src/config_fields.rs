@@ -7,8 +7,10 @@ use sdeck_core::agent_catalog::all_agent_ids;
 use sdeck_core::discovery::path_utils::expand_input_path;
 use sdeck_core::status::session_status::SessionStatus;
 use sdeck_core::store::deck_config::{
-    parse_detach_letter, DeckConfig, RestoreSessions, ToolConfig, UsagePosition,
+    DeckConfig, RestoreSessions, ToolConfig, UsagePosition, DEFAULT_DETACH_KEY,
 };
+
+use crate::keybindings::{self, display_spec, effective_spec, KeyAction, Target, KEY_ACTIONS};
 
 /// `Toggle` applies immediately on Enter; the others open a text prompt first, pre-filled with
 /// [`ConfigField::edit_value`].
@@ -19,6 +21,50 @@ pub enum ConfigFieldKind {
     Text,
     Args,
     StatusList,
+    /// Enter then press the new key; Backspace restores the default.
+    Key,
+}
+
+/// The popup's tabs: settings grouped by what they are about, so no tab is long.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigTab {
+    General,
+    Display,
+    Agents,
+    Accounts,
+    Keybindings,
+}
+
+impl ConfigTab {
+    pub const ALL: [ConfigTab; 5] = [
+        Self::General,
+        Self::Display,
+        Self::Agents,
+        Self::Accounts,
+        Self::Keybindings,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::General => "General",
+            Self::Display => "Display",
+            Self::Agents => "Agents",
+            Self::Accounts => "Accounts",
+            Self::Keybindings => "Keybindings",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        Self::ALL[(self.index() + 1) % Self::ALL.len()]
+    }
+
+    pub fn prev(self) -> Self {
+        Self::ALL[(self.index() + Self::ALL.len() - 1) % Self::ALL.len()]
+    }
+
+    fn index(self) -> usize {
+        Self::ALL.iter().position(|&t| t == self).unwrap()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +83,7 @@ enum Setting {
     Use24HourClock,
     ProjectSearchRoot,
     DetachKey,
+    Binding,
     Ctl,
     RestoreSessions,
     ToolEnabled,
@@ -51,12 +98,17 @@ enum Setting {
 pub struct ConfigField {
     /// `<group>.<name>`, e.g. `tools.claude.command`.
     pub label: String,
+    pub tab: ConfigTab,
+    /// The section header the row sits under within its tab.
+    group: String,
     pub kind: ConfigFieldKind,
     /// One-line explanation shown under the popup while this row is selected.
     pub hint: Option<&'static str>,
     setting: Setting,
     /// The agent id of a `tools.<agent>.*` row.
     agent: String,
+    /// The action of a Keybindings row (`None` for the detach key).
+    binding: Option<&'static KeyAction>,
 }
 
 fn split_args(input: &str) -> Vec<String> {
@@ -74,23 +126,80 @@ fn positive_int(input: &str) -> Option<u64> {
 }
 
 impl ConfigField {
-    fn new(label: &str, kind: ConfigFieldKind, setting: Setting, hint: Option<&'static str>) -> Self {
+    fn new(
+        label: &str,
+        tab: ConfigTab,
+        group: &str,
+        kind: ConfigFieldKind,
+        setting: Setting,
+        hint: Option<&'static str>,
+    ) -> Self {
         Self {
             label: label.to_string(),
+            tab,
+            group: group.to_string(),
             kind,
             hint,
             setting,
             agent: String::new(),
+            binding: None,
         }
     }
 
     fn tool(agent: &str, name: &str, kind: ConfigFieldKind, setting: Setting) -> Self {
         Self {
             label: format!("tools.{agent}.{name}"),
+            tab: ConfigTab::Agents,
+            group: format!("tools.{agent}"),
             kind,
             hint: None,
             setting,
             agent: agent.to_string(),
+            binding: None,
+        }
+    }
+
+    fn binding(action: &'static KeyAction) -> Self {
+        Self {
+            label: format!("keys.{}.{}", action.group, action.id),
+            tab: ConfigTab::Keybindings,
+            group: format!("keys.{}", action.group),
+            kind: ConfigFieldKind::Key,
+            hint: Some(action.hint),
+            setting: Setting::Binding,
+            agent: String::new(),
+            binding: Some(action),
+        }
+    }
+
+    fn target(&self) -> Option<Target> {
+        match self.setting {
+            Setting::DetachKey => Some(Target::Detach),
+            Setting::Binding => self.binding.map(Target::Action),
+            _ => None,
+        }
+    }
+
+    /// Why a Keybindings row refuses `input`; `None` for any other row or an acceptable key.
+    pub fn key_error(&self, config: &DeckConfig, input: &str) -> Option<String> {
+        keybindings::validate(config, self.target()?, input).err()
+    }
+
+    /// The default key of a Keybindings row, as shown.
+    pub fn default_display(&self) -> Option<String> {
+        match self.setting {
+            Setting::DetachKey => Some(display_spec(DEFAULT_DETACH_KEY)),
+            Setting::Binding => self.binding.map(|a| display_spec(a.default)),
+            _ => None,
+        }
+    }
+
+    /// Whether the row sits on a key other than its default.
+    pub fn is_customized(&self, c: &DeckConfig) -> bool {
+        match self.setting {
+            Setting::DetachKey => c.ui.detach_key != DEFAULT_DETACH_KEY,
+            Setting::Binding => self.binding.is_some_and(|a| effective_spec(c, a) != a.default),
+            _ => false,
         }
     }
 
@@ -106,7 +215,7 @@ impl ConfigField {
 
     /// The part of the label before the last dot: the popup's group header.
     pub fn group(&self) -> &str {
-        self.label.rsplit_once('.').map_or("", |(group, _)| group)
+        &self.group
     }
 
     fn name(&self) -> &str {
@@ -117,6 +226,9 @@ impl ConfigField {
 
     /// The name as words (`recentProjectsFirst` → `Recent projects first`).
     pub fn pretty_name(&self) -> String {
+        if self.setting == Setting::Ctl {
+            return "Control server".to_string();
+        }
         let mut spaced = String::new();
         let chars: Vec<char> = self.name().chars().collect();
         for (i, &c) in chars.iter().enumerate() {
@@ -182,7 +294,11 @@ impl ConfigField {
                     .clone()
                     .unwrap_or_else(|| "(none)".into())
             }
-            Setting::DetachKey => c.ui.detach_key.clone(),
+            Setting::DetachKey => display_spec(&c.ui.detach_key),
+            Setting::Binding => self
+                .binding
+                .map(|a| display_spec(&effective_spec(c, a)))
+                .unwrap_or_default(),
             Setting::Ctl => on_off(c.ui.ctl),
             Setting::RestoreSessions => match c.ui.restore_sessions {
                 RestoreSessions::Ask => "Ask",
@@ -274,7 +390,16 @@ impl ConfigField {
                 c.ui.project_search_root = (!root.is_empty()).then(|| root.to_string());
             }
             Setting::DetachKey => {
-                c.ui.detach_key = format!("ctrl+{}", parse_detach_letter(input)?);
+                c.ui.detach_key = keybindings::validate(config, Target::Detach, input).ok()?
+            }
+            Setting::Binding => {
+                let action = self.binding?;
+                let spec = keybindings::validate(config, Target::Action(action), input).ok()?;
+                if spec == action.default {
+                    c.keybindings.shift_remove(action.id);
+                } else {
+                    c.keybindings.insert(action.id.to_string(), spec);
+                }
             }
             Setting::Ctl => c.ui.ctl = !c.ui.ctl,
             Setting::RestoreSessions => c.ui.restore_sessions = c.ui.restore_sessions.next(),
@@ -302,16 +427,46 @@ impl ConfigField {
 
 fn build_fields() -> Vec<ConfigField> {
     use ConfigFieldKind::*;
-    let ui =
-        |name: &str, kind, setting, hint| ConfigField::new(&format!("ui.{name}"), kind, setting, Some(hint));
+    use ConfigTab::*;
+    let ui = |name: &str, tab, group: &str, kind, setting, hint| {
+        ConfigField::new(&format!("ui.{name}"), tab, group, kind, setting, Some(hint))
+    };
     let mut fields = vec![
         ui(
             "maxSessionsListed",
+            General,
+            "sessions",
             Number,
             Setting::MaxSessionsListed,
             "How many of the most recent sessions load into the list from disk.",
         ),
         ui(
+            "newSessionFullScreen",
+            General,
+            "sessions",
+            Toggle,
+            Setting::NewSessionFullScreen,
+            "Which mode n/N opens a new session in: Attached — full-screen, same as pressing Enter — or Interacting — typed into in place, list and preview still showing, same as pressing i.",
+        ),
+        ui(
+            "restoreSessions",
+            General,
+            "sessions",
+            Toggle,
+            Setting::RestoreSessions,
+            "Reopens the sessions that were running when sdeck last exited (resumes their conversations) — Enter cycles: Ask (a prompt at startup), Always, Never.",
+        ),
+        ui(
+            "projectSearchRoot",
+            General,
+            "sessions",
+            Text,
+            Setting::ProjectSearchRoot,
+            "Folder the project prompt (p) opens in, with its subfolders suggested as you type. Empty: no suggestions.",
+        ),
+        ui(
+            "notifications",
+            General,
             "notifications",
             Toggle,
             Setting::Notifications,
@@ -319,82 +474,91 @@ fn build_fields() -> Vec<ConfigField> {
         ),
         ui(
             "notifyStatuses",
+            General,
+            "notifications",
             StatusList,
             Setting::NotifyStatuses,
             "Which session statuses trigger a desktop notification (space-separated: running waiting done error).",
         ),
         ui(
+            "ctl",
+            General,
+            "advanced",
+            Toggle,
+            Setting::Ctl,
+            "Lets the sdeck ctl command (list, status, screen, wait) talk to this running sdeck, read-only. Takes effect after a restart.",
+        ),
+        ConfigField::new(
+            "trash.retentionDays",
+            General,
+            "advanced",
+            Number,
+            Setting::TrashRetentionDays,
+            Some("Deleted sessions older than this are purged from ~/.session-deck/trash/ at startup."),
+        ),
+        ui(
             "recentProjectsFirst",
+            Display,
+            "list",
             Toggle,
             Setting::RecentProjectsFirst,
             "On: top-level projects reorder by most-recent activity. Off: a fixed, alphabetical order until you move one with K/J.",
         ),
         ui(
             "recentSessionsFirst",
+            Display,
+            "list",
             Toggle,
             Setting::RecentSessionsFirst,
             "On: sessions in a project reorder by most-recent activity. Off: a fixed order until you move one with K/J.",
         ),
         ui(
-            "newSessionFullScreen",
-            Toggle,
-            Setting::NewSessionFullScreen,
-            "Which mode n/N opens a new session in: Attached — full-screen, same as pressing Enter — or Interacting — typed into in place, list and preview still showing, same as pressing i.",
-        ),
-        ui(
-            "gitStatus",
-            Toggle,
-            Setting::GitStatus,
-            "Shows ⇡/⇣/✱ git badges on rows and the branch name in the preview panel.",
-        ),
-        ui(
             "expandCollapsedOnActiveJump",
+            Display,
+            "list",
             Toggle,
             Setting::ExpandCollapsedOnActiveJump,
             "On: [ and ] can expand a collapsed folder/project to reach a session inside. Off: they only jump between sessions already shown.",
         ),
         ui(
+            "gitStatus",
+            Display,
+            "list",
+            Toggle,
+            Setting::GitStatus,
+            "Shows ⇡/⇣/✱ git badges on rows and the branch name in the preview panel.",
+        ),
+        ui(
             "showUsage",
+            Display,
+            "usage",
             Toggle,
             Setting::ShowUsage,
             "Shows a Context/5h/7d usage section at the bottom of the list for the selected Claude session.",
         ),
         ui(
             "usagePosition",
+            Display,
+            "usage",
             Toggle,
             Setting::UsagePosition,
             "Where the usage section sits — Enter cycles: Float (right after the last row), Top (pinned above the tree), Bottom (pinned to the bottom of the panel).",
         ),
         ui(
             "compactUsage",
+            Display,
+            "usage",
             Toggle,
             Setting::CompactUsage,
             "One-line usage summary instead of the Model/Cache/Context/5h/7d rows.",
         ),
         ui(
             "use24HourClock",
+            Display,
+            "usage",
             Toggle,
             Setting::Use24HourClock,
             "The 5h usage row's reset time shows as 20:30 instead of 8:30 PM.",
-        ),
-ui(            "projectSearchRoot",            Text,            Setting::ProjectSearchRoot,            "Folder the project prompt (p) opens in, with its subfolders suggested as you type. Empty: no suggestions.",        ),
-        ui(
-            "detachKey",
-            Text,
-            Setting::DetachKey,
-            "Key that detaches from a full-screen session or stops interacting: ctrl+<letter>, not c h i j k m.",
-        ),
-        ui(
-            "ctl",
-            Toggle,
-            Setting::Ctl,
-            "The read-only sdeck ctl control server (list sessions, read status and screen). Takes effect after a restart.",
-        ),
-        ui(
-            "restoreSessions",
-            Toggle,
-            Setting::RestoreSessions,
-            "Reopens the sessions that were running when sdeck last exited (resumes their conversations) — Enter cycles: Ask (a prompt at startup), Always, Never.",
         ),
     ];
     for agent in all_agent_ids() {
@@ -402,31 +566,55 @@ ui(            "projectSearchRoot",            Text,            Setting::Project
         fields.push(ConfigField::tool(agent, "command", Text, Setting::ToolCommand));
         fields.push(ConfigField::tool(agent, "args", Args, Setting::ToolArgs));
     }
-    fields.push(ConfigField::new(
-        "trash.retentionDays",
-        Number,
-        Setting::TrashRetentionDays,
-        Some("Deleted sessions older than this are purged from ~/.session-deck/trash/ at startup."),
-    ));
-    fields.push(ConfigField::new(
-        "accounts.shareProjects",
-        Toggle,
+    let account = |name: &str, setting, hint| {
+        ConfigField::new(
+            &format!("accounts.{name}"),
+            Accounts,
+            "accounts",
+            Toggle,
+            setting,
+            Some(hint),
+        )
+    };
+    fields.push(account(
+        "shareProjects",
         Setting::ShareProjects,
-        Some("On: a project used by several accounts shows as one row. Off: one row per account."),
+        "On: a project used by several accounts shows as one row. Off: one row per account.",
     ));
-    fields.push(ConfigField::new(
-        "accounts.showAllSessions",
-        Toggle,
+    fields.push(account(
+        "showAllSessions",
         Setting::ShowAllSessions,
-        Some("On: every logged-in account's sessions are listed. Off: only the active account's (F4 switches it)."),
+        "On: every logged-in account's sessions are listed. Off: only the active account's (F4 switches it).",
     ));
-    fields.push(ConfigField::new(
-        "accounts.showOwner",
-        Toggle,
+    fields.push(account(
+        "showOwner",
         Setting::ShowOwner,
-        Some("On: another account's session line shows its owner's name. Off: the title is only dimmed."),
+        "On: another account's session line shows its owner's name. Off: the title is only dimmed.",
     ));
+    fields.push(ConfigField {
+        label: "keys.chord.detachKey".into(),
+        tab: Keybindings,
+        group: "keys.chord".into(),
+        kind: Key,
+        hint: Some(
+            "Detaches from a full-screen session, or stops interacting. ctrl+<letter>, not c h i j k m.",
+        ),
+        setting: Setting::DetachKey,
+        agent: String::new(),
+        binding: None,
+    });
+    fields.extend(KEY_ACTIONS.iter().map(ConfigField::binding));
     fields
+}
+
+/// Indexes into [`CONFIG_FIELDS`] of the rows on `tab`, in display order.
+pub fn tab_fields(tab: ConfigTab) -> Vec<usize> {
+    CONFIG_FIELDS
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.tab == tab)
+        .map(|(i, _)| i)
+        .collect()
 }
 
 pub static CONFIG_FIELDS: LazyLock<Vec<ConfigField>> = LazyLock::new(build_fields);

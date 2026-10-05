@@ -161,6 +161,9 @@ pub struct DeckConfig {
     /// Shell command lines run on a status change, keyed `onWaiting | onDone | onError | onRunning`.
     /// An empty line is off; other keys are kept so a write never drops them.
     pub hooks: IndexMap<String, String>,
+    /// Key overrides, keyed by action id (e.g. `newSession`, `chordPrefix`). The value is a key spec
+    /// such as `x`, `ctrl+e` or `f3`. An action without an entry keeps its default key.
+    pub keybindings: IndexMap<String, String>,
     pub extra: Map<String, Value>,
 }
 
@@ -233,6 +236,7 @@ impl Default for DeckConfig {
                 extra: Map::new(),
             },
             hooks: IndexMap::new(),
+            keybindings: IndexMap::new(),
             extra: Map::new(),
         }
     }
@@ -290,7 +294,10 @@ pub fn parse_deck_config(raw: &str) -> DeckConfig {
     let Ok(Value::Object(root)) = serde_json::from_str::<Value>(raw) else {
         return config;
     };
-    config.extra = extras(&root, &["ui", "tools", "trash", "accounts", "hooks"]);
+    config.extra = extras(
+        &root,
+        &["ui", "tools", "trash", "accounts", "hooks", "keybindings"],
+    );
 
     if let Some(ui) = root.get("ui").and_then(Value::as_object) {
         let c = &mut config.ui;
@@ -422,6 +429,15 @@ pub fn parse_deck_config(raw: &str) -> DeckConfig {
             })
             .collect();
     }
+    if let Some(keys) = root.get("keybindings").and_then(Value::as_object) {
+        config.keybindings = keys
+            .iter()
+            .filter_map(|(id, spec)| {
+                let spec = spec.as_str()?.trim();
+                (!spec.is_empty()).then(|| (id.clone(), spec.to_string()))
+            })
+            .collect();
+    }
     config
 }
 
@@ -498,6 +514,12 @@ pub fn deck_config_to_json(config: &DeckConfig) -> String {
         .map(|(k, v)| (k.clone(), Value::from(v.as_str())))
         .collect();
 
+    let keybindings: Map<String, Value> = config
+        .keybindings
+        .iter()
+        .map(|(k, v)| (k.clone(), Value::from(v.as_str())))
+        .collect();
+
     let mut root = Map::new();
     root.insert("ui".into(), Value::Object(ui_obj));
     root.insert("tools".into(), Value::Object(tools));
@@ -505,6 +527,9 @@ pub fn deck_config_to_json(config: &DeckConfig) -> String {
     root.insert("accounts".into(), Value::Object(accounts));
     if !hooks.is_empty() {
         root.insert("hooks".into(), Value::Object(hooks));
+    }
+    if !keybindings.is_empty() {
+        root.insert("keybindings".into(), Value::Object(keybindings));
     }
     root.extend(config.extra.clone());
     format!(
@@ -611,6 +636,16 @@ mod tests {
         }
         assert_eq!(parse_detach_letter("ctrl+h"), None);
         assert_eq!(parse_detach_letter("ctrl+m"), None);
+    }
+
+    #[test]
+    fn keybindings_parse_trimmed_skip_non_strings_and_round_trip() {
+        assert!(parse_deck_config("{}").keybindings.is_empty());
+        let c = parse(json!({ "keybindings": { "newSession": " x ", "stop": "", "rename": 5 } }));
+        assert_eq!(c.keybindings.len(), 1);
+        assert_eq!(c.keybindings["newSession"], "x");
+        assert_eq!(parse_deck_config(&deck_config_to_json(&c)), c);
+        assert!(!deck_config_to_json(&DeckConfig::default()).contains("keybindings"));
     }
 
     #[test]

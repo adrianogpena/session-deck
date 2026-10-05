@@ -11,6 +11,7 @@ pub mod event;
 pub mod filters;
 pub mod frontmatter;
 pub mod git_status_tracker;
+pub mod keybindings;
 pub mod keys;
 pub mod layout;
 pub mod live_session;

@@ -23,126 +23,14 @@ use super::overlay::draw_box;
 use super::SessionView;
 use crate::agents::LocalAgent;
 use crate::ansi::{fit, fit_tail, text_width, wrap};
-use crate::config_fields::{ConfigFieldKind, CONFIG_FIELDS};
+use crate::config_fields::{tab_fields, ConfigFieldKind, ConfigTab, CONFIG_FIELDS};
 use crate::sessions::SessionStatus;
 use crate::skills::{LocalSkill, SkillState};
 use crate::theme::{Role, Theme};
 
-const KEY_COLUMN: usize = 14;
 const POPUP_NAME_COLUMN: usize = 32;
 /// A `command` override can be a long absolute path; past this width it is cut (keeping the tail).
 const CONFIG_VALUE_COLUMN_MAX: usize = 40;
-
-type Hint = (&'static str, &'static str);
-
-const HELP_SECTIONS: &[(&str, &[Hint])] = &[
-    (
-        "QUICK START",
-        &[
-            ("Enter", "Attach full-screen (starts it if needed)"),
-            ("Ctrl+Q", "Detach back here; the session keeps running"),
-            ("Ctrl+K q", "Detach and stop the session, same as x"),
-            ("Ctrl+K n", "New session in the same project, without detaching first"),
-            ("i", "Interact — type into it right here, list and preview still showing"),
-            ("Ctrl+K T", "Swap Attached ⇄ Interacting, without detaching to the list first"),
-        ],
-    ),
-    (
-        "NAVIGATION",
-        &[
-            ("j k", "Select (preview follows)"),
-            ("↑ ↓", "Select, or scroll the preview if it has a live session in it"),
-            ("PgUp/Dn  Home/End", "Scroll the selected session's preview"),
-            ("← →  Tab", "Collapse / expand; ← also goes to the parent"),
-            ("1-9", "Jump to a top-level folder or project"),
-            ("`", "Back to the previously selected session"),
-            ("[ ]", "Previous / next started session (running, waiting or idle), wrapping around"),
-            ("/", "Search every session's prompts and replies"),
-            (":", "Command palette: run any action by typed name"),
-        ],
-    ),
-    (
-        "SESSIONS",
-        &[
-            ("s", "Start in the background"),
-            ("R", "Restart (a fresh process, same conversation)"),
-            ("n", "New session in the project, with n's default agent"),
-            ("N", "New session in the project, choosing the agent just this once (doesn't change n's default)"),
-            ("F3", "Pick n's default agent"),
-            ("F4", "Switch account: new sessions launch as it"),
-            ("p", "Add a project: new session in any folder"),
-            ("o", "Send a one-line prompt without attaching"),
-            ("c", "Copy the last response"),
-            ("v", "Trajectory: structured trace of messages and tool calls (Claude sessions only)"),
-            ("e  F2", "Rename (same as Claude's /rename)"),
-            ("Ctrl+L", "Clear context (same as Claude's /clear), without attaching — idle, done, or error only"),
-            ("x", "Stop the selected session"),
-            ("u", "Mark as unread (finished, not seen)"),
-            ("U", "Mark as read"),
-            ("A", "Archive / unarchive (^ shows archived)"),
-            ("d", "Delete: move to the trash"),
-            ("Ctrl+Z  Z", "Undo the delete / open the trash"),
-            (",", "Pin: top · bottom · off"),
-            ("r", "Refresh the list"),
-        ],
-    ),
-    (
-        "MULTI-SELECT",
-        &[
-            ("Space", "Check the session for a batch action, then move down"),
-            ("Esc", "Clear the checked sessions"),
-            ("A x d M L", "Archive / stop / delete / move to folder / tag — applied to every checked session"),
-        ],
-    ),
-    (
-        "FOLDERS & ORDER",
-        &[
-            ("g", "New folder"),
-            ("M", "Move the project to a folder"),
-            ("K J", "Move the folder / project up or down"),
-            ("e  d", "Rename / delete the selected folder"),
-            ("d", "Remove the selected project from the list (p to add it back)"),
-            ("S", "Sort sessions: recent · actionable"),
-            ("t", "View: normal · active on top"),
-        ],
-    ),
-    (
-        "TAGS",
-        &[
-            ("L", "Add / edit tags on the session (checked batch: add to all)"),
-            ("Enter", "On a tag (bottom of the list): filter to it, again to clear"),
-            ("d", "On a tag: remove it from every session"),
-        ],
-    ),
-    (
-        "FILTER",
-        &[
-            ("!  @  #", "Running · waiting · idle"),
-            ("&  ~", "Error · stopped"),
-            ("*", "Time: all · today · 3 days · 7 days"),
-            ("0", "Clear filters"),
-        ],
-    ),
-    (
-        "VIEW",
-        &[
-            ("< >", "Narrow / widen the sessions panel"),
-            ("b  Ctrl+K b", "Hide / show the sessions panel"),
-            (":  Choose theme", "Pick a palette (Tokyo Night, Catppuccin, Gruvbox, Nord, Dracula, Rose Pine, Solarized), or follow the system"),
-            ("m  Ctrl+K m", "Mouse scrolling: off by default (so click-drag selects text), on to scroll the preview with the wheel"),
-        ],
-    ),
-    (
-        "OTHER",
-        &[
-            ("?", "This help"),
-            ("C", "Show the config file in use"),
-            ("w", "Show local skills / agents / account usage (← → switches tabs)"),
-            ("a", "Alert history: every status change sdeck has noticed"),
-            ("q  Ctrl+C", "Quit (stops background sessions)"),
-        ],
-    ),
-];
 
 fn surface(t: Theme) -> Style {
     t.bg(Role::Surface)
@@ -222,55 +110,55 @@ fn popup_width(frame: &Frame, widest: usize) -> Option<(usize, usize)> {
     (width >= 8).then(|| (width, width - 6))
 }
 
-/// `?`: the key reference. `scroll` is clamped here to what the content allows.
-pub fn render_help(
-    frame: &mut Frame,
-    t: Theme,
-    scroll: &Cell<usize>,
-    version: &str,
-    theme: &str,
-    detach_key: &str,
-) {
-    let Some((width, inner)) = popup_width(frame, 66) else {
-        return;
-    };
-    let mut content = Vec::new();
-    for (title, keys) in HELP_SECTIONS {
-        content.push(Line::styled(fit(title, inner), bold(text(t, Role::Cyan))));
-        for (key, label) in *keys {
-            let key = if *key == "Ctrl+Q" { detach_key } else { key };
-            content.push(Line::from(vec![
-                Span::styled(fit(key, KEY_COLUMN), bold(text(t, Role::Purple))),
-                Span::styled(fit(label, inner.saturating_sub(KEY_COLUMN)), text(t, Role::Text)),
-            ]));
+fn config_tabs_row(t: Theme, active: ConfigTab, inner: usize) -> Line<'static> {
+    let mut spans = Vec::new();
+    for (i, tab) in ConfigTab::ALL.into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" ", surface(t)));
         }
-        content.push(blank(t, inner));
+        spans.push(Span::styled(
+            format!(" {} ", tab.label()),
+            if tab == active {
+                selected(t)
+            } else {
+                text(t, Role::TextDim)
+            },
+        ));
     }
-    content.push(dim(
-        t,
-        &format!("sdeck v{version} · theme {theme} · Esc or ? to close"),
-        inner,
-    ));
-
-    let max_body = usize::from(frame.area().height).saturating_sub(6).max(3);
-    let offset = scroll.get().min(content.len().saturating_sub(max_body));
-    scroll.set(offset);
-    draw_scrolled(
-        frame,
-        t,
-        " KEYBOARD SHORTCUTS ",
-        width,
-        vec![blank(t, width - 2)],
-        content,
-        offset,
-        max_body,
-    );
+    let used: usize = spans.iter().map(|s| text_width(&s.content)).sum();
+    spans.push(Span::styled(" ".repeat(inner.saturating_sub(used)), surface(t)));
+    Line::from(spans)
 }
 
-/// `C`: every setting, `selected` indexing [`CONFIG_FIELDS`]; scrolls to keep the selected row in view.
-pub fn render_config(frame: &mut Frame, t: Theme, config: &DeckConfig, path: &str, selected_index: usize) {
+/// A row's value as listed: a key that differs from its default says what the default is.
+fn config_value(field: &crate::config_fields::ConfigField, config: &DeckConfig) -> String {
+    let value = field.display(config);
+    match field.default_display() {
+        Some(default) if field.is_customized(config) => format!("{value}  (default {default})"),
+        _ => value,
+    }
+}
+
+/// `C`: the settings of one tab, `selected_index` indexing that tab's rows; scrolls to keep the
+/// selected row in view. While `capturing`, the selected row waits for the key to bind.
+pub fn render_config(
+    frame: &mut Frame,
+    t: Theme,
+    config: &DeckConfig,
+    path: &str,
+    tab: ConfigTab,
+    selected_index: usize,
+    capturing: bool,
+) {
     let fields = &*CONFIG_FIELDS;
-    let footer = "↑↓ select · Enter toggle/edit · Esc or C to close";
+    let footer = if capturing {
+        "Press the new key · Esc to cancel"
+    } else if tab == ConfigTab::Keybindings {
+        "←→ tab · ↑↓ select · Enter rebind · Backspace default · Esc close"
+    } else {
+        "←→ tab · ↑↓ select · Enter toggle/edit · Esc or C to close"
+    };
+    // Sized by the widest row of any tab, so the popup doesn't change width as the tabs switch.
     let label_column = fields
         .iter()
         .map(|f| f.pretty_name().chars().count())
@@ -279,11 +167,12 @@ pub fn render_config(frame: &mut Frame, t: Theme, config: &DeckConfig, path: &st
         + 2;
     let max_value = fields
         .iter()
-        .map(|f| text_width(&f.display(config)))
+        .map(|f| text_width(&config_value(f, config)))
         .max()
         .unwrap_or(0)
         .min(CONFIG_VALUE_COLUMN_MAX);
-    let needed = (label_column + max_value).max(text_width(footer));
+    let tabs_width = ConfigTab::ALL.iter().map(|t| t.label().len() + 3).sum::<usize>();
+    let needed = (label_column + max_value).max(text_width(footer)).max(tabs_width);
     let width = usize::from(frame.area().width).saturating_sub(4).min(needed + 6);
     if width < 8 {
         return;
@@ -291,24 +180,33 @@ pub fn render_config(frame: &mut Frame, t: Theme, config: &DeckConfig, path: &st
     let inner = width - 6;
     let value_width = inner.saturating_sub(label_column);
 
-    let mut content = vec![dim(t, path, inner), blank(t, inner)];
-    let mut selected_line = 2;
-    for (index, field) in fields.iter().enumerate() {
+    let rows = tab_fields(tab);
+    let mut content = Vec::new();
+    let mut selected_line = 0;
+    let mut previous_group = None;
+    for (position, &index) in rows.iter().enumerate() {
+        let field = &fields[index];
         let group = field.group();
-        if index == 0 || group != fields[index - 1].group() {
-            if index > 0 {
+        if previous_group != Some(group) {
+            if previous_group.is_some() {
                 content.push(blank(t, inner));
             }
             content.push(Line::styled(
                 fit(&group_title(group), inner),
                 bold(text(t, Role::Cyan)),
             ));
+            previous_group = Some(group);
         }
-        if index == selected_index {
+        let is_selected = position == selected_index;
+        if is_selected {
             selected_line = content.len();
         }
         let label = fit(&field.pretty_name(), label_column);
-        let value = field.display(config);
+        let value = if is_selected && capturing {
+            "press a key…".to_string()
+        } else {
+            config_value(field, config)
+        };
         // A path's meaningful part is its end: keep that visible, and pad so the border stays aligned.
         let value = if field.kind == ConfigFieldKind::Text {
             let cut = fit_tail(&value, value_width);
@@ -317,44 +215,144 @@ pub fn render_config(frame: &mut Frame, t: Theme, config: &DeckConfig, path: &st
         } else {
             fit(&value, value_width)
         };
-        content.push(if index == selected_index {
-            Line::styled(format!("{label}{value}"), selected(t))
+        content.push(if is_selected {
+            Line::from(Span::styled(format!("{label}{value}"), selected(t)))
         } else {
             Line::from(vec![
                 Span::styled(label, bold(text(t, Role::Purple))),
-                Span::styled(value, text(t, Role::Text)),
+                Span::styled(
+                    value,
+                    text(
+                        t,
+                        if field.is_customized(config) {
+                            Role::Orange
+                        } else {
+                            Role::Text
+                        },
+                    ),
+                ),
             ])
         });
     }
-    content.push(blank(t, inner));
-    if let Some(hint) = fields.get(selected_index).and_then(|f| f.hint) {
-        for line in wrap(hint, inner) {
-            content.push(dim(t, &line, inner));
-        }
-        content.push(blank(t, inner));
-    }
-    content.push(dim(t, footer, inner));
-
-    let max_body = usize::from(frame.area().height).saturating_sub(6).max(3);
-    let max_scroll = content.len().saturating_sub(max_body);
-    let offset = selected_line.saturating_sub(max_body / 2).min(max_scroll);
-    draw_scrolled(
+    let max_hint = fields
+        .iter()
+        .map(|f| f.hint.map_or(0, |h| wrap(h, inner).len()))
+        .max()
+        .unwrap_or(0);
+    let tallest = ConfigTab::ALL
+        .iter()
+        .map(|&tab| tab_line_count(tab))
+        .max()
+        .unwrap_or(0);
+    let detail: Vec<Line<'static>> = rows
+        .get(selected_index)
+        .and_then(|&i| fields[i].hint)
+        .map(|hint| wrap(hint, inner).iter().map(|l| dim(t, l, inner)).collect())
+        .unwrap_or_default();
+    draw_list_panel(
         frame,
         t,
         " CONFIG ",
         width,
-        vec![blank(t, width - 2)],
-        content,
-        offset,
-        max_body,
+        ListPanel {
+            head: vec![config_tabs_row(t, tab, inner)],
+            content,
+            selected_line,
+            tallest,
+            detail,
+            detail_height: max_hint,
+            footer: vec![dim(t, footer, inner), dim(t, path, inner)],
+        },
     );
+}
+
+/// The parts of a popup that is a scrolling list over a fixed description area.
+struct ListPanel {
+    /// Pinned above the list.
+    head: Vec<Line<'static>>,
+    content: Vec<Line<'static>>,
+    selected_line: usize,
+    /// The height the longest list this popup ever shows needs, so the list area is the same on
+    /// every tab and the popup never resizes.
+    tallest: usize,
+    /// Describes the selected row; pinned below the list.
+    detail: Vec<Line<'static>>,
+    /// Lines reserved for `detail`, whatever it holds now, so what sits below it never moves.
+    detail_height: usize,
+    /// Pinned at the bottom.
+    footer: Vec<Line<'static>>,
+}
+
+/// Draws a popup whose height never changes: `head`, the list (the only part that scrolls, keeping
+/// the selected line in view), a "more" row, the `detail` area and the `footer`. Use it for any popup
+/// that lists rows with a description of the selected one.
+fn draw_list_panel(frame: &mut Frame, t: Theme, title: &str, width: usize, panel: ListPanel) {
+    let ListPanel {
+        head,
+        content,
+        selected_line,
+        tallest,
+        detail,
+        detail_height,
+        footer,
+    } = panel;
+    // Borders, the blank under the head, and the "more" row, plus a margin to the screen edges.
+    let chrome = 2 + 1 + 1 + 2;
+    let region = tallest
+        .min(
+            usize::from(frame.area().height)
+                .saturating_sub(chrome + head.len() + detail_height + footer.len()),
+        )
+        .max(3);
+    let max_scroll = content.len().saturating_sub(region);
+    let offset = selected_line.saturating_sub(region / 2).min(max_scroll);
+
+    let mut rows: Vec<Line<'static>> = head.into_iter().map(|l| padded(t, l)).collect();
+    rows.push(blank(t, width - 2));
+    let mut body: Vec<Line<'static>> = content
+        .into_iter()
+        .skip(offset)
+        .take(region)
+        .map(|l| padded(t, l))
+        .collect();
+    body.resize(region, blank(t, width - 2));
+    rows.extend(body);
+    rows.push(more_row(t, width, offset, max_scroll));
+    let mut detail: Vec<Line<'static>> = detail.into_iter().map(|l| padded(t, l)).collect();
+    detail.resize(detail_height, blank(t, width - 2));
+    rows.extend(detail);
+    rows.extend(footer.into_iter().map(|l| padded(t, l)));
+    draw_box(frame, t, title, width, rows);
+}
+
+/// How many lines a tab's rows take, group headers and the gaps between groups included.
+fn tab_line_count(tab: ConfigTab) -> usize {
+    let mut count = 0;
+    let mut previous = None;
+    for &index in &tab_fields(tab) {
+        let group = CONFIG_FIELDS[index].group();
+        if previous != Some(group) {
+            count += if previous.is_some() { 2 } else { 1 };
+            previous = Some(group);
+        }
+        count += 1;
+    }
+    count
 }
 
 fn group_title(group: &str) -> String {
     match group {
-        "ui" => "General".to_string(),
-        "trash" => "Trash".to_string(),
+        "sessions" => "Sessions".to_string(),
+        "notifications" => "Notifications".to_string(),
+        "advanced" => "Advanced".to_string(),
+        "list" => "List".to_string(),
+        "usage" => "Usage".to_string(),
         "accounts" => "Accounts".to_string(),
+        "keys.chord" => "Detach & chords".to_string(),
+        "keys.navigation" => "Navigation".to_string(),
+        "keys.sessions" => "Sessions".to_string(),
+        "keys.organize" => "Organize".to_string(),
+        "keys.view" => "View & other".to_string(),
         _ => match group.strip_prefix("tools.") {
             Some(agent) => agent_display_name(agent),
             None => group.to_string(),
@@ -964,68 +962,119 @@ mod tests {
     }
 
     #[test]
-    fn help_scrolls_and_clamps_its_offset() {
-        let scroll = Cell::new(1000);
-        let screen = draw(80, 20, |f| {
-            render_help(f, dark(), &scroll, "9.9.9", "dark", "Ctrl+Q")
-        });
-        assert!(scroll.get() > 0 && scroll.get() < 1000);
-        assert!(screen.iter().any(|l| l.contains("Esc or ? to close")));
-        assert!(screen
-            .iter()
-            .any(|l| l.contains("▲ more above") || l.contains("Esc or ?")));
-
-        scroll.set(0);
-        let screen = draw(80, 20, |f| {
-            render_help(f, dark(), &scroll, "9.9.9", "dark", "Ctrl+Q")
-        });
-        assert!(screen.iter().any(|l| l.contains("KEYBOARD SHORTCUTS")));
-        assert!(screen.iter().any(|l| l.contains("▼ more below")));
-        assert!(screen.iter().all(|l| !l.contains("Esc or ? to close")));
-    }
-
-    #[test]
-    fn help_shows_the_version_theme_and_filter_keys() {
-        let scroll = Cell::new(0);
-        let screen = draw(80, 120, |f| {
-            render_help(f, dark(), &scroll, "9.9.9", "system (dark)", "Ctrl+Q")
-        });
-        let all = screen.join(
-            "
-",
-        );
-        assert!(all.contains("sdeck v9.9.9 · theme system (dark)"), "{all}");
-        assert!(all.contains("Time: all"));
-        assert!(all.contains("Clear filters"));
-    }
-
-    #[test]
-    fn help_lists_the_account_switch_key() {
-        let scroll = Cell::new(0);
-        let screen = draw(80, 60, |f| render_help(f, dark(), &scroll, "1", "dark", "Ctrl+Q"));
-        assert!(screen
-            .iter()
-            .any(|l| l.contains("F4") && l.contains("Switch account")));
-    }
-
-    #[test]
     fn config_lists_groups_and_shows_the_selected_rows_hint() {
         let config = DeckConfig::default();
-        let screen = draw(100, 60, |f| render_config(f, dark(), &config, "C:/cfg.json", 0));
+        let screen = draw(100, 60, |f| {
+            render_config(f, dark(), &config, "C:/cfg.json", ConfigTab::General, 0, false)
+        });
         let all = screen.join("\n");
         for needle in [
             "CONFIG",
             "General",
-            "Max sessions listed",
-            "Claude",
-            "Trash",
+            "Display",
+            "Agents",
             "Accounts",
-            "Share projects",
+            "Keybindings",
+            "Max sessions listed",
+            "Retention days",
         ] {
             assert!(all.contains(needle), "{needle}\n{all}");
         }
         assert!(all.contains("How many of the most recent sessions"));
         assert!(all.contains("C:/cfg.json"));
+    }
+
+    #[test]
+    fn config_description_stays_visible_and_the_popup_keeps_its_size() {
+        let config = DeckConfig::default();
+        let first = draw(100, 24, |f| {
+            render_config(f, dark(), &config, "p", ConfigTab::Keybindings, 0, false)
+        });
+        assert!(
+            first
+                .join(
+                    "
+"
+                )
+                .contains("Detaches from a full-screen session"),
+            "{}",
+            first.join(
+                "
+"
+            )
+        );
+        let top = |s: &[String]| s.iter().position(|l| l.contains("CONFIG"));
+        let bottom = |s: &[String]| s.iter().rposition(|l| l.contains("╰"));
+        for index in [0, 9, 30] {
+            let screen = draw(100, 24, |f| {
+                render_config(f, dark(), &config, "p", ConfigTab::Keybindings, index, false)
+            });
+            assert_eq!(
+                (top(&screen), bottom(&screen)),
+                (top(&first), bottom(&first)),
+                "row {index}"
+            );
+        }
+        let general = draw(100, 24, |f| {
+            render_config(f, dark(), &config, "p", ConfigTab::General, 0, false)
+        });
+        assert_eq!((top(&general), bottom(&general)), (top(&first), bottom(&first)));
+    }
+
+    #[test]
+    fn config_tabs_list_their_own_rows_and_flag_a_changed_key() {
+        let mut config = DeckConfig::default();
+        let agents = draw(100, 60, |f| {
+            render_config(f, dark(), &config, "p", ConfigTab::Agents, 0, false)
+        })
+        .join(
+            "
+",
+        );
+        assert!(
+            agents.contains("Claude") && !agents.contains("Max sessions listed"),
+            "{agents}"
+        );
+        let accounts = draw(100, 60, |f| {
+            render_config(f, dark(), &config, "p", ConfigTab::Accounts, 0, false)
+        })
+        .join(
+            "
+",
+        );
+        assert!(accounts.contains("Share projects"), "{accounts}");
+        config.keybindings.insert("newSession".into(), "y".into());
+        let keys = draw(100, 80, |f| {
+            render_config(f, dark(), &config, "p", ConfigTab::Keybindings, 0, false)
+        })
+        .join(
+            "
+",
+        );
+        for needle in [
+            "Detach & chords",
+            "Navigation",
+            "New session",
+            "y  (default n)",
+            "Ctrl+Q",
+        ] {
+            assert!(
+                keys.contains(needle),
+                "{needle}
+{keys}"
+            );
+        }
+        let capture = draw(100, 80, |f| {
+            render_config(f, dark(), &config, "p", ConfigTab::Keybindings, 0, true)
+        })
+        .join(
+            "
+",
+        );
+        assert!(
+            capture.contains("press a key") && capture.contains("Esc to cancel"),
+            "{capture}"
+        );
     }
 
     #[test]

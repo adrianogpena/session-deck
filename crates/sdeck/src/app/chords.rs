@@ -4,6 +4,7 @@
 use std::time::Instant;
 
 use super::App;
+use crate::keybindings::{chord_prefix_letter, ChordKeys};
 use crate::keys::{find_chord_key, find_detach_key, find_plain_key};
 
 /// What Ctrl+K's resolving key does.
@@ -25,19 +26,19 @@ pub(crate) enum ChordAction {
 /// later in the same chunk (a fast-typed sentence, a paste) must not eat a Ctrl+K meant for the
 /// agent. `m` and `b` resolve only while `interacting`: attached, mouse tracking is always off and
 /// there's no panel, so they go to the agent like any other key.
-pub(crate) fn resolve_chord(text: &str, interacting: bool) -> Option<ChordAction> {
+pub(crate) fn resolve_chord(text: &str, interacting: bool, keys: &ChordKeys) -> Option<ChordAction> {
     let first = |ch: char| {
         find_plain_key(text, ch) == Some(0) || find_plain_key(text, ch.to_ascii_uppercase()) == Some(0)
     };
-    if first('n') {
+    if first(keys.new_session) {
         Some(ChordAction::NewSession)
-    } else if first('t') {
+    } else if first(keys.switch_mode) {
         Some(ChordAction::SwitchMode)
-    } else if first('q') {
+    } else if first(keys.stop_session) {
         Some(ChordAction::StopSession)
-    } else if interacting && first('m') {
+    } else if interacting && first(keys.toggle_mouse) {
         Some(ChordAction::ToggleMouse)
-    } else if interacting && first('b') {
+    } else if interacting && first(keys.toggle_sidebar) {
         Some(ChordAction::ToggleSidebar)
     } else {
         None
@@ -64,14 +65,16 @@ impl App {
     /// which crossterm never delivers).
     pub(super) fn on_live_input(&mut self, uid: u64, data: &str, now: Instant) {
         let interacting = self.interacting == Some(uid);
+        let keys = ChordKeys::from_config(&self.config);
+        let prefix = chord_prefix_letter(&self.config);
         if std::mem::take(&mut self.chord_pending) {
-            if let Some(action) = resolve_chord(data, interacting) {
+            if let Some(action) = resolve_chord(data, interacting, &keys) {
                 self.run_chord(uid, action, now);
                 return;
             }
             self.write_live(uid, b"\x0b"); // not a chord after all: the withheld Ctrl+K goes on
         }
-        let chord = find_chord_key(data);
+        let chord = find_chord_key(data, prefix);
         let detach = find_detach_key(data, self.config.ui.detach_letter());
         let idx = match (chord, detach) {
             (Some((c, _)), Some(d)) => c.min(d),
@@ -88,7 +91,7 @@ impl App {
         match chord {
             Some((start, end)) if start == idx => {
                 let rest = &data[end..];
-                if let Some(action) = resolve_chord(rest, interacting) {
+                if let Some(action) = resolve_chord(rest, interacting, &keys) {
                     self.run_chord(uid, action, now);
                 } else {
                     self.chord_pending = true;
@@ -99,6 +102,14 @@ impl App {
             }
             _ => self.leave_live(uid),
         }
+    }
+
+    /// The chord prefix as shown to the user, e.g. `Ctrl+K`.
+    pub(super) fn chord_prefix_label(&self) -> String {
+        format!(
+            "Ctrl+{}",
+            crate::keybindings::chord_prefix_letter(&self.config).to_ascii_uppercase()
+        )
     }
 
     /// The detach key as shown to the user, e.g. `Ctrl+E`.
@@ -139,6 +150,10 @@ impl App {
 mod tests {
     use super::*;
 
+    fn default_keys() -> ChordKeys {
+        ChordKeys::from_config(&sdeck_core::store::deck_config::DeckConfig::default())
+    }
+
     #[test]
     fn chords_resolve_each_key_in_both_cases_and_only_as_the_very_next_key() {
         use ChordAction::*;
@@ -148,20 +163,29 @@ mod tests {
             ("q", StopSession),
             ("Q", StopSession),
         ] {
-            assert_eq!(resolve_chord(key, false), Some(action), "{key}");
+            assert_eq!(resolve_chord(key, false, &default_keys()), Some(action), "{key}");
         }
-        assert_eq!(resolve_chord("N rest", false), Some(NewSession));
-        assert_eq!(resolve_chord("\x1b[78;49;110;1;0;1_", false), Some(NewSession));
-        assert_eq!(resolve_chord("an", false), None);
-        assert_eq!(resolve_chord("", false), None);
-        assert_eq!(resolve_chord("x", true), None);
+        assert_eq!(resolve_chord("N rest", false, &default_keys()), Some(NewSession));
+        assert_eq!(
+            resolve_chord("\x1b[78;49;110;1;0;1_", false, &default_keys()),
+            Some(NewSession)
+        );
+        assert_eq!(resolve_chord("an", false, &default_keys()), None);
+        assert_eq!(resolve_chord("", false, &default_keys()), None);
+        assert_eq!(resolve_chord("x", true, &default_keys()), None);
     }
 
     #[test]
     fn chords_offer_mouse_and_sidebar_only_while_interacting() {
-        assert_eq!(resolve_chord("m", true), Some(ChordAction::ToggleMouse));
-        assert_eq!(resolve_chord("B", true), Some(ChordAction::ToggleSidebar));
-        assert_eq!(resolve_chord("m", false), None);
-        assert_eq!(resolve_chord("b", false), None);
+        assert_eq!(
+            resolve_chord("m", true, &default_keys()),
+            Some(ChordAction::ToggleMouse)
+        );
+        assert_eq!(
+            resolve_chord("B", true, &default_keys()),
+            Some(ChordAction::ToggleSidebar)
+        );
+        assert_eq!(resolve_chord("m", false, &default_keys()), None);
+        assert_eq!(resolve_chord("b", false, &default_keys()), None);
     }
 }

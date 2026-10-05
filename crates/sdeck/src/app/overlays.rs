@@ -16,15 +16,16 @@ use sdeck_core::store::deck_config::{deck_config_path, write_deck_config};
 
 use super::search::SearchState;
 use super::trace::TraceState;
-use super::{App, VERSION};
+use super::App;
 use crate::agents::{agents_dir, discover_local_agents, LocalAgent};
 use crate::commands::{palette_matches, CommandId, PALETTE_COMMANDS};
-use crate::config_fields::{ConfigFieldKind, CONFIG_FIELDS};
+use crate::config_fields::{tab_fields, ConfigFieldKind, ConfigTab, CONFIG_FIELDS};
+use crate::keybindings::spec_from_raw;
 use crate::skills::{claude_settings_path, discover_local_skills, skills_dir, LocalSkill};
-use crate::theme::{theme_label, Theme};
+use crate::theme::Theme;
 use crate::view::overlays::AccountUsage;
 use crate::view::overlays::{
-    render_alerts, render_config, render_help, render_palette, render_search, render_skills, render_trace,
+    render_alerts, render_config, render_palette, render_search, render_skills, render_trace,
     SearchResultRow, SkillsTab,
 };
 
@@ -34,11 +35,12 @@ pub(super) struct PaletteState {
 }
 
 pub(super) enum Overlay {
-    Help {
-        scroll: Cell<usize>,
-    },
     Config {
+        tab: ConfigTab,
+        /// Position within the tab's rows.
         selected: usize,
+        /// Waiting for the key to bind to the selected Keybindings row.
+        capturing: bool,
     },
     Skills {
         tab: SkillsTab,
@@ -80,12 +82,21 @@ fn step(index: usize, key: &str, len: usize) -> usize {
 }
 
 impl App {
-    pub(super) fn open_help(&mut self) {
-        self.overlay = Some(Overlay::Help { scroll: Cell::new(0) });
+    pub(super) fn open_config(&mut self) {
+        self.open_config_tab(ConfigTab::General);
     }
 
-    pub(super) fn open_config(&mut self) {
-        self.overlay = Some(Overlay::Config { selected: 0 });
+    /// `?`: the config popup on the Keybindings tab.
+    pub(super) fn open_keybindings(&mut self) {
+        self.open_config_tab(ConfigTab::Keybindings);
+    }
+
+    fn open_config_tab(&mut self, tab: ConfigTab) {
+        self.overlay = Some(Overlay::Config {
+            tab,
+            selected: 0,
+            capturing: false,
+        });
     }
 
     /// Skills and subagents are a Claude Code concept: shown only while that's the Session Deck
@@ -129,7 +140,6 @@ impl App {
     pub(super) fn on_overlay_key(&mut self, key: &str, now: Instant) {
         self.dirty = true;
         match &self.overlay {
-            Some(Overlay::Help { .. }) => self.on_help_key(key),
             Some(Overlay::Config { .. }) => self.on_config_key(key, now),
             Some(Overlay::Skills { .. }) => self.on_skills_key(key),
             Some(Overlay::Trace(_)) => self.on_trace_key(key),
@@ -145,14 +155,6 @@ impl App {
             scroll.set(scroll.get().saturating_sub(1));
         } else if is_down(key) {
             scroll.set(scroll.get() + 1);
-        }
-    }
-
-    fn on_help_key(&mut self, key: &str) {
-        match (&self.overlay, key) {
-            (_, "\x1b" | "?" | "q") => self.overlay = None,
-            (Some(Overlay::Help { scroll }), _) => Self::scroll_by_key(scroll, key),
-            _ => {}
         }
     }
 
@@ -181,38 +183,78 @@ impl App {
     }
 
     fn on_config_key(&mut self, key: &str, now: Instant) {
-        let Some(Overlay::Config { selected }) = &mut self.overlay else {
+        let Some(Overlay::Config {
+            tab,
+            selected,
+            capturing,
+        }) = &mut self.overlay
+        else {
             return;
         };
+        let rows = tab_fields(*tab);
+        if *capturing {
+            *capturing = false;
+            if key == "\x1b" {
+                return;
+            }
+            let index = rows[*selected];
+            match spec_from_raw(key) {
+                Some(spec) => self.apply_config_field(index, &spec, now),
+                None => self.flash("That key can't be bound".into(), now),
+            }
+            return;
+        }
         match key {
             "\r" => {
-                let index = *selected;
+                let index = rows[*selected];
                 self.edit_config_field(index, now);
             }
-            "\x1b" | "C" | "q" => self.overlay = None,
-            _ => *selected = step(*selected, key, CONFIG_FIELDS.len()),
+            "\x1b" | "C" | "q" | "?" => self.overlay = None,
+            "\x1b[C" | "\x1bOC" | "l" | "\t" => {
+                *tab = tab.next();
+                *selected = 0;
+            }
+            "\x1b[D" | "\x1bOD" | "h" | "\x1b[Z" => {
+                *tab = tab.prev();
+                *selected = 0;
+            }
+            "\x7f" | "\x08" | "\x1b[3~" if *tab == ConfigTab::Keybindings => {
+                let index = rows[*selected];
+                self.apply_config_field(index, "", now);
+            }
+            _ => *selected = step(*selected, key, rows.len()),
         }
     }
 
-    /// Toggles flip right away; the rest open a prompt pre-filled with their current value.
+    /// Toggles flip right away, keys wait for the next keypress, the rest open a prompt pre-filled
+    /// with their current value.
     fn edit_config_field(&mut self, index: usize, now: Instant) {
         let field = &CONFIG_FIELDS[index];
-        if field.kind == ConfigFieldKind::Toggle {
-            self.apply_config_field(index, "", now);
-        } else {
-            let value = field.edit_value(&self.config);
-            self.open_prompt(
-                field.pretty_name(),
-                value,
-                super::input::PromptAction::ConfigField(index),
-            );
+        match field.kind {
+            ConfigFieldKind::Toggle => self.apply_config_field(index, "", now),
+            ConfigFieldKind::Key => {
+                if let Some(Overlay::Config { capturing, .. }) = &mut self.overlay {
+                    *capturing = true;
+                }
+            }
+            _ => {
+                let value = field.edit_value(&self.config);
+                self.open_prompt(
+                    field.pretty_name(),
+                    value,
+                    super::input::PromptAction::ConfigField(index),
+                );
+            }
         }
     }
 
     pub(super) fn apply_config_field(&mut self, index: usize, input: &str, now: Instant) {
         let field = &CONFIG_FIELDS[index];
         let Some(next) = field.apply(&self.config, input) else {
-            self.flash(format!("Invalid value for {}", field.pretty_name()), now);
+            let reason = field
+                .key_error(&self.config, input)
+                .unwrap_or_else(|| format!("Invalid value for {}", field.pretty_name()));
+            self.flash(reason, now);
             return;
         };
         let usage_turned_on = !self.config.ui.show_usage && next.ui.show_usage;
@@ -234,7 +276,11 @@ impl App {
                 self.spawn_discovery();
             }
         }
-        let mut message = format!("{} updated", field.label);
+        let mut message = if field.kind == ConfigFieldKind::Key {
+            format!("{} is now {}", field.pretty_name(), field.display(&self.config))
+        } else {
+            format!("{} updated", field.label)
+        };
         if usage_turned_on {
             let mut dirs: Vec<PathBuf> = discover_accounts().into_iter().map(|a| a.config_dir).collect();
             for known in &self.accounts {
@@ -314,20 +360,18 @@ impl App {
     pub(super) fn draw_overlay(&self, frame: &mut Frame, t: Theme) {
         match &self.overlay {
             None => {}
-            Some(Overlay::Help { scroll }) => render_help(
-                frame,
-                t,
-                scroll,
-                VERSION,
-                &theme_label(self.theme_preference, t),
-                &self.detach_label(),
-            ),
-            Some(Overlay::Config { selected }) => render_config(
+            Some(Overlay::Config {
+                tab,
+                selected,
+                capturing,
+            }) => render_config(
                 frame,
                 t,
                 &self.config,
                 &deck_config_path().to_string_lossy(),
+                *tab,
                 *selected,
+                *capturing,
             ),
             Some(Overlay::Skills {
                 tab,
@@ -364,21 +408,20 @@ mod tests {
     }
 
     #[test]
-    fn question_mark_opens_help_that_scrolls_and_closes() {
+    fn question_mark_opens_config_on_the_keybindings_tab_and_closes() {
+        use crate::config_fields::ConfigTab;
         let mut f = fixture();
         f.key("?");
-        assert!(matches!(f.app.overlay, Some(Overlay::Help { .. })));
-        f.key("jjk");
-        let Some(Overlay::Help { scroll }) = &f.app.overlay else {
-            panic!("help is open")
+        let Some(Overlay::Config { tab, selected, .. }) = &f.app.overlay else {
+            panic!("config is open")
         };
-        assert_eq!(scroll.get(), 1);
+        assert_eq!((*tab, *selected), (ConfigTab::Keybindings, 0));
         f.key("x");
         assert!(open(&f), "unrelated keys are swallowed, not passed to the list");
-        f.key("\x1b");
+        f.key("?");
         assert!(!open(&f));
         f.key("?");
-        f.key("?");
+        f.key("\x1b");
         assert!(!open(&f));
     }
 
@@ -386,11 +429,11 @@ mod tests {
     fn config_navigates_toggles_edits_and_saves() {
         let mut f = fixture();
         f.key("C");
-        f.key("j");
-        let Some(Overlay::Config { selected }) = &f.app.overlay else {
+        f.key("jjjj");
+        let Some(Overlay::Config { selected, .. }) = &f.app.overlay else {
             panic!("config is open")
         };
-        assert_eq!(*selected, 1);
+        assert_eq!(*selected, 4);
         // ui.notifications is a toggle: Enter flips it and saves.
         assert!(f.app.config.ui.notifications);
         f.key("\r");
@@ -399,7 +442,7 @@ mod tests {
         assert!(f.app.message.contains("ui.notifications updated"));
 
         // ui.maxSessionsListed opens a prompt over the still-open popup.
-        f.key("k");
+        f.key("kkkk");
         f.key("\r");
         assert_eq!(f.app.prompt.as_ref().unwrap().value, "10");
         f.key("\x15");
@@ -434,13 +477,94 @@ mod tests {
         let mut f = fixture();
         f.add(Some("a"), true);
         f.key("C");
-        let last = crate::config_fields::CONFIG_FIELDS.len() - 2;
-        for _ in 0..last {
-            f.key("j");
-        }
+        f.key("\x1b[C\x1b[C\x1b[C");
+        f.key("j");
         assert!(f.app.config.accounts.show_all_sessions);
         f.key("\r");
         assert!(!f.app.config.accounts.show_all_sessions);
+    }
+
+    #[test]
+    fn config_tabs_switch_with_arrows_wrap_and_reset_the_selection() {
+        use crate::config_fields::ConfigTab;
+        let mut f = fixture();
+        f.key("C");
+        f.key("jj");
+        f.key("\x1b[C");
+        let Some(Overlay::Config { tab, selected, .. }) = &f.app.overlay else {
+            panic!("config is open")
+        };
+        assert_eq!((*tab, *selected), (ConfigTab::Display, 0));
+        f.key("\x1b[D\x1b[D");
+        let Some(Overlay::Config { tab, .. }) = &f.app.overlay else {
+            panic!("config is open")
+        };
+        assert_eq!(*tab, ConfigTab::Keybindings);
+        f.key("\x1b[C");
+        let Some(Overlay::Config { tab, .. }) = &f.app.overlay else {
+            panic!("config is open")
+        };
+        assert_eq!(*tab, ConfigTab::General);
+    }
+
+    fn open_key_row(f: &mut crate::app::test_fixture::Fixture, label: &str) {
+        use crate::config_fields::{tab_fields, ConfigTab, CONFIG_FIELDS};
+        f.key("C\x1b[D");
+        let at = tab_fields(ConfigTab::Keybindings)
+            .iter()
+            .position(|&i| CONFIG_FIELDS[i].label == label)
+            .unwrap();
+        f.key(&"j".repeat(at));
+    }
+
+    #[test]
+    fn rebinding_a_row_takes_the_next_key_saves_and_remaps_the_list() {
+        let mut f = fixture();
+        open_key_row(&mut f, "keys.view.help");
+        f.key("\r");
+        let Some(Overlay::Config { capturing, .. }) = &f.app.overlay else {
+            panic!("config is open")
+        };
+        assert!(capturing);
+        f.key("y");
+        assert_eq!(f.app.config.keybindings["help"], "y");
+        assert_eq!(read_deck_config(&deck_config_path()).keybindings["help"], "y");
+        assert!(f.app.message.contains("Help is now y"), "{}", f.app.message);
+        f.key("C");
+        f.key("?");
+        assert!(!open(&f), "the old key no longer opens help");
+        f.key("y");
+        assert!(matches!(
+            f.app.overlay,
+            Some(Overlay::Config {
+                tab: crate::config_fields::ConfigTab::Keybindings,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rebinding_refuses_a_taken_key_and_backspace_restores_the_default() {
+        let mut f = fixture();
+        open_key_row(&mut f, "keys.view.help");
+        f.key("\rj");
+        assert!(f.app.config.keybindings.is_empty());
+        assert!(f.app.message.contains("already Move down"), "{}", f.app.message);
+        f.key("\ry");
+        assert_eq!(f.app.config.keybindings["help"], "y");
+        f.key("\x7f");
+        assert!(f.app.config.keybindings.is_empty());
+        f.key("\r\x1b");
+        assert!(f.app.config.keybindings.is_empty());
+        assert!(open(&f), "Esc cancels the capture, not the popup");
+    }
+
+    #[test]
+    fn the_detach_key_is_a_keybindings_row() {
+        let mut f = fixture();
+        open_key_row(&mut f, "keys.chord.detachKey");
+        f.key("\r\x05");
+        assert_eq!(f.app.config.ui.detach_key, "ctrl+e");
     }
 
     #[test]

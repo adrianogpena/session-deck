@@ -114,7 +114,7 @@ mod tests {
         f.app.set_size(100, 14);
         let index = crate::config_fields::CONFIG_FIELDS
             .iter()
-            .position(|c| c.label == "ui.detachKey")
+            .position(|c| c.label == "keys.chord.detachKey")
             .unwrap();
         f.app.apply_config_field(index, "nope", std::time::Instant::now());
         assert_eq!(f.app.config.ui.detach_key, "ctrl+q");
