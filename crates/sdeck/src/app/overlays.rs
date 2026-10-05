@@ -217,6 +217,7 @@ impl App {
         };
         let usage_turned_on = !self.config.ui.show_usage && next.ui.show_usage;
         let max_sessions_changed = self.config.ui.max_sessions_listed != next.ui.max_sessions_listed;
+        let ctl_changed = self.config.ui.ctl != next.ui.ctl;
         self.config = next;
         let _ = write_deck_config(&self.config, &deck_config_path());
         // A `tools.*.command` edit shouldn't need a restart to take effect.
@@ -242,6 +243,9 @@ impl App {
                 }
             }
             message.push_str(&format!(" ({})", Self::enable_usage_statusline(&dirs)));
+        }
+        if ctl_changed {
+            message.push_str(" (restart sdeck to apply)");
         }
         self.flash(message, now);
     }
@@ -410,6 +414,19 @@ mod tests {
         assert!(f.app.message.contains("Invalid value for ui.maxSessionsListed"));
         f.key("C");
         assert!(!open(&f));
+    }
+
+    #[test]
+    fn config_ctl_row_toggles_saves_and_asks_for_a_restart() {
+        let mut f = fixture();
+        let index = crate::config_fields::CONFIG_FIELDS
+            .iter()
+            .position(|c| c.label == "ui.ctl")
+            .unwrap();
+        f.app.apply_config_field(index, "", std::time::Instant::now());
+        assert!(!f.app.config.ui.ctl);
+        assert!(!read_deck_config(&deck_config_path()).ui.ctl);
+        assert!(f.app.message.contains("restart sdeck"), "{}", f.app.message);
     }
 
     #[test]

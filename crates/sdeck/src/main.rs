@@ -15,7 +15,7 @@ use sdeck::keys::RESET_AGENT_MODES;
 use sdeck::theme::read_os_theme;
 use sdeck_core::status::account::discover_accounts;
 use sdeck_core::status::statusline::run_statusline_hook;
-use sdeck_core::store::deck_config::{deck_config_path, read_deck_config};
+use sdeck_core::store::deck_config::{ctl_enabled, deck_config_path, read_deck_config};
 use sdeck_core::store::deck_store::DeckStore;
 
 /// Puts the real terminal back: also run from the panic hook, so a crash never leaves it raw.
@@ -76,7 +76,11 @@ fn main() -> anyhow::Result<()> {
     let (tx, rx) = mpsc::channel();
     let mut app = App::new(DeckStore::at_default_path(), tx.clone(), Some(read_os_theme));
     app.query_terminal_background = !cfg!(windows);
-    app.start_background(discover_accounts(), read_deck_config(&deck_config_path()));
+    let config = read_deck_config(&deck_config_path());
+    let ctl_on = ctl_enabled(&config);
+    app.start_background(discover_accounts(), config);
+    // Outlives `app` (dropped last below), so `ctl.json` is only removed once sdeck is done.
+    let ctl_server = if ctl_on { app.start_ctl_server() } else { None };
     #[cfg(windows)]
     app.enable_notifications(Box::new(
         sdeck_core::status::waiting_notifier::WindowsToastSender::new(),
@@ -88,5 +92,6 @@ fn main() -> anyhow::Result<()> {
     // Shutting down live sessions can still write to the screen, so do it before leaving it.
     drop(terminal);
     drop(app);
+    drop(ctl_server);
     result
 }

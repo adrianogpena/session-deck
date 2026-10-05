@@ -33,6 +33,7 @@ enum Setting {
     CompactUsage,
     Use24HourClock,
     DetachKey,
+    Ctl,
     ToolEnabled,
     ToolCommand,
     ToolArgs,
@@ -162,6 +163,7 @@ impl ConfigField {
             }
             .into(),
             Setting::DetachKey => c.ui.detach_key.clone(),
+            Setting::Ctl => on_off(c.ui.ctl),
             Setting::ToolEnabled => on_off(self.tool_of(c).and_then(|t| t.enabled) != Some(false)),
             Setting::ToolCommand => self
                 .tool_of(c)
@@ -236,6 +238,7 @@ impl ConfigField {
             Setting::DetachKey => {
                 c.ui.detach_key = format!("ctrl+{}", parse_detach_letter(input)?);
             }
+            Setting::Ctl => c.ui.ctl = !c.ui.ctl,
             Setting::ToolEnabled => {
                 let tool = c.tools.entry(self.agent.clone()).or_default();
                 tool.enabled = Some(tool.enabled == Some(false));
@@ -341,6 +344,12 @@ fn build_fields() -> Vec<ConfigField> {
             Setting::DetachKey,
             "Key that detaches from a full-screen session or stops interacting: ctrl+<letter>, not c h i j k m.",
         ),
+        ui(
+            "ctl",
+            Toggle,
+            Setting::Ctl,
+            "The read-only sdeck ctl control server (list sessions, read status and screen). Takes effect after a restart.",
+        ),
     ];
     for agent in all_agent_ids() {
         fields.push(ConfigField::tool(agent, "enabled", Toggle, Setting::ToolEnabled));
@@ -407,6 +416,16 @@ mod tests {
         let off = f.apply(&base(), "").unwrap();
         assert!(!off.ui.notifications);
         assert!(f.apply(&off, "").unwrap().ui.notifications);
+    }
+
+    #[test]
+    fn ctl_toggles_and_says_it_needs_a_restart() {
+        let f = field("ui.ctl");
+        let off = f.apply(&base(), "").unwrap();
+        assert!(!off.ui.ctl);
+        assert_eq!(f.display(&off), "off");
+        assert!(f.apply(&off, "").unwrap().ui.ctl);
+        assert!(f.hint.unwrap().contains("restart"));
     }
 
     #[test]

@@ -6,6 +6,7 @@ mod archive;
 mod attach;
 mod bulk;
 mod chords;
+mod ctl;
 mod delete;
 mod folders;
 mod input;
@@ -427,6 +428,11 @@ impl App {
             AppEvent::SearchText(id, text) => self.on_search_text(id, text),
             AppEvent::Trace(uid, steps) => self.on_trace_steps(uid, steps),
             AppEvent::ToastClicked(id) => self.on_toast_clicked(&id, now),
+            AppEvent::Ctl(req, reply) => {
+                // Read-only: answered without touching the selection or the preview.
+                let _ = reply.0.send(self.handle_ctl(&req));
+                return;
+            }
         }
         self.track_selection();
         self.refresh_usage_rows(now);

@@ -385,7 +385,7 @@ Sessions from every logged-in Claude account are listed together.
 Global settings, mainly for the terminal UI. Press `C` in the
 terminal UI to view and edit it directly (see **Config `C`** above), or edit the file by hand — either
 way, a missing field keeps that setting's default. Editing through `C` takes effect right away, except
-for `trash.retentionDays` (checked only at startup) and any hand-made change to the file (`sdeck` picks
+for `trash.retentionDays` and `ui.ctl` (checked only at startup) and any hand-made change to the file (`sdeck` picks
 it up next time it starts).
 
 ```jsonc
@@ -402,7 +402,8 @@ it up next time it starts).
     "showUsage": false,
     "usagePosition": "Float",
     "compactUsage": false,
-    "detachKey": "ctrl+q"
+    "detachKey": "ctrl+q",
+    "ctl": true
   },
   "tools": {
     "claude": { "command": "claude-nightly", "args": ["--model", "opus"] },
@@ -445,6 +446,11 @@ it up next time it starts).
 - **`ui.detachKey`**: the key that detaches from a full attach and stops interacting, written
   `ctrl+<letter>` (any case). `c`, `h`, `i`, `j`, `m` (control bytes with other meanings) and `k` (the
   chord key) are refused and fall back to `ctrl+q`. Default: `ctrl+q`.
+- **`ui.ctl`**: the control server that lets scripts read the running sdeck (sessions, status, screen);
+  it is read-only and can't start, type into or stop a session. It listens on `127.0.0.1` only, on a
+  random port, and every request must carry the token from `~/.session-deck/ctl.json`. `false` turns it
+  off. Read at startup only. Two sdeck instances at once: the one started last owns `ctl.json`.
+  Default: on.
 - **`tools.claude` / `tools.copilot`**:
   - **`enabled`**: `false` hides that agent entirely — its sessions aren't discovered, and its `n`/`N`
     new-session key just flashes a message instead of starting one. Default: on.
@@ -466,6 +472,7 @@ it up next time it starts).
 |---|---|
 | `~/.session-deck/state.json` | Names, archive flags, pins, seen marks, folders, order, sort, collapsed state, and the terminal UI's theme and panel width. Also holds session tags, which only the terminal UI manages and filters by today. |
 | `~/.session-deck/config.json` | Global, hand-edited settings — mainly for the terminal UI. |
+| `~/.session-deck/ctl.json` | Port, token and pid of the running sdeck's control server (`ui.ctl`); removed when it quits. |
 | `~/.session-deck/trash/` | Sessions deleted in the terminal UI (restorable for 30 days). |
 | `~/.claude/session-deck-status/` | Each session's current status. |
 | `~/.claude/projects/` | Claude Code's own transcripts. Session Deck reads them, and writes only a title when you rename a stopped session. |

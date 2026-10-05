@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use ratatui::crossterm::event::{self, Event};
 
+use sdeck_core::ctl::{CtlRequest, CtlResponse};
 use sdeck_core::discovery::claude_trace::TraceStep;
 use sdeck_core::status::claude_transcript_tailer::TailedTurn;
 
@@ -46,6 +47,18 @@ pub enum AppEvent {
     Trace(u64, Vec<TraceStep>),
     /// A toast was clicked, by session id.
     ToastClicked(String),
+    /// A control request from `sdeck ctl`; the answer goes back on the reply channel.
+    Ctl(CtlRequest, CtlReply),
+}
+
+/// Where a control request's answer goes. Never equal to another (only tests compare events).
+#[derive(Debug, Clone)]
+pub struct CtlReply(pub Sender<CtlResponse>);
+
+impl PartialEq for CtlReply {
+    fn eq(&self, _: &Self) -> bool {
+        false
+    }
 }
 
 /// How long the input thread waits after plain text for the next key of the same paste.

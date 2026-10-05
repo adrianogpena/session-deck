@@ -3,6 +3,7 @@
 pub mod agent_catalog;
 pub mod commands;
 pub mod concurrency;
+pub mod ctl;
 pub mod discovery;
 pub mod format;
 pub mod fuzzy_match;

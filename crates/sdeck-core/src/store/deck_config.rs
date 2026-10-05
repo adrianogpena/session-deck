@@ -89,6 +89,8 @@ pub struct UiConfig {
     pub active_account_config_dir: Option<String>,
     /// Key that detaches from a full attach or stops interacting, as `ctrl+<letter>`. Default: `ctrl+q`.
     pub detach_key: String,
+    /// The `sdeck ctl` control server (read-only). Default: on. Read at startup only.
+    pub ctl: bool,
     pub extra: Map<String, Value>,
 }
 
@@ -149,6 +151,11 @@ impl UiConfig {
     }
 }
 
+/// Whether `main` starts the control server.
+pub fn ctl_enabled(config: &DeckConfig) -> bool {
+    config.ui.ctl
+}
+
 impl Default for DeckConfig {
     fn default() -> Self {
         DeckConfig {
@@ -167,6 +174,7 @@ impl Default for DeckConfig {
                 use_24_hour_clock: false,
                 active_account_config_dir: None,
                 detach_key: DEFAULT_DETACH_KEY.to_string(),
+                ctl: true,
                 extra: Map::new(),
             },
             tools: all_agent_ids()
@@ -262,6 +270,7 @@ pub fn parse_deck_config(raw: &str) -> DeckConfig {
                 "use24HourClock",
                 "activeAccountConfigDir",
                 "detachKey",
+                "ctl",
             ],
         );
         if let Some(n) = ui.get("maxSessionsListed").and_then(positive_int) {
@@ -284,6 +293,7 @@ pub fn parse_deck_config(raw: &str) -> DeckConfig {
         flag("showUsage", &mut c.show_usage);
         flag("compactUsage", &mut c.compact_usage);
         flag("use24HourClock", &mut c.use_24_hour_clock);
+        flag("ctl", &mut c.ctl);
         if let Some(p) = ui
             .get("usagePosition")
             .and_then(Value::as_str)
@@ -401,6 +411,7 @@ pub fn deck_config_to_json(config: &DeckConfig) -> String {
     ui_obj.insert("compactUsage".into(), ui.compact_usage.into());
     ui_obj.insert("use24HourClock".into(), ui.use_24_hour_clock.into());
     ui_obj.insert("detachKey".into(), ui.detach_key.clone().into());
+    ui_obj.insert("ctl".into(), ui.ctl.into());
     if let Some(dir) = &ui.active_account_config_dir {
         ui_obj.insert("activeAccountConfigDir".into(), dir.clone().into());
     }
@@ -505,6 +516,15 @@ mod tests {
             Some("C:\\Users\\me\\.claude-work")
         );
         assert_eq!(parse_deck_config(&deck_config_to_json(&c)), c);
+    }
+
+    #[test]
+    fn ctl_defaults_on_parses_false_and_round_trips() {
+        assert!(ctl_enabled(&parse_deck_config("{}")));
+        let off = parse(json!({ "ui": { "ctl": false } }));
+        assert!(!ctl_enabled(&off));
+        assert_eq!(parse_deck_config(&deck_config_to_json(&off)), off);
+        assert!(ctl_enabled(&parse(json!({ "ui": { "ctl": "no" } }))));
     }
 
     #[test]
