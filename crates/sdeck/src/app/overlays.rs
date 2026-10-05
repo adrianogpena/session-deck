@@ -1,5 +1,5 @@
 //! The popups opened by `?`, `C`, `w`, `a` and `:` — one at a time, and while one is open it takes
-//! every key (a footer prompt, opened from the config popup, takes them first). Port of the
+//! every key (a prompt popup, opened from the config popup, takes them first). Port of the
 //! `onHelpKey` / `onConfigKey` / `onSkillsKey` / `onAlertsKey` / `onCommandPaletteKey` handlers.
 //! Search (`/`) and the trajectory (`v`) have their own modules.
 
@@ -202,7 +202,7 @@ impl App {
         } else {
             let value = field.edit_value(&self.config);
             self.open_prompt(
-                field.label.clone(),
+                field.pretty_name(),
                 value,
                 super::input::PromptAction::ConfigField(index),
             );
@@ -212,7 +212,7 @@ impl App {
     pub(super) fn apply_config_field(&mut self, index: usize, input: &str, now: Instant) {
         let field = &CONFIG_FIELDS[index];
         let Some(next) = field.apply(&self.config, input) else {
-            self.flash(format!("Invalid value for {}", field.label), now);
+            self.flash(format!("Invalid value for {}", field.pretty_name()), now);
             return;
         };
         let usage_turned_on = !self.config.ui.show_usage && next.ui.show_usage;
@@ -411,7 +411,7 @@ mod tests {
         f.key("\x15");
         f.key("nope\r");
         assert_eq!(f.app.config.ui.max_sessions_listed, 12);
-        assert!(f.app.message.contains("Invalid value for ui.maxSessionsListed"));
+        assert!(f.app.message.contains("Invalid value for Max sessions listed"));
         f.key("C");
         assert!(!open(&f));
     }

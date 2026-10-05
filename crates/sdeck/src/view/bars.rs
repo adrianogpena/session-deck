@@ -4,7 +4,7 @@
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::ansi::{fit, fit_tail, text_width};
+use crate::ansi::{fit, text_width};
 use crate::filters::{StatusCategory, StatusCounts, TimeFilter, STATUS_CATEGORIES};
 use crate::theme::{Role, Theme};
 
@@ -179,30 +179,6 @@ pub fn message_bar(t: Theme, cols: usize, message: &str) -> Line<'static> {
     ))
 }
 
-/// A yes/no question in place of the help bar.
-pub fn confirm_bar(t: Theme, cols: usize, question: &str) -> Line<'static> {
-    message_bar(t, cols, &format!("{question} (y/N)"))
-}
-
-/// Footer text input: `label: value` with a reverse-video cursor, keeping the value's tail visible.
-pub fn prompt_bar(t: Theme, cols: usize, label: &str, value: &str) -> Line<'static> {
-    let prefix = format!(" {label}: ");
-    let width = cols.saturating_sub(text_width(&prefix)).max(1);
-    let cursor_width = 1;
-    // Keep the tail visible rather than truncating it away when the value overflows.
-    let visible = fit_tail(value, width - cursor_width);
-    let visible_width = text_width(&visible).min(width - cursor_width);
-    let pad = width - visible_width - cursor_width;
-    // A reverse-video space instead of a block glyph: relies only on color swap, not on the terminal
-    // having (and correctly rendering) a full-block character.
-    Line::from(vec![
-        Span::styled(prefix, bold(t.fg(Role::Accent))),
-        Span::styled(visible, t.fg(Role::Text)),
-        Span::styled(" ", Style::new().add_modifier(Modifier::REVERSED)),
-        Span::styled(" ".repeat(pad), t.fg(Role::Text)),
-    ])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,24 +286,11 @@ mod tests {
     }
 
     #[test]
-    fn message_and_confirm_bars_fit_the_width() {
+    fn message_bar_fits_the_width() {
         assert_eq!(
             snapshot(message_bar(DARK, 120, "Theme: light"), 120).trim_end(),
             " Theme: light"
         );
         assert_eq!(snapshot(message_bar(DARK, 10, "Theme: light"), 10), " Theme: l…");
-        assert_eq!(
-            snapshot(confirm_bar(DARK, 60, "Quit?"), 60).trim_end(),
-            " Quit? (y/N)"
-        );
-    }
-
-    #[test]
-    fn prompt_bar_keeps_the_tail_and_draws_a_cursor() {
-        let line = prompt_bar(DARK, 120, "Name", "abc");
-        assert_eq!(line.width(), 120);
-        assert_eq!(snapshot(line, 120).trim_end(), " Name: abc");
-        let row = snapshot(prompt_bar(DARK, 20, "Name", "a very long session name"), 20);
-        assert_eq!(row, " Name: …ession name ");
     }
 }

@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use sdeck_core::agent_catalog::{agent_display_name, all_agent_ids, is_builtin_agent};
 use sdeck_core::discovery::git_project::resolve_project_root;
-use sdeck_core::discovery::path_utils::{expand_home, normalize_fs_path};
+use sdeck_core::discovery::path_utils::{expand_input_path, normalize_fs_path};
 use sdeck_core::format::now_ms;
 use sdeck_core::store::deck_store::{Patch, UiPatch};
 use sdeck_core::store::tree_prefs::{prepend_session, rename_session_id, TreePrefs};
@@ -155,7 +155,20 @@ impl App {
 
     /// `p`: a new session in any folder, which lists its project once a prompt is sent.
     pub(super) fn open_add_project(&mut self) {
-        self.open_prompt("Project folder".into(), String::new(), PromptAction::AddProject);
+        let value = self
+            .config
+            .ui
+            .project_search_root
+            .as_deref()
+            .map(|root| {
+                if root.ends_with(['/', '\\']) {
+                    root.to_string()
+                } else {
+                    format!("{root}{}", std::path::MAIN_SEPARATOR)
+                }
+            })
+            .unwrap_or_default();
+        self.open_prompt("Project folder".into(), value, PromptAction::AddProject);
     }
 
     pub(super) fn add_project(&mut self, input: &str, now: Instant) {
@@ -167,7 +180,7 @@ impl App {
         if raw.is_empty() {
             return;
         }
-        let expanded = expand_home(raw);
+        let expanded = expand_input_path(raw);
         let path = std::path::absolute(&expanded).unwrap_or_else(|_| expanded.clone().into());
         let cwd = path.to_string_lossy().into_owned();
         if !path.is_dir() {
@@ -317,5 +330,28 @@ mod tests {
         f.key("nowhere");
         f.key("\r");
         assert!(f.app.message.starts_with("Not a folder"), "{}", f.app.message);
+    }
+
+    #[test]
+    fn p_opens_in_the_search_root_with_its_subfolders_suggested() {
+        let mut f = fixture();
+        let root = f.home.path().join("work");
+        std::fs::create_dir_all(root.join("alpha")).unwrap();
+        std::fs::create_dir_all(root.join("beta")).unwrap();
+        f.key("p");
+        assert_eq!(f.app.prompt.as_ref().unwrap().value, "");
+        assert!(f.app.prompt.as_ref().unwrap().suggestions.is_empty());
+        f.key("\x1b");
+
+        f.app.config.ui.project_search_root = Some(root.to_string_lossy().into_owned());
+        f.key("p");
+        let prompt = f.app.prompt.as_ref().unwrap();
+        assert!(prompt.value.starts_with(root.to_string_lossy().as_ref()));
+        assert_eq!(prompt.suggestions, ["alpha/", "beta/"]);
+        f.key("b");
+        assert_eq!(f.app.prompt.as_ref().unwrap().suggestions, ["beta/"]);
+        f.key("\t");
+        let value = &f.app.prompt.as_ref().unwrap().value;
+        assert!(value.ends_with("beta/") || value.ends_with("beta\\"));
     }
 }

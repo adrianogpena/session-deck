@@ -16,6 +16,7 @@ mod marks;
 mod navigation;
 mod new_session;
 mod overlays;
+mod path_complete;
 mod preview;
 mod prompt;
 mod quit;
@@ -152,7 +153,7 @@ pub struct App {
     interacting: Option<u64>,
     /// Ctrl+K arrived while attached/interacting; the next key decides if it's a chord.
     chord_pending: bool,
-    /// Footer text input (`p`, `o`, `e`) and the centered picker (`N`, `F3`); while either is open it
+    /// Text input popup (`p`, `o`, `e`) and the centered picker (`N`, `F3`); while either is open it
     /// takes every key.
     prompt: Option<TextPrompt>,
     picker: Option<Picker>,
@@ -160,7 +161,7 @@ pub struct App {
     overlay: Option<Overlay>,
     /// Hands out ids that tell one search apart from the next.
     next_overlay_id: u64,
-    /// Footer yes/no question: `y` confirms, any other key cancels.
+    /// Yes/no question popup: `y` confirms, any other key cancels.
     confirm: Option<Confirm>,
     /// Sessions checked with Space (by uid) for a batch action.
     multi_selected: HashSet<u64>,
@@ -1473,10 +1474,20 @@ impl App {
         }
         let bottom = row(area.height.saturating_sub(1));
         if let Some(prompt) = &self.prompt {
-            frame.render_widget(bars::prompt_bar(t, cols, &prompt.label, &prompt.value), bottom);
-        } else if let Some(confirm) = &self.confirm {
-            frame.render_widget(bars::confirm_bar(t, cols, &confirm.question), bottom);
-        } else if !self.message.is_empty() {
+            overlay::render_text_prompt(
+                frame,
+                t,
+                &prompt.label,
+                &prompt.value,
+                &prompt.suggestions,
+                prompt.paths,
+                prompt.selected,
+            );
+        }
+        if let Some(confirm) = &self.confirm {
+            overlay::render_question(frame, t, &confirm.question);
+        }
+        if !self.message.is_empty() {
             frame.render_widget(bars::message_bar(t, cols, &self.message), bottom);
         } else if self.interacting.is_some() {
             let text = format!(

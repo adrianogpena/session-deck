@@ -122,6 +122,8 @@ pub struct UiConfig {
     pub use_24_hour_clock: bool,
     /// Config dir of the account new sessions launch as; unset = the default account.
     pub active_account_config_dir: Option<String>,
+    /// Folder the project prompt (`p`) starts in, with its subfolders suggested; unset = empty prompt.
+    pub project_search_root: Option<String>,
     /// Key that detaches from a full attach or stops interacting, as `ctrl+<letter>`. Default: `ctrl+q`.
     pub detach_key: String,
     /// The `sdeck ctl` control server (read-only). Default: on. Read at startup only.
@@ -210,6 +212,7 @@ impl Default for DeckConfig {
                 compact_usage: false,
                 use_24_hour_clock: false,
                 active_account_config_dir: None,
+                project_search_root: None,
                 detach_key: DEFAULT_DETACH_KEY.to_string(),
                 ctl: true,
                 restore_sessions: RestoreSessions::Ask,
@@ -307,6 +310,7 @@ pub fn parse_deck_config(raw: &str) -> DeckConfig {
                 "compactUsage",
                 "use24HourClock",
                 "activeAccountConfigDir",
+                "projectSearchRoot",
                 "detachKey",
                 "ctl",
                 "restoreSessions",
@@ -354,6 +358,11 @@ pub fn parse_deck_config(raw: &str) -> DeckConfig {
                 .collect();
             if parsed.len() == items.len() {
                 c.notify_statuses = parsed;
+            }
+        }
+        if let Some(s) = ui.get("projectSearchRoot").and_then(Value::as_str) {
+            if !s.trim().is_empty() {
+                c.project_search_root = Some(s.trim().to_string());
             }
         }
         if let Some(l) = ui
@@ -456,6 +465,9 @@ pub fn deck_config_to_json(config: &DeckConfig) -> String {
     ui_obj.insert("usagePosition".into(), ui.usage_position.as_str().into());
     ui_obj.insert("compactUsage".into(), ui.compact_usage.into());
     ui_obj.insert("use24HourClock".into(), ui.use_24_hour_clock.into());
+    if let Some(root) = &ui.project_search_root {
+        ui_obj.insert("projectSearchRoot".into(), root.clone().into());
+    }
     ui_obj.insert("detachKey".into(), ui.detach_key.clone().into());
     ui_obj.insert("ctl".into(), ui.ctl.into());
     ui_obj.insert("restoreSessions".into(), ui.restore_sessions.as_str().into());

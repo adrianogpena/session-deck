@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Clear;
 use ratatui::Frame;
 
-use crate::ansi::{fit, text_width};
+use crate::ansi::{fit, fit_tail, text_width};
 use crate::theme::{Role, Theme};
 
 /// Draws a rounded box centered on the screen: `title` in the top border, then `rows` between `│`
@@ -103,6 +103,108 @@ pub fn render_picker(frame: &mut Frame, t: Theme, title: &str, items: &[String],
         frame.render_widget(Clear, rect);
         frame.render_widget(line, rect);
     }
+}
+
+/// A one-line text input popup: `label` in the border, the value with a reverse-video cursor
+/// (tail kept visible when it overflows), and a key hint underneath.
+pub fn render_text_prompt(
+    frame: &mut Frame,
+    t: Theme,
+    label: &str,
+    value: &str,
+    suggestions: &[String],
+    paths: bool,
+    selected: usize,
+) {
+    let cols = usize::from(frame.area().width);
+    let width = cols
+        .saturating_sub(4)
+        .min(70)
+        .max((text_width(label) + 8).min(cols));
+    if width < 8 {
+        return;
+    }
+    let inner = width - 4;
+    let surface = t.bg(Role::Surface);
+    let text = surface.patch(t.fg(Role::Text));
+    let dim = surface.patch(t.fg(Role::TextDim));
+    let visible = fit_tail(value, inner - 1);
+    let pad = inner - 1 - text_width(&visible);
+    let side = |content: Vec<Span<'static>>| {
+        let mut spans = vec![Span::styled(" ", surface)];
+        spans.extend(content);
+        spans.push(Span::styled(" ", surface));
+        Line::from(spans)
+    };
+    let mut rows = vec![
+        side(vec![Span::styled(" ".repeat(inner), surface)]),
+        side(vec![
+            Span::styled(visible, text),
+            Span::styled(" ", surface.add_modifier(Modifier::REVERSED)),
+            Span::styled(" ".repeat(pad), surface),
+        ]),
+    ];
+    let max_shown = usize::from(frame.area().height).saturating_sub(10).clamp(1, 8);
+    if !suggestions.is_empty() {
+        let selected_style = Style::new()
+            .bg(t.color(Role::Accent))
+            .fg(t.color(Role::Bg))
+            .add_modifier(Modifier::BOLD);
+        let first = selected
+            .saturating_sub(max_shown / 2)
+            .min(suggestions.len().saturating_sub(max_shown));
+        for (i, name) in suggestions.iter().enumerate().skip(first).take(max_shown) {
+            let style = if i == selected { selected_style } else { text };
+            rows.push(side(vec![Span::styled(fit(&format!(" {name}"), inner), style)]));
+        }
+    }
+    if paths {
+        // A path prompt always takes the same height, so the popup stays put while the list changes.
+        let blank = side(vec![Span::styled(" ".repeat(inner), surface)]);
+        let listed = suggestions.len().min(max_shown);
+        let mut padding = vec![blank; max_shown - listed];
+        if suggestions.is_empty() && !value.is_empty() {
+            padding[0] = side(vec![Span::styled(fit(" No matches", inner), dim)]);
+        }
+        rows.extend(padding);
+    }
+    let hint = if !paths {
+        "Enter confirm · Esc cancel"
+    } else {
+        "↑↓ select · Tab complete · Enter confirm · Esc cancel"
+    };
+    rows.push(side(vec![Span::styled(fit(hint, inner), dim)]));
+    draw_box(frame, t, &format!(" {label} "), width, rows);
+}
+
+/// A yes/no question popup answered with `y`; any other key cancels.
+pub fn render_question(frame: &mut Frame, t: Theme, question: &str) {
+    let cols = usize::from(frame.area().width);
+    let width = cols.saturating_sub(4).min((text_width(question) + 4).max(40));
+    if width < 8 {
+        return;
+    }
+    let inner = width - 4;
+    let surface = t.bg(Role::Surface);
+    let side = |content: Span<'static>| {
+        Line::from(vec![
+            Span::styled(" ", surface),
+            content,
+            Span::styled(" ", surface),
+        ])
+    };
+    let rows = vec![
+        side(Span::styled(" ".repeat(inner), surface)),
+        side(Span::styled(
+            fit(question, inner),
+            surface.patch(t.fg(Role::Text)),
+        )),
+        side(Span::styled(
+            fit("y yes · any other key cancels", inner),
+            surface.patch(t.fg(Role::TextDim)),
+        )),
+    ];
+    draw_box(frame, t, " CONFIRM ", width, rows);
 }
 
 /// The "N sessions still running will be stopped" warning with Yes/No buttons (`yes` picks the

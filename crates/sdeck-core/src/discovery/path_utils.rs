@@ -52,6 +52,33 @@ pub fn expand_home(root: &str) -> String {
     expand_home_with(root, &user_home())
 }
 
+/// A Git Bash style drive path (`/x/Source`) as a Windows path (`X:\Source`); other input is
+/// unchanged, and so is everything on other platforms.
+fn msys_drive_to_windows(path: &str) -> Option<String> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let rest = path.strip_prefix('/')?;
+    let mut chars = rest.chars();
+    let drive = chars.next().filter(char::is_ascii_alphabetic)?;
+    let tail = chars.as_str();
+    if !(tail.is_empty() || tail.starts_with(['/', '\\'])) {
+        return None;
+    }
+    let tail = tail.replace('/', "\\");
+    Some(format!(
+        "{}:{}",
+        drive.to_ascii_uppercase(),
+        if tail.is_empty() { "\\".into() } else { tail }
+    ))
+}
+
+/// What the user typed as a path: `~` expanded and `/x/...` read as `X:\...` on Windows.
+pub fn expand_input_path(input: &str) -> String {
+    let expanded = expand_home(input);
+    msys_drive_to_windows(&expanded).unwrap_or(expanded)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,5 +162,19 @@ mod tests {
         let _g = crate::paths::test_env::EnvGuard::new();
         std::env::set_var("SDECK_USER_HOME", "/h/me");
         assert_eq!(expand_home("~"), "/h/me");
+    }
+}
+
+#[cfg(all(test, windows))]
+mod input_path_tests {
+    use super::*;
+
+    #[test]
+    fn git_bash_drive_paths_become_windows_paths() {
+        assert_eq!(expand_input_path("/x/Source/a"), "X:\\Source\\a");
+        assert_eq!(expand_input_path("/x/"), "X:\\");
+        assert_eq!(expand_input_path("/x"), "X:\\");
+        assert_eq!(expand_input_path("X:\\Source"), "X:\\Source");
+        assert_eq!(expand_input_path("/xyz/a"), "/xyz/a");
     }
 }

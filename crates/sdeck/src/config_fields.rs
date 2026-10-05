@@ -4,6 +4,7 @@
 use std::sync::LazyLock;
 
 use sdeck_core::agent_catalog::all_agent_ids;
+use sdeck_core::discovery::path_utils::expand_input_path;
 use sdeck_core::status::session_status::SessionStatus;
 use sdeck_core::store::deck_config::{
     parse_detach_letter, DeckConfig, RestoreSessions, ToolConfig, UsagePosition,
@@ -34,6 +35,7 @@ enum Setting {
     UsagePosition,
     CompactUsage,
     Use24HourClock,
+    ProjectSearchRoot,
     DetachKey,
     Ctl,
     RestoreSessions,
@@ -89,6 +91,16 @@ impl ConfigField {
             hint: None,
             setting,
             agent: agent.to_string(),
+        }
+    }
+
+    /// `Some(include_files)` when the value is a path the prompt suggests completions for: a folder
+    /// for the search root, a file or folder for a tool command.
+    pub fn path_completion(&self) -> Option<bool> {
+        match self.setting {
+            Setting::ProjectSearchRoot => Some(false),
+            Setting::ToolCommand => Some(true),
+            _ => None,
         }
     }
 
@@ -165,6 +177,11 @@ impl ConfigField {
                 "12-hour"
             }
             .into(),
+            Setting::ProjectSearchRoot => {
+                c.ui.project_search_root
+                    .clone()
+                    .unwrap_or_else(|| "(none)".into())
+            }
             Setting::DetachKey => c.ui.detach_key.clone(),
             Setting::Ctl => on_off(c.ui.ctl),
             Setting::RestoreSessions => match c.ui.restore_sessions {
@@ -203,6 +220,7 @@ impl ConfigField {
                     .collect::<Vec<_>>()
                     .join(" ")
             }
+            Setting::ProjectSearchRoot => c.ui.project_search_root.clone().unwrap_or_default(),
             Setting::ToolCommand => self
                 .tool_of(c)
                 .and_then(|t| t.command.clone())
@@ -244,6 +262,17 @@ impl ConfigField {
             Setting::CompactUsage => c.ui.compact_usage = !c.ui.compact_usage,
             Setting::UsagePosition => c.ui.usage_position = c.ui.usage_position.next(),
             Setting::Use24HourClock => c.ui.use_24_hour_clock = !c.ui.use_24_hour_clock,
+            Setting::ProjectSearchRoot => {
+                let root = input.trim();
+                let root = root
+                    .strip_prefix('"')
+                    .and_then(|r| r.strip_suffix('"'))
+                    .unwrap_or(root);
+                if !root.is_empty() && !std::path::Path::new(&expand_input_path(root)).is_dir() {
+                    return None;
+                }
+                c.ui.project_search_root = (!root.is_empty()).then(|| root.to_string());
+            }
             Setting::DetachKey => {
                 c.ui.detach_key = format!("ctrl+{}", parse_detach_letter(input)?);
             }
@@ -348,6 +377,7 @@ fn build_fields() -> Vec<ConfigField> {
             Setting::Use24HourClock,
             "The 5h usage row's reset time shows as 20:30 instead of 8:30 PM.",
         ),
+ui(            "projectSearchRoot",            Text,            Setting::ProjectSearchRoot,            "Folder the project prompt (p) opens in, with its subfolders suggested as you type. Empty: no suggestions.",        ),
         ui(
             "detachKey",
             Text,

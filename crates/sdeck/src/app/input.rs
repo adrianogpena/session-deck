@@ -1,4 +1,4 @@
-//! The footer text input (`prompt`) and the centered list picker, with their keys. Port of
+//! The text input popup (`prompt`) and the centered list picker, with their keys. Port of
 //! `App.onPromptKey` and `onPickerKey`; what a submit or a pick does lives with each feature.
 
 use std::path::PathBuf;
@@ -7,7 +7,9 @@ use std::time::Instant;
 use sdeck_core::status::account::Account;
 use sdeck_core::store::tree_prefs::delete_folder;
 
+use super::path_complete::{complete, path_suggestions};
 use super::App;
+use crate::config_fields::CONFIG_FIELDS;
 
 /// What Enter does with the typed text.
 pub(super) enum PromptAction {
@@ -29,6 +31,11 @@ pub(super) struct TextPrompt {
     pub label: String,
     pub value: String,
     pub action: PromptAction,
+    /// Folder names matching the typed path (project prompt only), and the highlighted one.
+    pub suggestions: Vec<String>,
+    pub selected: usize,
+    /// The prompt asks for a path: its popup keeps room for the suggestion list.
+    pub paths: bool,
 }
 
 /// What Enter does with the chosen entry; the ids are the agents the picker lists, in order.
@@ -87,7 +94,17 @@ pub(super) struct Picker {
 
 impl App {
     pub(super) fn open_prompt(&mut self, label: String, value: String, action: PromptAction) {
-        self.prompt = Some(TextPrompt { label, value, action });
+        let mut prompt = TextPrompt {
+            label,
+            value,
+            action,
+            suggestions: Vec::new(),
+            selected: 0,
+            paths: false,
+        };
+        prompt.paths = path_files(&prompt.action).is_some();
+        refresh_suggestions(&mut prompt);
+        self.prompt = Some(prompt);
         self.dirty = true;
     }
 
@@ -102,12 +119,28 @@ impl App {
                 }
             }
             "\x1b" | "\x03" => self.prompt = None,
+            "\x1b[A" | "\x1bOA" if !prompt.suggestions.is_empty() => {
+                let last = prompt.suggestions.len() - 1;
+                prompt.selected = prompt.selected.checked_sub(1).unwrap_or(last);
+            }
+            "\x1b[B" | "\x1bOB" if !prompt.suggestions.is_empty() => {
+                prompt.selected = (prompt.selected + 1) % prompt.suggestions.len();
+            }
+            "\t" if !prompt.suggestions.is_empty() => {
+                prompt.value = complete(&prompt.value, &prompt.suggestions[prompt.selected]);
+                refresh_suggestions(prompt);
+            }
             "\x7f" | "\x08" => {
                 prompt.value.pop();
+                refresh_suggestions(prompt);
             }
-            "\x15" => prompt.value.clear(),
+            "\x15" => {
+                prompt.value.clear();
+                refresh_suggestions(prompt);
+            }
             _ if !key.starts_with('\x1b') => {
                 prompt.value.extend(key.chars().filter(|c| !c.is_control()));
+                refresh_suggestions(prompt);
             }
             _ => {}
         }
@@ -233,6 +266,20 @@ impl App {
     }
 }
 
+fn refresh_suggestions(prompt: &mut TextPrompt) {
+    prompt.selected = 0;
+    prompt.suggestions =
+        path_files(&prompt.action).map_or_else(Vec::new, |files| path_suggestions(&prompt.value, files));
+}
+
+/// `Some(include_files)` when the prompt asks for a path.
+fn path_files(action: &PromptAction) -> Option<bool> {
+    match action {
+        PromptAction::AddProject => Some(false),
+        PromptAction::ConfigField(index) => CONFIG_FIELDS[*index].path_completion(),
+        _ => None,
+    }
+}
 #[cfg(test)]
 mod tests {
     use crate::app::test_fixture::fixture;
