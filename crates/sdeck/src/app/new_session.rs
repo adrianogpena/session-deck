@@ -259,7 +259,7 @@ mod tests {
     fn ctrl_k_n_starts_a_new_claude_session_in_the_same_folder() {
         let mut f = fixture();
         let old = f.add(Some("abc"), true);
-        f.key("\r");
+        f.enter_and_wait_for_attach();
         assert_eq!(f.app.attached, Some(old));
         f.key("\x0bn");
         let fresh = f.app.attached.expect("attached to the new session");
@@ -371,7 +371,10 @@ mod tests {
         f.key(&format!("\"{}\"", folder.display()));
         f.key("\r");
         assert!(f.app.attached.is_none());
-        assert_eq!(f.app.picker.as_ref().unwrap().items, ["Leave at top level", "Work"]);
+        assert_eq!(
+            f.app.picker.as_ref().unwrap().items,
+            ["Leave at top level", "Work"]
+        );
         f.key("j");
         f.key("\r");
         assert!(f.app.attached.is_some());

@@ -26,6 +26,9 @@ use crate::tree::{project_labels, TreeRow};
 
 /// A queued prompt is typed only once the agent's output has been quiet this long.
 const PROMPT_SETTLE: Duration = Duration::from_millis(1000);
+/// Attaching a just-started session waits for its output to be quiet this long, at most `ATTACH_WAIT`.
+pub(super) const ATTACH_SETTLE: Duration = Duration::from_millis(600);
+pub(super) const ATTACH_WAIT: Duration = Duration::from_secs(4);
 
 impl App {
     pub(super) fn session_mut(&mut self, uid: u64) -> Option<&mut DeckSession> {
@@ -271,6 +274,22 @@ impl App {
 
     /// Time-based work of every live session (screen-error checks, a delayed Enter).
     pub(super) fn tick_live(&mut self, now: Instant) {
+        if let Some((uid, deadline)) = self.attach_when_settled {
+            let state = self.session_by_uid(uid).and_then(|s| s.live.as_ref()).map(|l| {
+                (
+                    !l.exited,
+                    now.saturating_duration_since(l.last_output_at) >= ATTACH_SETTLE,
+                )
+            });
+            match state {
+                Some((true, settled)) if !settled && now < deadline => {}
+                Some((true, _)) => {
+                    self.attach_when_settled = None;
+                    self.attach(uid, now);
+                }
+                _ => self.attach_when_settled = None,
+            }
+        }
         for s in &mut self.sessions {
             if let Some(live) = s.live.as_mut() {
                 if live.on_tick(now) {

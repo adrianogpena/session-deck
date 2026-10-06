@@ -3,11 +3,23 @@
 
 use std::time::Instant;
 
+use super::lifecycle::ATTACH_WAIT;
 use super::App;
 use crate::keys::{ENABLE_FOCUS_REPORTING, RESET_AGENT_MODES};
 
 impl App {
-    /// Enter on a session: starts a stopped one first; refused for one open elsewhere. Repaints the
+    /// Enter on a session: a stopped one is started in the background first and attached once its
+    /// start-up output settled (see `attach_when_settled`); a running one attaches at once.
+    pub(super) fn enter_session(&mut self, uid: u64, now: Instant) {
+        if self.session_by_uid(uid).is_some_and(|s| s.is_live()) {
+            self.attach(uid, now);
+        } else if self.ensure_live(uid, now) {
+            self.attach_when_settled = Some((uid, now + ATTACH_WAIT));
+            self.flash("Starting session...".into(), now);
+        }
+    }
+
+    /// Starts a stopped session if needed, then attaches; refused for one open elsewhere. Repaints the
     /// mirrored screen at once, then live output streams straight through (see `on_pty_output`).
     pub(super) fn attach(&mut self, uid: u64, now: Instant) {
         if !self.ensure_live(uid, now) {
@@ -86,6 +98,20 @@ mod tests {
     use crate::app::test_fixture::{fixture, Fixture};
 
     impl Fixture {
+        /// Enter on a stopped session: it starts, and attaches once its start-up output settled.
+        pub fn enter_and_wait_for_attach(&mut self) {
+            self.key("\r");
+            let deadline = Instant::now() + Duration::from_secs(15);
+            while self.app.attached.is_none() {
+                assert!(Instant::now() < deadline, "never attached");
+                while let Ok(ev) = self.rx.try_recv() {
+                    self.app.handle(ev, Instant::now());
+                }
+                self.app.tick_live(Instant::now());
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+
         /// The real-terminal output since the last call, lossily as text.
         fn take_output(&mut self) -> String {
             String::from_utf8_lossy(&std::mem::take(&mut self.app.pending_output)).into_owned()
@@ -130,7 +156,7 @@ mod tests {
     fn attach_starts_a_stopped_session_and_its_exit_detaches() {
         let mut f = fixture();
         let uid = f.add(Some("abc"), true);
-        f.key("\r");
+        f.enter_and_wait_for_attach();
         assert_eq!(f.app.attached, Some(uid));
         f.wait_for_screen(uid, "> ");
         f.key("/exit 2\r");
@@ -156,7 +182,7 @@ mod tests {
     fn ctrl_k_t_swaps_attached_and_interacting() {
         let mut f = fixture();
         let uid = f.add(Some("abc"), true);
-        f.key("\r");
+        f.enter_and_wait_for_attach();
         f.key("\x0bt");
         assert_eq!((f.app.attached, f.app.interacting), (None, Some(uid)));
         f.key("\x0b");

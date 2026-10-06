@@ -155,6 +155,9 @@ pub struct App {
 
     /// Full-screen attached session (by uid): sdeck doesn't draw, the agent owns the terminal.
     attached: Option<u64>,
+    /// A stopped session Enter started: attached once its start-up output settled (ConPTY's cursor
+    /// query is answered by sdeck meanwhile, not forwarded from the real terminal), or at the deadline.
+    attach_when_settled: Option<(u64, Instant)>,
     /// Session typed into while the list and preview keep rendering.
     interacting: Option<u64>,
     /// Ctrl+K arrived while attached/interacting; the next key decides if it's a chord.
@@ -284,6 +287,7 @@ impl App {
             running_written: None,
             resize_note: None,
             attached: None,
+            attach_when_settled: None,
             interacting: None,
             chord_pending: false,
             mouse_tracking: true,
@@ -1213,7 +1217,7 @@ impl App {
             "\x1b[C" | "l" => self.expand_or_child(),
             "\t" => self.toggle_selected_group(),
             "\r" => match self.selected_session().map(|s| s.uid) {
-                Some(uid) => self.attach(uid, now),
+                Some(uid) => self.enter_session(uid, now),
                 None => self.enter_selected_row(),
             },
             "i" => match self.selected_session().map(|s| s.uid) {
