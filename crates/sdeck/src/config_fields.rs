@@ -75,6 +75,7 @@ enum Setting {
     RecentProjectsFirst,
     RecentSessionsFirst,
     NewSessionFullScreen,
+    PromptProjectFolder,
     GitStatus,
     ExpandCollapsedOnActiveJump,
     ShowUsage,
@@ -274,6 +275,7 @@ impl ConfigField {
                 "Interacting"
             }
             .into(),
+            Setting::PromptProjectFolder => on_off(c.ui.prompt_project_folder),
             Setting::GitStatus => on_off(c.ui.git_status),
             Setting::ExpandCollapsedOnActiveJump => on_off(c.ui.expand_collapsed_on_active_jump),
             Setting::ShowUsage => on_off(c.ui.show_usage),
@@ -377,6 +379,7 @@ impl ConfigField {
             Setting::RecentProjectsFirst => c.ui.recent_projects_first = !c.ui.recent_projects_first,
             Setting::RecentSessionsFirst => c.ui.recent_sessions_first = !c.ui.recent_sessions_first,
             Setting::NewSessionFullScreen => c.ui.new_session_full_screen = !c.ui.new_session_full_screen,
+            Setting::PromptProjectFolder => c.ui.prompt_project_folder = !c.ui.prompt_project_folder,
             Setting::GitStatus => c.ui.git_status = !c.ui.git_status,
             Setting::ExpandCollapsedOnActiveJump => {
                 c.ui.expand_collapsed_on_active_jump = !c.ui.expand_collapsed_on_active_jump
@@ -503,6 +506,14 @@ fn build_fields() -> Vec<ConfigField> {
             Number,
             Setting::TrashRetentionDays,
             Some("Deleted sessions older than this are purged from ~/.session-deck/trash/ at startup."),
+        ),
+        ui(
+            "promptProjectFolder",
+            General,
+            "sessions",
+            Toggle,
+            Setting::PromptProjectFolder,
+            "When p adds a new project and folders exist, asks which folder to move it to (or to leave it at the top level).",
         ),
         ui(
             "layout",

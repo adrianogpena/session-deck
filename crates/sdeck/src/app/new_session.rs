@@ -204,6 +204,31 @@ impl App {
         let key = normalize_fs_path(&root);
         // Explicitly added here: undoes a previous `d` removal, if any.
         let _ = self.store.set_project_hidden(&key, false);
+        let is_new = !self.sessions.iter().any(|s| s.project_key == key)
+            && !self.tree.folders.iter().any(|f| f.projects.contains(&key));
+        if self.config.ui.prompt_project_folder && is_new && !self.tree.folders.is_empty() {
+            let mut items = vec!["Leave at top level".to_string()];
+            items.extend(self.tree.folders.iter().map(|f| f.name.clone()));
+            let label = root
+                .rsplit(['\\', '/'])
+                .find(|p| !p.is_empty())
+                .unwrap_or(&root)
+                .to_string();
+            self.picker = Some(Picker {
+                title: format!("Move {label} to"),
+                items,
+                index: 0,
+                action: PickerAction::PlaceNewProject {
+                    agent,
+                    cwd,
+                    key,
+                    root,
+                    folder_ids: self.tree.folders.iter().map(|f| f.id.clone()).collect(),
+                },
+            });
+            self.dirty = true;
+            return;
+        }
         self.start_new_session(&agent, &cwd, key, root, now);
     }
 }
@@ -331,6 +356,37 @@ mod tests {
         f.key("nowhere");
         f.key("\r");
         assert!(f.app.message.starts_with("Not a folder"), "{}", f.app.message);
+    }
+
+    #[test]
+    fn p_asks_which_folder_a_new_project_goes_in_unless_disabled() {
+        let mut f = fixture();
+        f.add(Some("abc"), true);
+        f.key("g");
+        f.key("Work\r");
+        let work = f.app.tree.folders[0].id.clone();
+        let folder = f.home.path().join("proj");
+        std::fs::create_dir(&folder).unwrap();
+        f.key("p");
+        f.key(&format!("\"{}\"", folder.display()));
+        f.key("\r");
+        assert!(f.app.attached.is_none());
+        assert_eq!(f.app.picker.as_ref().unwrap().items, ["Leave at top level", "Work"]);
+        f.key("j");
+        f.key("\r");
+        assert!(f.app.attached.is_some());
+        assert!(f.app.tree.folders[0].projects.iter().any(|k| k.contains("proj")));
+        f.key("\x0bq");
+
+        f.app.config.ui.prompt_project_folder = false;
+        let other = f.home.path().join("other");
+        std::fs::create_dir(&other).unwrap();
+        f.key("p");
+        f.key(&format!("\"{}\"", other.display()));
+        f.key("\r");
+        assert!(f.app.picker.is_none());
+        assert!(f.app.attached.is_some());
+        let _ = work;
     }
 
     #[test]

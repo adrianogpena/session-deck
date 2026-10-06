@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use sdeck_core::status::account::Account;
-use sdeck_core::store::tree_prefs::delete_folder;
+use sdeck_core::store::tree_prefs::{delete_folder, move_project_to_folder};
 
 use super::path_complete::{complete, path_suggestions};
 use super::App;
@@ -51,6 +51,15 @@ pub(super) enum PickerAction {
         project_keys: Vec<String>,
         folder_ids: Vec<String>,
         bulk: bool,
+    },
+    /// Entry 0 leaves the new project at the top level, then the folders (ids, in order). Either
+    /// way the session starts.
+    PlaceNewProject {
+        agent: String,
+        cwd: String,
+        key: String,
+        root: String,
+        folder_ids: Vec<String>,
     },
     /// The accounts listed, in order, then "+ Add account…".
     SwitchAccount(Vec<Account>),
@@ -201,6 +210,13 @@ impl App {
     /// Esc in an account submenu returns to the menu it came from.
     fn go_back_from(&mut self, action: Option<PickerAction>, now: Instant) {
         match action {
+            Some(PickerAction::PlaceNewProject {
+                agent,
+                cwd,
+                key,
+                root,
+                ..
+            }) => self.start_new_session(&agent, &cwd, key, root, now),
             Some(PickerAction::ManageAccounts(_)) => self.open_account_picker(),
             Some(PickerAction::AccountActions(_)) => self.open_manage_accounts(),
             Some(PickerAction::EditAccountLinks { dir, .. }) => {
@@ -240,6 +256,18 @@ impl App {
                 folder_ids,
                 bulk,
             } => self.move_to_folder(picker.index, project_keys, &folder_ids, bulk),
+            PickerAction::PlaceNewProject {
+                agent,
+                cwd,
+                key,
+                root,
+                folder_ids,
+            } => {
+                if let Some(id) = picker.index.checked_sub(1).and_then(|i| folder_ids.get(i)) {
+                    self.change_tree(|t| move_project_to_folder(&t, &key, Some(id)));
+                }
+                self.start_new_session(&agent, &cwd, key, root, now);
+            }
             PickerAction::SwitchAccount(accounts) => match accounts.get(picker.index) {
                 Some(account) => self.switch_account(account, now),
                 None if picker.index == accounts.len() => self.open_prompt(

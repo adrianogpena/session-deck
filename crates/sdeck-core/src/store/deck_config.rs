@@ -146,6 +146,8 @@ pub struct UiConfig {
     pub recent_sessions_first: bool,
     /// `n`/`N` opens Attached (true) or Interacting (false). Default: true.
     pub new_session_full_screen: bool,
+    /// `p` on a new project asks which folder to put it in (when folders exist). Default: true.
+    pub prompt_project_folder: bool,
     /// Git dirty/ahead/behind markers on rows and in the preview. Default: true.
     pub git_status: bool,
     /// `[`/`]` expand a collapsed folder or project to reach a started session. Default: true.
@@ -248,6 +250,7 @@ impl Default for DeckConfig {
                 recent_projects_first: false,
                 recent_sessions_first: true,
                 new_session_full_screen: true,
+                prompt_project_folder: true,
                 git_status: true,
                 expand_collapsed_on_active_jump: true,
                 show_usage: false,
@@ -351,6 +354,7 @@ pub fn parse_deck_config(raw: &str) -> DeckConfig {
                 "recentProjectsFirst",
                 "recentSessionsFirst",
                 "newSessionFullScreen",
+                "promptProjectFolder",
                 "gitStatus",
                 "expandCollapsedOnActiveJump",
                 "showUsage",
@@ -377,6 +381,7 @@ pub fn parse_deck_config(raw: &str) -> DeckConfig {
         flag("recentProjectsFirst", &mut c.recent_projects_first);
         flag("recentSessionsFirst", &mut c.recent_sessions_first);
         flag("newSessionFullScreen", &mut c.new_session_full_screen);
+        flag("promptProjectFolder", &mut c.prompt_project_folder);
         flag("gitStatus", &mut c.git_status);
         flag(
             "expandCollapsedOnActiveJump",
@@ -521,6 +526,7 @@ pub fn deck_config_to_json(config: &DeckConfig) -> String {
     ui_obj.insert("recentProjectsFirst".into(), ui.recent_projects_first.into());
     ui_obj.insert("recentSessionsFirst".into(), ui.recent_sessions_first.into());
     ui_obj.insert("newSessionFullScreen".into(), ui.new_session_full_screen.into());
+    ui_obj.insert("promptProjectFolder".into(), ui.prompt_project_folder.into());
     ui_obj.insert("gitStatus".into(), ui.git_status.into());
     ui_obj.insert(
         "expandCollapsedOnActiveJump".into(),

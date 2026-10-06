@@ -427,6 +427,7 @@ it up next time it starts).
     "recentProjectsFirst": false,
     "recentSessionsFirst": true,
     "newSessionFullScreen": true,
+    "promptProjectFolder": true,
     "gitStatus": true,
     "expandCollapsedOnActiveJump": true,
     "showUsage": false,
@@ -463,6 +464,8 @@ it up next time it starts).
 - **`ui.newSessionFullScreen`**: a new session started with `n`/`N` opens **Attached** (full-screen, as
   if you'd pressed `Enter`) when `true` — or **Interacting** (list and preview still showing, as if
   you'd pressed `i`) when `false`. Default: on.
+- **`ui.promptProjectFolder`**: when `p` adds a project that isn't listed yet and folders exist, a popup
+  asks which folder to move it to (Esc or the first entry leaves it at the top level). Default: on.
 - **`ui.gitStatus`**: `false` turns off the `⇡`/`⇣`/`✱` project badges and the preview panel's branch
   line entirely — no `git status` is run at all. Default: on.
 - **`ui.expandCollapsedOnActiveJump`**: `[`/`]` (jump to the previous/next started session — running,
