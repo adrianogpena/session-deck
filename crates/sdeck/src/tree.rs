@@ -64,6 +64,10 @@ pub enum TreeRow {
         updated_at: Option<i64>,
         reset_label: Option<String>,
     },
+    /// The account the 5h/7d rows belong to; only present with several accounts.
+    UsageAccount {
+        name: String,
+    },
     /// The selected session's model and effort, e.g. `Opus 5.5 · high`.
     UsageModel {
         label: Option<String>,
@@ -115,6 +119,16 @@ pub fn usage_cache(state: CacheState, now_ms: i64) -> UsageCache {
 
 /// The rows under the USAGE divider.
 pub fn usage_rows(usage: &UsageSectionInput) -> Vec<TreeRow> {
+    let mut rows: Vec<TreeRow> = usage
+        .account
+        .iter()
+        .map(|name| TreeRow::UsageAccount { name: name.clone() })
+        .collect();
+    rows.extend(usage_metric_rows(usage));
+    rows
+}
+
+fn usage_metric_rows(usage: &UsageSectionInput) -> Vec<TreeRow> {
     let rate = usage.rate_limit.as_ref();
     if usage.compact {
         let rate_updated_at = rate.map(|r| r.updated_at);
@@ -186,6 +200,7 @@ impl TreeRow {
             self,
             Self::Divider { .. }
                 | Self::Usage { .. }
+                | Self::UsageAccount { .. }
                 | Self::UsageModel { .. }
                 | Self::UsageCache { .. }
                 | Self::UsageCompact { .. }
@@ -216,6 +231,8 @@ pub struct UsageSectionInput {
     pub effort: Option<String>,
     pub cache: Option<UsageCache>,
     pub rate_limit: Option<RateLimitUsage>,
+    /// The active account's name, set only when there are several accounts.
+    pub account: Option<String>,
     pub five_hour_reset_label: Option<String>,
     pub seven_day_reset_label: Option<String>,
     /// One `ctx · 5h · 7d` row instead of the full block.
@@ -1184,6 +1201,7 @@ mod tests {
                 }),
                 five_hour_reset_label: Some("8:30 PM".into()),
                 seven_day_reset_label: Some("Sun 4:21 PM".into()),
+                account: None,
                 compact: false,
             }),
             ..opts()

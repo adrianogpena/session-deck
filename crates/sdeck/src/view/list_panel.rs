@@ -54,6 +54,9 @@ pub enum ListRow {
         /// The reading is old: drawn dimmed.
         stale: bool,
     },
+    UsageAccount {
+        name: String,
+    },
     UsageModel {
         label: Option<String>,
     },
@@ -402,6 +405,19 @@ fn usage_row(
 }
 
 /// `Model   Opus 5.5 · high`, or `—` when this session hasn't reported one.
+fn usage_account_row(t: Theme, width: usize, name: &str) -> Line<'static> {
+    let lead = "  ";
+    let head = fit("Account", USAGE_LABEL_WIDTH);
+    let text = format!("{head} {name}");
+    let fitted = fit(&text, width.saturating_sub(text_width(lead)).max(1));
+    let pad = " ".repeat(width.saturating_sub(text_width(lead) + text_width(&fitted)));
+    Line::from(vec![
+        Span::styled(lead, t.fg(Role::TextDim)),
+        Span::styled(fitted, t.fg(Role::Text)),
+        Span::raw(pad),
+    ])
+}
+
 fn usage_model_row(t: Theme, width: usize, label: Option<&str>) -> Line<'static> {
     let lead = "  ";
     let head = fit("Model", USAGE_LABEL_WIDTH);
@@ -520,6 +536,7 @@ fn list_row_line(
             reset_label,
             stale,
         } => usage_row(t, width, *metric, *percent, reset_label.as_deref(), *stale),
+        ListRow::UsageAccount { name } => usage_account_row(t, width, name),
         ListRow::UsageModel { label } => usage_model_row(t, width, label.as_deref()),
         ListRow::UsageCache { cache } => usage_cache_row(t, width, cache.as_ref()),
         ListRow::UsageCompact { parts } => usage_compact_row(t, width, parts),

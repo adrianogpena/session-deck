@@ -736,6 +736,9 @@ impl App {
                 .and_then(|r| r.seven_day_resets_at)
                 .map(|at| format_reset_time(at, use_24, true)),
             rate_limit,
+            account: (self.accounts.len() > 1)
+                .then(|| self.active_account().map(account_label))
+                .flatten(),
             compact: self.config.ui.compact_usage,
         }
     }
@@ -756,12 +759,7 @@ impl App {
                     .is_some_and(|r| is_rate_limit_stale(r.updated_at, now));
                 let rate = latest.map(|r| r.without_expired(now));
                 AccountUsage {
-                    name: a.email.clone().unwrap_or_else(|| {
-                        a.config_dir
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_default()
-                    }),
+                    name: account_label(a),
                     active: active.as_ref() == Some(&a.config_dir),
                     five_hour_percent: rate.as_ref().and_then(|r| r.five_hour_percent),
                     five_hour_reset_label: rate
@@ -1413,6 +1411,7 @@ impl App {
                             })
                             .collect(),
                     },
+                    TreeRow::UsageAccount { name } => ListRow::UsageAccount { name: name.clone() },
                     TreeRow::UsageModel { label } => ListRow::UsageModel { label: label.clone() },
                     TreeRow::UsageCache { cache } => ListRow::UsageCache {
                         cache: cache.as_ref().map(|c| (c.warm, c.detail.clone())),
@@ -1602,6 +1601,16 @@ impl App {
 }
 
 /// Same logical row across rebuilds (rows are recreated each time).
+/// An account's email, else its config dir name.
+fn account_label(a: &Account) -> String {
+    a.email.clone().unwrap_or_else(|| {
+        a.config_dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    })
+}
+
 fn same_row(a: &TreeRow, b: &TreeRow) -> bool {
     match (a, b) {
         (TreeRow::Session { uid: a, .. }, TreeRow::Session { uid: b, .. }) => a == b,
